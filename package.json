@@ -1,0 +1,25 @@
+{
+  "name": "protondrive-linuxclient",
+  "version": "0.1.0",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bcryptjs": "^3.0.0",
+    "@types/bun": "latest",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^25.5.0"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@napi-rs/keyring": "^1.2.0",
+    "@protontech/drive-sdk": "^0.14.3",
+    "@types/openpgp": "^5.0.0",
+    "bcryptjs": "^3.0.3",
+    "commander": "^14.0.3",
+    "js-yaml": "^4.1.1",
+    "openpgp": "^6.3.0"
+  }
+}

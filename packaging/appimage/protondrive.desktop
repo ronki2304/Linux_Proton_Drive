@@ -1,0 +1,7 @@
+[Desktop Entry]
+Name=ProtonDrive CLI
+Exec=protondrive
+Icon=protondrive
+Type=Application
+Categories=Utility;
+Terminal=true

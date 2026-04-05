@@ -1,0 +1,30 @@
+# Maintainer: Your Name <your@email.com>
+pkgname=protondrive
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="ProtonDrive CLI for Linux — two-way sync with conflict safety"
+arch=('x86_64')
+url="https://github.com/ronki2304/ProtonDrive-LinuxClient"
+license=('MIT')
+depends=()          # self-contained binary — no runtime dependencies
+makedepends=()      # pre-built binary downloaded directly from GitHub Releases
+provides=('protondrive')
+conflicts=()
+
+# Source: pre-built binary from GitHub Releases (avoids bun makedepend for end users)
+source=("protondrive-${pkgver}::https://github.com/ronki2304/ProtonDrive-LinuxClient/releases/download/v${pkgver}/protondrive"
+        "LICENSE-${pkgver}::https://raw.githubusercontent.com/ronki2304/ProtonDrive-LinuxClient/v${pkgver}/LICENSE")
+# Update sha256sums for each release:
+#   curl -sSfL <binary-url> | sha256sum
+#   curl -sSfL <license-url> | sha256sum
+# SKIP is only acceptable for a source tarball; binaries should always be verified.
+sha256sums=('SKIP'
+            'SKIP')
+
+package() {
+    # Install the self-contained binary
+    install -Dm755 "${srcdir}/protondrive-${pkgver}" "${pkgdir}/usr/bin/protondrive"
+
+    # Install the license
+    install -Dm644 "${srcdir}/LICENSE-${pkgver}" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
