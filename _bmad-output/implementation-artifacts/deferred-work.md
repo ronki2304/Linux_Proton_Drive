@@ -71,3 +71,11 @@
 - Orphaned .dl-tmp-* files on download retry — failed attempt's tmp cleaned in catch, but on retry success the new attempt creates a fresh tmp; old partial tmp is only deleted if it throws [src/sdk/client.ts:282]
 - buildSRPProof passes empty username to computeX/computeClientProof — inconsistent with authenticate which uses real username; getSrp only called by SDK for link-password operations not in v1 scope [src/auth/srp.ts:233]
 - Empty PrivateKey string silently skips key — if all addr.Keys have empty PrivateKey strings (Proton API regression), error "Failed to decrypt any address keys" misleads user into thinking password is wrong [src/sdk/account-service.ts:95]
+
+## Deferred from: code review of 7-3-e2e-ci-workflow (2026-04-05)
+
+- `CI_WORKFLOW` read unconditionally in workflow.test.ts without `existsSync` guard — throws ENOENT instead of clean assertion failure if ci.yml is absent [src/__e2e__/workflow.test.ts:112]
+- `loadWorkflow` called redundantly inside every test with no `beforeAll` cache — cosmetic inefficiency [src/__e2e__/workflow.test.ts]
+- No Dependabot or equivalent configured to refresh pinned action SHAs — project-wide infra gap; all three workflow files affected [.github/workflows/]
+- `toContain("push")` condition check in integration step test is slightly loose — would pass for `push_event` pattern too [src/__e2e__/workflow.test.ts:114]
+- No cross-workflow Bun version consistency check — e2e.yml, ci.yml, release.yml all pin `bun-version: "1.3.11"` but tests don't enforce parity [src/__e2e__/workflow.test.ts]
