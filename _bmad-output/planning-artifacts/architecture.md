@@ -3,6 +3,10 @@ stepsCompleted: [1, 2, 3, 4, 5, 6, 7, 8]
 lastStep: 8
 status: 'complete'
 completedAt: '2026-04-01'
+amendedAt: '2026-04-05'
+amendments:
+  - 'Gap item #4: updated 2FA from stub to implemented (Sprint 2)'
+  - 'Gap item #4b: added CAPTCHA/Human Verification retry pattern (Story 8.1)'
 inputDocuments:
   - "_bmad-output/planning-artifacts/prd.md"
   - "_bmad-output/planning-artifacts/product-brief-ProtonDrive-LinuxClient.md"
@@ -534,7 +538,9 @@ All modules   → src/errors.ts, src/types.ts  (shared, no business logic)
 
 3. **Delta detection algorithm:** mtime-first, hash-on-change. Compare `last_sync_mtime` first; if mtime differs, compute SHA-256 of file content to confirm actual change (avoids false positives from touch/copy). `state-db` stores both `last_sync_mtime` (TEXT/ISO) and `last_sync_hash` (TEXT/SHA-256 hex).
 
-4. **2FA surface behavior:** `srp.ts` must throw `AuthError` with code `TWO_FACTOR_REQUIRED` when Proton returns the 2FA challenge. Human output: `"error: 2FA is not supported in v1 — disable 2FA on your Proton account to use this tool."` Must not hang or produce a cryptic failure.
+4. **2FA:** Implemented in Sprint 2. `srp.ts` throws `TwoFactorRequiredError` (AuthError subclass) carrying partial session tokens. `auth-login.ts` catches it, calls `promptTotp()`, and calls `verifyTotp()`. TTY-required; non-TTY throws `TOTP_NO_TTY`.
+
+4b. **CAPTCHA (Human Verification):** `srp.ts` throws `HumanVerificationRequiredError` (AuthError subclass with `webUrl` and `verificationToken` properties) on Code 9001 — fires on both `/auth/v4/info` and `/auth/v4`. `auth-login.ts` catches it via `authenticateWithCaptchaRetry()`, prints the URL, prompts "press Enter when done", then retries `authenticate()` with `opts.humanVerificationToken` and `opts.humanVerificationTokenType: "captcha"`. One-shot retry — second Code 9001 exits 1. Non-TTY: print URL and exit 1 with code `CAPTCHA_NO_TTY`. `fetchJson` passes the token pair as additional request headers when provided.
 
 **Minor gaps resolved:**
 

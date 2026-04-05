@@ -196,7 +196,8 @@ Built for personal need first. This project solves a real, immediate problem for
 
 - SRP (Secure Remote Password) protocol must be implemented from scratch — the ProtonDriveApps SDK ships no auth module
 - Credential storage: OS keychain (libsecret/kwallet) preferred; libsecret ≥ 0.20 local file fallback for headless servers; plaintext unacceptable
-- 2FA is completely blocked (SDK issue #6 closed as out of scope by Proton) — documented limitation for v1; users with 2FA enabled cannot authenticate
+- 2FA is supported in v1 via TOTP prompt during `auth login`. Users with 2FA enabled are prompted for their 6-digit authenticator code after SRP auth succeeds.
+- Proton may require human verification (CAPTCHA, Code 9001) during `auth login` in automated or suspicious-IP contexts. The CLI handles this by surfacing the verification URL, waiting for the user to complete the CAPTCHA in a browser, then retrying authentication with the `x-pm-human-verification-token` header. Non-interactive (no TTY) invocations surface the URL in an error message and exit 1.
 
 ### SDK Migration Risk
 
@@ -328,6 +329,7 @@ options:
 - **FR32:** GUI reads the same YAML configuration file as the CLI
 - **FR33:** GUI performs two-way sync with the same conflict copy behavior as the CLI
 - **FR34:** User can install the GUI via Flathub
+- **FR35:** When Proton requires human verification during `auth login`, the CLI surfaces the verification URL to stdout, prompts the user to complete the CAPTCHA in a browser and press Enter, then retries authentication automatically with the verification token. Non-TTY invocations print the URL and exit 1 with code HUMAN_VERIFICATION_REQUIRED.
 
 ## Non-Functional Requirements
 

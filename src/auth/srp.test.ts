@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, afterEach } from "bun:test";
 import { authenticate, verifyTotp } from "./srp.js";
-import { AuthError, NetworkError, TwoFactorRequiredError } from "../errors.js";
+import { AuthError, NetworkError, TwoFactorRequiredError, HumanVerificationRequiredError } from "../errors.js";
 import type { SessionToken } from "../types.js";
 
 // Valid-looking auth info response (server ephemeral is 256 bytes, salt is 16 bytes, base64)
@@ -22,6 +22,11 @@ const MOCK_TOKEN_RESPONSE = {
 
 const MOCK_2FA_CODE_RESPONSE = {
   Code: 9001,
+};
+
+const MOCK_CAPTCHA_RESPONSE = {
+  Code: 9001,
+  Details: { WebUrl: "https://verify.proton.me/?token=abc", HumanVerificationToken: "mock-hvt" },
 };
 
 const MOCK_2FA_FIELD_RESPONSE = {
@@ -58,20 +63,39 @@ afterEach(() => {
 });
 
 describe("authenticate — 2FA handling", () => {
-  test("Code 9001 (no tokens) throws AuthError with TWO_FACTOR_REQUIRED", async () => {
-    mockFetch(MOCK_INFO_RESPONSE, MOCK_2FA_CODE_RESPONSE);
+  test("Code 9001 throws HumanVerificationRequiredError with webUrl and verificationToken", async () => {
+    mockFetch(MOCK_INFO_RESPONSE, MOCK_CAPTCHA_RESPONSE);
     let thrown: unknown;
     try {
       await authenticate("user@proton.me", "password");
     } catch (err) {
       thrown = err;
     }
+    expect(thrown).toBeInstanceOf(HumanVerificationRequiredError);
     expect(thrown).toBeInstanceOf(AuthError);
-    expect(thrown).not.toBeInstanceOf(TwoFactorRequiredError);
-    expect((thrown as AuthError).code).toBe("TWO_FACTOR_REQUIRED");
-    expect((thrown as AuthError).message).toBe(
-      "2FA required — could not obtain partial session from Proton API.",
-    );
+    expect((thrown as HumanVerificationRequiredError).code).toBe("HUMAN_VERIFICATION_REQUIRED");
+    expect((thrown as HumanVerificationRequiredError).webUrl).toBe("https://verify.proton.me/?token=abc");
+    expect((thrown as HumanVerificationRequiredError).verificationToken).toBe("mock-hvt");
+  });
+
+  test("authenticate() with valid opts.humanVerificationToken → success", async () => {
+    mockFetch(MOCK_INFO_RESPONSE, MOCK_TOKEN_RESPONSE);
+    const token = await authenticate("user@proton.me", "password", { humanVerificationToken: "mock-hvt" });
+    expect(token.accessToken).toBe("mock-access-token");
+    expect(token.refreshToken).toBe("mock-refresh-token");
+    expect(token.uid).toBe("mock-uid");
+  });
+
+  test("second Code 9001 when opts already set → throws HumanVerificationRequiredError", async () => {
+    mockFetch(MOCK_INFO_RESPONSE, MOCK_CAPTCHA_RESPONSE);
+    let thrown: unknown;
+    try {
+      await authenticate("user@proton.me", "password", { humanVerificationToken: "mock-hvt" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HumanVerificationRequiredError);
+    expect((thrown as HumanVerificationRequiredError).code).toBe("HUMAN_VERIFICATION_REQUIRED");
   });
 
   test("TwoFactor field + tokens → throws TwoFactorRequiredError with challenge", async () => {
@@ -200,6 +224,74 @@ describe("authenticate — network failures", () => {
   });
 });
 
+describe("fetchJson — body capture on non-OK response", () => {
+  test("400 with readable body includes body snippet in NetworkError message", async () => {
+    globalThis.fetch = mock(() =>
+      Promise.resolve(new Response('{"Error":"Invalid app version","Code":400}', { status: 400 })),
+    ) as unknown as typeof fetch;
+    let thrown: unknown;
+    try {
+      await authenticate("user@proton.me", "password");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(NetworkError);
+    expect((thrown as NetworkError).message).toContain("Invalid app version");
+  });
+
+  test("400 with body longer than 300 chars truncates at 300 chars in error message", async () => {
+    const longBody = "X".repeat(400);
+    globalThis.fetch = mock(() =>
+      Promise.resolve(new Response(longBody, { status: 400 })),
+    ) as unknown as typeof fetch;
+    let thrown: unknown;
+    try {
+      await authenticate("user@proton.me", "password");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(NetworkError);
+    const msg = (thrown as NetworkError).message;
+    expect(msg).toContain("X".repeat(300));
+    expect(msg).not.toContain("X".repeat(301));
+  });
+
+  test("400 with unreadable body (text() throws) still throws NetworkError without crashing", async () => {
+    globalThis.fetch = mock(() =>
+      Promise.resolve({
+        ok: false,
+        status: 400,
+        text: () => Promise.reject(new Error("body stream error")),
+      } as unknown as Response),
+    ) as unknown as typeof fetch;
+    let thrown: unknown;
+    try {
+      await authenticate("user@proton.me", "password");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(NetworkError);
+    expect((thrown as NetworkError).code).toBe("NETWORK_HTTP_ERROR");
+    // message should NOT contain body detail since text() threw
+    expect((thrown as NetworkError).message).not.toContain(" — ");
+  });
+
+  test("400 with empty body throws NetworkError without body detail", async () => {
+    globalThis.fetch = mock(() =>
+      Promise.resolve(new Response("", { status: 400 })),
+    ) as unknown as typeof fetch;
+    let thrown: unknown;
+    try {
+      await authenticate("user@proton.me", "password");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(NetworkError);
+    const msg = (thrown as NetworkError).message;
+    expect(msg).toBe("HTTP 400 from Proton API");
+  });
+});
+
 describe("authenticate — info validation", () => {
   test("missing Salt throws AuthError with AUTH_INFO_INVALID", async () => {
     mockFetch({ ...MOCK_INFO_RESPONSE, Salt: "" }, MOCK_TOKEN_RESPONSE);
@@ -272,6 +364,30 @@ describe("authenticate — server proof verification", () => {
     // Should NOT throw — ServerProof is absent, verification is skipped
     const token = await authenticate("user@proton.me", "password");
     expect(token.accessToken).toBe("mock-access-token");
+  });
+});
+
+describe("authenticate — x-pm-appversion header", () => {
+  test("uses macos-drive@1.0.0-alpha.1+rclone as appversion (confirmed working rclone default value)", async () => {
+    const capturedHeaders: Record<string, string>[] = [];
+    globalThis.fetch = mock(((_url: string, opts: RequestInit) => {
+      capturedHeaders.push(opts.headers as Record<string, string>);
+      return Promise.resolve(
+        new Response(JSON.stringify(MOCK_INFO_RESPONSE), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+    }) as typeof fetch);
+    try {
+      await authenticate("user@proton.me", "password");
+    } catch {
+      // may throw due to SRP — we only care about the headers sent
+    }
+    expect(capturedHeaders.length).toBeGreaterThan(0);
+    for (const headers of capturedHeaders) {
+      expect(headers["x-pm-appversion"]).toBe("macos-drive@1.0.0-alpha.1+rclone");
+    }
   });
 });
 

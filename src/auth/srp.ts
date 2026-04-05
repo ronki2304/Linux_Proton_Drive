@@ -17,10 +17,10 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
-import { AuthError, NetworkError, TwoFactorRequiredError } from "../errors.js";
+import { AuthError, HumanVerificationRequiredError, NetworkError, TwoFactorRequiredError } from "../errors.js";
 import type { SessionToken } from "../types.js";
 
-const PROTON_API = "https://api.proton.me";
+const PROTON_API = "https://mail.proton.me/api";
 
 // SRP 2048-bit group (RFC 5054 §A.1)
 const N_HEX =
@@ -31,7 +31,7 @@ const g = 2n;
 const SRP_LEN = 256; // 2048 bits / 8
 
 // Proton auth API error codes
-const CODE_2FA_REQUIRED = 9001;
+const CODE_HUMAN_VERIFICATION = 9001; // CAPTCHA required — triggered by bot detection
 const CODE_AUTH_FAILED = 8002;
 
 interface AuthInfoResponse {
@@ -41,6 +41,7 @@ interface AuthInfoResponse {
   Modulus: string;
   SRPSession: string;
   Version: number;
+  Details?: { WebUrl?: string; HumanVerificationToken?: string };
 }
 
 interface AuthResponse {
@@ -50,6 +51,7 @@ interface AuthResponse {
   UID?: string;
   TwoFactor?: { Enabled: number; TOTP?: number } | Record<string, unknown>;
   ServerProof?: string;
+  Details?: { WebUrl?: string; HumanVerificationToken?: string };
 }
 
 // --- BigInt helpers ---
@@ -99,24 +101,12 @@ function expandPassword(password: string): string {
   return padded.toString("base64");
 }
 
-// Proton bcrypt salt: server returns 16 bytes, formatted as $2b$10$<22 bcrypt-base64 chars>
+// Proton bcrypt salt: server may return fewer than 16 bytes; bcrypt requires exactly 16.
+// Pad with zeros and encode using bcryptjs's own encodeBase64 to guarantee exactly 22 chars.
 function formatBcryptSalt(saltBytes: Buffer): string {
-  // Encode directly with bcrypt's custom base64 alphabet — NOT standard base64.
-  // Standard base64 and bcrypt base64 use different alphabets; simple character
-  // substitution is incorrect. Must encode the raw bytes with bcrypt's table.
-  // bcrypt table: ./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789
-  const BCRYPT_CHARS = "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let encoded = "";
-  for (let i = 0; i < saltBytes.length; i += 3) {
-    const b0 = saltBytes[i] ?? 0;
-    const b1 = saltBytes[i + 1] ?? 0;
-    const b2 = saltBytes[i + 2] ?? 0;
-    encoded += BCRYPT_CHARS[b0 >> 2]!;
-    encoded += BCRYPT_CHARS[((b0 & 0x03) << 4) | (b1 >> 4)]!;
-    encoded += BCRYPT_CHARS[((b1 & 0x0f) << 2) | (b2 >> 6)]!;
-    encoded += BCRYPT_CHARS[b2 & 0x3f]!;
-  }
-  return "$2b$10$" + encoded.substring(0, 22);
+  const padded = Buffer.alloc(16, 0);
+  saltBytes.copy(padded, 0, 0, Math.min(saltBytes.length, 16));
+  return "$2y$10$" + bcrypt.encodeBase64(padded, 16);
 }
 
 function hashPassword(password: string, saltBytes: Buffer, version: number): string {
@@ -193,8 +183,11 @@ async function fetchJson<T>(
       continue;
     }
     if (!response.ok && response.status !== 422) {
+      let body = "";
+      try { body = await response.text(); } catch { /* ignore */ }
+      const detail = body ? ` — ${body.slice(0, 300)}` : "";
       const error = new NetworkError(
-        `HTTP ${response.status} from Proton API`,
+        `HTTP ${response.status} from Proton API${detail}`,
         "NETWORK_HTTP_ERROR",
       );
       if (!isRetryableStatus(response.status)) {
@@ -259,16 +252,35 @@ export function deriveKeyPassword(password: string, keySaltBase64: string): stri
 export async function authenticate(
   username: string,
   password: string,
+  opts?: { humanVerificationToken?: string; humanVerificationTokenType?: string },
 ): Promise<SessionToken> {
+  const captchaHeaders: Record<string, string> = {};
+  if (opts?.humanVerificationToken) {
+    captchaHeaders["x-pm-human-verification-token"] = opts.humanVerificationToken;
+    captchaHeaders["x-pm-human-verification-token-type"] = opts.humanVerificationTokenType ?? "captcha";
+  }
+
   // Step 1: Get auth info
   const info = await fetchJson<AuthInfoResponse>(
     `${PROTON_API}/auth/v4/info`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-pm-appversion": "Other" },
+      headers: { "Content-Type": "application/json", "x-pm-appversion": "macos-drive@1.0.0-alpha.1+rclone", ...captchaHeaders },
       body: JSON.stringify({ Username: username }),
     },
   );
+
+  if (info.Code === CODE_HUMAN_VERIFICATION) {
+    const webUrl = info.Details?.WebUrl;
+    const token = info.Details?.HumanVerificationToken;
+    if (!webUrl || !token) {
+      throw new AuthError(
+        "Human verification required but Proton did not provide a verification URL. Please try again later.",
+        "HUMAN_VERIFICATION_REQUIRED",
+      );
+    }
+    throw new HumanVerificationRequiredError(webUrl, token);
+  }
 
   if (!info.Salt || !info.ServerEphemeral || !info.SRPSession) {
     throw new AuthError("Malformed auth info response from Proton API", "AUTH_INFO_INVALID");
@@ -317,40 +329,48 @@ export async function authenticate(
   const M1 = computeClientProof(username, saltBytes, A, B, K);
 
   // Step 3: Send proof
+  // Note: captchaHeaders are intentionally NOT sent on the auth step — the HV token
+  // is consumed by the info step; re-sending it causes Code 12087 (TOKEN_INVALID).
   const auth = await fetchJson<AuthResponse>(
     `${PROTON_API}/auth/v4`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", "x-pm-appversion": "Other" },
+      headers: { "Content-Type": "application/json", "x-pm-appversion": "macos-drive@1.0.0-alpha.1+rclone" },
       body: JSON.stringify({
         Username: username,
         ClientEphemeral: A.toString("base64"),
         ClientProof: M1.toString("base64"),
         SRPSession: info.SRPSession,
+        PersistentCookies: 0,
       }),
     },
   );
 
-  // Handle 2FA challenge — two distinct paths:
-  // 1. TwoFactor field present AND partial-scope tokens provided → throw TwoFactorRequiredError
-  // 2. Code 9001 AND no tokens → legacy path, throw AuthError
-  if (auth.TwoFactor !== undefined && auth.AccessToken && auth.RefreshToken && auth.UID) {
-    throw new TwoFactorRequiredError({
-      accessToken: auth.AccessToken,
-      refreshToken: auth.RefreshToken,
-      uid: auth.UID,
-    });
+  // Human Verification (CAPTCHA) — Proton's bot detection fired before auth completed.
+  if (auth.Code === CODE_HUMAN_VERIFICATION) {
+    const webUrl = auth.Details?.WebUrl;
+    const token = auth.Details?.HumanVerificationToken;
+    if (!webUrl || !token) {
+      throw new AuthError(
+        "Human verification required but Proton did not provide a verification URL. Please try again later.",
+        "HUMAN_VERIFICATION_REQUIRED",
+      );
+    }
+    throw new HumanVerificationRequiredError(webUrl, token);
   }
-  if (auth.TwoFactor !== undefined && !(auth.AccessToken && auth.RefreshToken && auth.UID)) {
-    throw new AuthError(
-      "2FA required — partial session incomplete. Please try again.",
-      "TOTP_SESSION_INCOMPLETE",
-    );
-  }
-  if (auth.Code === CODE_2FA_REQUIRED) {
+
+  // Handle 2FA challenge — Code 1000 + TwoFactor field + partial scope tokens.
+  if (auth.TwoFactor !== undefined) {
+    if (auth.AccessToken && auth.RefreshToken && auth.UID) {
+      throw new TwoFactorRequiredError({
+        accessToken: auth.AccessToken,
+        refreshToken: auth.RefreshToken,
+        uid: auth.UID,
+      });
+    }
     throw new AuthError(
       "2FA required — could not obtain partial session from Proton API.",
-      "TWO_FACTOR_REQUIRED",
+      "TOTP_SESSION_INCOMPLETE",
     );
   }
 
@@ -362,7 +382,7 @@ export async function authenticate(
     !auth.UID
   ) {
     throw new AuthError(
-      "Authentication failed — check your username and password.",
+      `Authentication failed (Code ${auth.Code}) — check your username and password.`,
       "AUTH_FAILED",
     );
   }
@@ -404,7 +424,7 @@ export async function verifyTotp(
         "Content-Type": "application/json",
         "Authorization": `Bearer ${challenge.accessToken}`,
         "x-pm-uid": challenge.uid,
-        "x-pm-appversion": "Other",
+        "x-pm-appversion": "macos-drive@1.0.0-alpha.1+rclone",
       },
       body: JSON.stringify({ TwoFactorCode: totpCode }),
     },

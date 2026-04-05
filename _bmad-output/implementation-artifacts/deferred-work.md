@@ -72,6 +72,18 @@
 - buildSRPProof passes empty username to computeX/computeClientProof — inconsistent with authenticate which uses real username; getSrp only called by SDK for link-password operations not in v1 scope [src/auth/srp.ts:233]
 - Empty PrivateKey string silently skips key — if all addr.Keys have empty PrivateKey strings (Proton API regression), error "Failed to decrypt any address keys" misleads user into thinking password is wrong [src/sdk/account-service.ts:95]
 
+## Deferred from: code review of 8-1-captcha-human-verification-auth-flow (2026-04-05)
+
+- formatBcryptSalt rewrite: `$2y$` prefix and `bcrypt.encodeBase64` is an internal API — pre-story change; `bcrypt.encodeBase64` not in public typedefs, may break on library update [src/auth/srp.ts]
+- PROTON_API URL changed from `api.proton.me` to `mail.proton.me/api` — pre-story change; no comment explaining Drive-vs-Mail subdomain choice [src/auth/srp.ts]
+- `process.stdin.setEncoding("utf8")` called in multiple prompt functions without restore — pre-existing pattern across all prompt functions [src/commands/auth-login.ts]
+- `process.exit(1)` inside stdin promise callback on Ctrl+C — pre-existing pattern in promptTotp/promptPassword; bypasses finally blocks [src/commands/auth-login.ts]
+- `.on` vs `.once` listener inconsistency for stdin data/end/error — pre-existing pattern from promptTotp [src/commands/auth-login.ts]
+- `isTTY` check in authenticateWithCaptchaRetry occurs after stdin already mutated by promptPassword — pre-existing ordering, same issue exists in TOTP flow [src/commands/auth-login.ts]
+- readline `createInterface` + raw stdin listener race between promptUsername and promptPassword — pre-existing, readline may buffer characters for the subsequent raw listener [src/commands/auth-login.ts]
+- `fetchJson` does not respect `Retry-After` header on HTTP 429 — pre-existing fixed-delay retry; under aggressive rate-limiting CAPTCHA flow exhausts retries and surfaces as NetworkError [src/auth/srp.ts]
+- Raw mode not restored in promptPassword when stdin closes via `onEnd`/`onError` — pre-existing: `cleanup(false)` skips `setRawMode(false)`; subsequent CAPTCHA/TOTP prompts inherit suppressed echo [src/commands/auth-login.ts]
+
 ## Deferred from: code review of 7-3-e2e-ci-workflow (2026-04-05)
 
 - `CI_WORKFLOW` read unconditionally in workflow.test.ts without `existsSync` guard — throws ENOENT instead of clean assertion failure if ci.yml is absent [src/__e2e__/workflow.test.ts:112]

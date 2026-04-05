@@ -1,6 +1,11 @@
 # Story 7.2: Live ProtonDrive Integration Tests
 
-Status: done
+Status: done (re-validation required)
+
+<!-- Re-validation required: integration tests were executed against a non-existent endpoint
+(api.proton.me). All results from the original run are unreliable. Re-run required after
+the PROTON_API URL fix in src/auth/srp.ts is applied (mail.proton.me/api).
+See: sprint-change-proposal-2026-04-05-auth-bugs.md -->
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 

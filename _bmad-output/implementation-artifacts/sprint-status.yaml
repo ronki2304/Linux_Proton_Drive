@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-01
-last_updated: 2026-04-05T22:00:00Z
+last_updated: 2026-04-05T00:00:00Z
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -91,3 +91,11 @@ development_status:
   7-2-live-protondrive-integration-tests: done
   7-3-e2e-ci-workflow: done
   epic-7-retrospective: done
+
+  # Epic 8: Auth Hardening
+  epic-8: done
+  8-1-captcha-human-verification-auth-flow: done
+
+  # Epic 9: Post-Sprint Auth Patches
+  epic-9: in-progress
+  9-1-fix-proton-api-400-auth-request: in-progress

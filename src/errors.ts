@@ -50,3 +50,17 @@ export class TwoFactorRequiredError extends AuthError {
     Object.setPrototypeOf(this, new.target.prototype);
   }
 }
+
+export class HumanVerificationRequiredError extends AuthError {
+  constructor(
+    public readonly webUrl: string,
+    public readonly verificationToken: string,
+  ) {
+    super(
+      "Human verification required — complete CAPTCHA to continue.",
+      "HUMAN_VERIFICATION_REQUIRED",
+    );
+    this.name = "HumanVerificationRequiredError";
+    Object.setPrototypeOf(this, new.target.prototype);
+  }
+}
