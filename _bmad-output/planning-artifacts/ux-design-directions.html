@@ -1,0 +1,877 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ProtonDrive Linux Client — UX Design Directions</title>
+<style>
+  :root {
+    --teal: #0D9488;
+    --teal-light: #14B8A6;
+    --teal-dim: #0F766E;
+    --bg-base: #1e1e2e;
+    --bg-surface: #27273a;
+    --bg-overlay: #313145;
+    --bg-header: #1a1a2e;
+    --text-primary: #e2e2f0;
+    --text-secondary: #9999b8;
+    --text-dim: #6666888;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --error: #f87171;
+    --offline: #6b7280;
+    --border: rgba(255,255,255,0.08);
+    --sidebar-w: 220px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: Cantarell, 'Inter', system-ui, sans-serif;
+    background: #111120;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  /* ─── Page layout ─── */
+  .page { padding: 32px; max-width: 1400px; margin: 0 auto; }
+
+  h1 { font-size: 22px; font-weight: 600; margin-bottom: 6px; color: var(--teal-light); }
+  .subtitle { color: var(--text-secondary); margin-bottom: 40px; font-size: 13px; }
+
+  .direction-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--teal);
+    margin-bottom: 6px;
+  }
+  .direction-title { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .direction-desc { font-size: 12px; color: var(--text-secondary); margin-bottom: 16px; line-height: 1.5; }
+
+  .direction-block { margin-bottom: 60px; }
+
+  /* ─── App shell ─── */
+  .app-shell {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+    width: 780px;
+  }
+
+  .app-titlebar {
+    background: var(--bg-header);
+    height: 38px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .titlebar-btn { width: 12px; height: 12px; border-radius: 50%; }
+  .btn-close { background: #ff5f57; }
+  .btn-min { background: #febc2e; }
+  .btn-max { background: #28c840; }
+  .titlebar-title { flex: 1; text-align: center; font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+
+  /* ─── Direction A: Classic Sidebar + Detail ─── */
+  .dir-a .app-body {
+    display: flex;
+    flex-direction: column;
+    background: var(--bg-base);
+    height: 460px;
+  }
+  .dir-a .account-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 14px;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .account-avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--teal-dim);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700; color: white; flex-shrink: 0;
+  }
+  .account-name { font-size: 13px; font-weight: 500; flex: 1; }
+  .storage-wrap { display: flex; flex-direction: column; gap: 3px; min-width: 140px; }
+  .storage-label { font-size: 10px; color: var(--text-secondary); display: flex; justify-content: space-between; }
+  .storage-bar { height: 4px; border-radius: 2px; background: var(--bg-overlay); overflow: hidden; }
+  .storage-fill { height: 100%; background: var(--teal); border-radius: 2px; }
+  .storage-fill.warn { background: var(--warning); }
+
+  .dir-a .main-row { display: flex; flex: 1; overflow: hidden; }
+
+  .sidebar {
+    width: var(--sidebar-w);
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+  }
+  .sidebar-header {
+    padding: 10px 12px 6px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+  }
+  .sidebar-list { flex: 1; overflow-y: auto; }
+  .pair-item {
+    display: flex; align-items: center;
+    padding: 7px 12px;
+    gap: 8px;
+    cursor: pointer;
+    border-radius: 0;
+    transition: background 0.1s;
+  }
+  .pair-item:hover { background: var(--bg-overlay); }
+  .pair-item.active { background: rgba(13,148,136,0.15); }
+  .pair-item.active .pair-name { color: var(--teal-light); }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+  .dot-synced { background: var(--success); }
+  .dot-syncing { background: var(--teal); animation: pulse 1.5s infinite; }
+  .dot-conflict { background: var(--warning); }
+  .dot-error { background: var(--error); }
+  .dot-offline { background: var(--offline); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .pair-name { font-size: 13px; flex: 1; }
+  .pair-count { font-size: 10px; color: var(--text-secondary); }
+
+  .sidebar-footer {
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+  }
+  .add-pair-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    color: var(--teal-light);
+    font-size: 12px;
+    cursor: pointer;
+    border: 1px dashed var(--teal-dim);
+    width: 100%;
+    background: transparent;
+  }
+  .add-pair-btn:hover { background: rgba(13,148,136,0.1); }
+
+  .detail-panel {
+    flex: 1;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow-y: auto;
+  }
+  .detail-title { font-size: 16px; font-weight: 600; }
+  .detail-path-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--text-secondary);
+    background: var(--bg-surface);
+    border-radius: 6px; padding: 8px 10px;
+  }
+  .path-arrow { color: var(--teal); font-size: 14px; }
+  .path-text { flex: 1; }
+  .detail-stats {
+    display: grid; grid-template-columns: 1fr 1fr 1fr;
+    gap: 8px;
+  }
+  .stat-card {
+    background: var(--bg-surface);
+    border-radius: 6px; padding: 10px 12px;
+    border: 1px solid var(--border);
+  }
+  .stat-label { font-size: 10px; color: var(--text-secondary); margin-bottom: 4px; }
+  .stat-value { font-size: 14px; font-weight: 600; }
+  .stat-value.teal { color: var(--teal-light); }
+  .stat-value.success { color: var(--success); }
+  .stat-value.warning { color: var(--warning); }
+  .detail-actions { display: flex; gap: 8px; margin-top: auto; }
+  .btn-primary {
+    padding: 6px 14px; border-radius: 6px;
+    background: var(--teal); color: white;
+    font-size: 12px; font-weight: 500; cursor: pointer; border: none;
+  }
+  .btn-ghost {
+    padding: 6px 14px; border-radius: 6px;
+    background: transparent; color: var(--text-secondary);
+    font-size: 12px; cursor: pointer;
+    border: 1px solid var(--border);
+  }
+  .btn-danger {
+    padding: 6px 14px; border-radius: 6px;
+    background: transparent; color: var(--error);
+    font-size: 12px; cursor: pointer;
+    border: 1px solid rgba(248,113,113,0.3);
+    margin-left: auto;
+  }
+
+  .status-footer {
+    height: 36px;
+    background: var(--bg-header);
+    border-top: 1px solid var(--border);
+    display: flex; align-items: center;
+    padding: 0 14px;
+    gap: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    flex-shrink: 0;
+  }
+  .footer-icon { font-size: 13px; }
+  .footer-state { color: var(--text-primary); }
+  .footer-sep { color: var(--border); }
+  .footer-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+
+  /* ─── Direction B: Compact list — no separate detail panel ─── */
+  .dir-b .app-body {
+    background: var(--bg-base);
+    height: 460px;
+    display: flex;
+    flex-direction: column;
+  }
+  .dir-b .pairs-list {
+    flex: 1; overflow-y: auto; padding: 8px;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .pair-row {
+    display: flex; align-items: center;
+    background: var(--bg-surface);
+    border-radius: 8px;
+    padding: 10px 12px;
+    gap: 10px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .pair-row:hover { border-color: var(--teal-dim); }
+  .pair-row.active { border-color: var(--teal); background: rgba(13,148,136,0.1); }
+  .pair-row-icon { font-size: 16px; flex-shrink: 0; }
+  .pair-row-info { flex: 1; }
+  .pair-row-name { font-size: 13px; font-weight: 500; margin-bottom: 2px; }
+  .pair-row-paths { font-size: 11px; color: var(--text-secondary); }
+  .pair-row-status {
+    display: flex; flex-direction: column; align-items: flex-end; gap: 4px;
+    flex-shrink: 0;
+  }
+  .status-pill {
+    font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+  }
+  .pill-synced { background: rgba(74,222,128,0.15); color: var(--success); }
+  .pill-syncing { background: rgba(13,148,136,0.15); color: var(--teal-light); }
+  .pill-conflict { background: rgba(251,191,36,0.15); color: var(--warning); }
+  .pair-row-meta { font-size: 10px; color: var(--text-secondary); }
+  .add-pair-row {
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px; padding: 12px;
+    border: 1px dashed var(--teal-dim);
+    border-radius: 8px; color: var(--teal-light);
+    font-size: 12px; cursor: pointer;
+    margin: 0 8px 8px;
+  }
+  .add-pair-row:hover { background: rgba(13,148,136,0.08); }
+
+  /* ─── Direction C: Dashboard / Activity focus ─── */
+  .dir-c .app-body {
+    background: var(--bg-base);
+    height: 460px;
+    display: flex;
+    flex-direction: column;
+  }
+  .dash-header {
+    padding: 14px 16px 10px;
+    background: var(--bg-header);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .dash-top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .dash-account { flex: 1; }
+  .dash-account-name { font-size: 15px; font-weight: 600; }
+  .dash-account-sub { font-size: 11px; color: var(--text-secondary); }
+  .dash-storage { min-width: 200px; }
+  .dash-stats-row {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  .dash-stat {
+    background: var(--bg-surface);
+    border-radius: 6px; padding: 8px 10px;
+    border: 1px solid var(--border);
+  }
+  .dash-stat-val { font-size: 16px; font-weight: 700; color: var(--teal-light); }
+  .dash-stat-lbl { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+  .dash-body { display: flex; flex: 1; overflow: hidden; }
+  .dash-pairs {
+    width: 260px; flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    padding: 10px 8px;
+    overflow-y: auto;
+  }
+  .dash-pairs-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-secondary);
+    padding: 2px 6px 8px;
+  }
+  .dash-pair-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 7px 8px; border-radius: 6px; cursor: pointer;
+  }
+  .dash-pair-item:hover { background: var(--bg-overlay); }
+  .dash-pair-item.active { background: rgba(13,148,136,0.12); }
+  .dash-pair-name { flex: 1; font-size: 13px; }
+  .dash-pair-status { font-size: 10px; color: var(--text-secondary); }
+  .activity-panel {
+    flex: 1; padding: 10px 14px; overflow-y: auto;
+  }
+  .activity-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-secondary);
+    margin-bottom: 10px;
+  }
+  .activity-item {
+    display: flex; align-items: flex-start; gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .activity-item:last-child { border-bottom: none; }
+  .activity-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  .activity-text { flex: 1; font-size: 12px; }
+  .activity-file { font-weight: 500; }
+  .activity-meta { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+  .activity-time { font-size: 10px; color: var(--text-secondary); flex-shrink: 0; }
+
+  /* ─── Direction D: Wide — single panel, pairs as column ─── */
+  .dir-d .app-body {
+    background: var(--bg-base);
+    height: 460px;
+    display: flex;
+    flex-direction: column;
+  }
+  .dir-d .account-header { border-bottom: 1px solid var(--border); }
+  .dir-d .content { display: flex; flex: 1; overflow: hidden; }
+  .wide-sidebar {
+    width: 280px; flex-shrink: 0;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+  }
+  .wide-sidebar-header {
+    padding: 12px 14px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .wide-sidebar-heading { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-secondary); }
+  .wide-pair {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .wide-pair:hover { background: var(--bg-overlay); }
+  .wide-pair.active { background: rgba(13,148,136,0.12); border-left: 3px solid var(--teal); }
+  .wide-pair-top { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .wide-pair-name { font-size: 13px; font-weight: 500; flex: 1; }
+  .wide-pair-paths { font-size: 11px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+  .wide-pair-stat { font-size: 11px; color: var(--text-secondary); margin-top: 3px; }
+  .wide-progress { height: 3px; border-radius: 2px; background: var(--bg-overlay); margin-top: 5px; overflow: hidden; }
+  .wide-progress-fill { height: 100%; background: var(--teal); border-radius: 2px; }
+  .wide-add { padding: 10px 14px; color: var(--teal-light); font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+  .wide-detail {
+    flex: 1; padding: 16px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .detail-section-title {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: var(--text-secondary);
+    margin-bottom: 8px;
+  }
+  .conflict-item {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(251,191,36,0.06);
+    border: 1px solid rgba(251,191,36,0.2);
+    border-radius: 6px; padding: 8px 10px;
+  }
+  .conflict-icon { font-size: 14px; }
+  .conflict-text { flex: 1; font-size: 12px; }
+  .conflict-file { font-weight: 500; color: var(--warning); }
+  .conflict-meta { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+  .conflict-action { font-size: 11px; color: var(--teal-light); cursor: pointer; }
+
+  /* ─── Auth screen ─── */
+  .auth-screen {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; padding: 32px; height: 100%;
+    gap: 20px; text-align: center;
+  }
+  .auth-logo { font-size: 40px; }
+  .auth-title { font-size: 18px; font-weight: 600; }
+  .auth-body { max-width: 320px; font-size: 13px; color: var(--text-secondary); line-height: 1.6; }
+  .auth-url-bar {
+    background: var(--bg-overlay); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px;
+    font-size: 11px; color: var(--success);
+    display: flex; align-items: center; gap: 6px;
+    width: 300px;
+  }
+  .auth-lock { color: var(--success); }
+  .auth-cta {
+    padding: 10px 24px; border-radius: 8px;
+    background: var(--teal); color: white;
+    font-size: 13px; font-weight: 500; cursor: pointer; border: none;
+  }
+  .auth-disclaimer { font-size: 11px; color: var(--text-dim); color: #666688; }
+
+  /* ─── Comparison nav ─── */
+  .nav { display: flex; gap: 8px; margin-bottom: 48px; flex-wrap: wrap; }
+  .nav-item {
+    padding: 6px 14px; border-radius: 20px;
+    font-size: 12px; cursor: pointer;
+    border: 1px solid var(--border);
+    color: var(--text-secondary);
+    text-decoration: none;
+  }
+  .nav-item:hover { border-color: var(--teal); color: var(--teal-light); }
+
+  .tag {
+    display: inline-block;
+    font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px;
+    margin-left: 8px; vertical-align: middle;
+  }
+  .tag-recommended { background: rgba(13,148,136,0.2); color: var(--teal-light); }
+  .tag-auth { background: rgba(139,92,246,0.2); color: #a78bfa; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <h1>ProtonDrive Linux Client — UX Design Directions</h1>
+  <p class="subtitle">GTK4 · Libadwaita · Dark Mandatory · Teal #0D9488 · Compact density · 2026-04-06</p>
+
+  <div class="nav">
+    <a href="#dir-auth" class="nav-item">Auth screen</a>
+    <a href="#dir-a" class="nav-item">A — Sidebar + Detail</a>
+    <a href="#dir-b" class="nav-item">B — Compact cards</a>
+    <a href="#dir-c" class="nav-item">C — Dashboard + Activity</a>
+    <a href="#dir-d" class="nav-item">D — Wide sidebar</a>
+  </div>
+
+  <!-- ═══ AUTH SCREEN ═══ -->
+  <div class="direction-block" id="dir-auth">
+    <div class="direction-label">Pre-auth screen</div>
+    <div class="direction-title">Sign-in credential comfort screen <span class="tag tag-auth">All directions</span></div>
+    <div class="direction-desc">Native GTK4 screen shown before the embedded WebKitGTK browser opens. Informs the user of what is about to happen and why their credentials are safe. URL bar is read-only, shown in the embedded browser frame above.</div>
+    <div class="app-shell">
+      <div class="app-titlebar">
+        <div class="titlebar-btn btn-close"></div>
+        <div class="titlebar-btn btn-min"></div>
+        <div class="titlebar-btn btn-max"></div>
+        <div class="titlebar-title">ProtonDrive Linux Client</div>
+      </div>
+      <div style="background: var(--bg-base); height: 420px;">
+        <div class="auth-screen">
+          <div class="auth-logo">🔒</div>
+          <div class="auth-title">Sign in to your Proton account</div>
+          <div class="auth-body">
+            You'll be taken to Proton's login page in a secure browser window.<br>
+            Your password and 2FA codes go straight to Proton —<br>
+            <strong style="color: var(--text-primary);">this app only receives a session token after you sign in.</strong>
+          </div>
+          <div class="auth-url-bar">
+            <span class="auth-lock">🔒</span>
+            <span>accounts.proton.me</span>
+          </div>
+          <button class="auth-cta">Open Proton sign-in →</button>
+          <div class="auth-disclaimer">You can verify the address in the browser bar above.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ DIRECTION A ═══ -->
+  <div class="direction-block" id="dir-a">
+    <div class="direction-label">Direction A</div>
+    <div class="direction-title">Sidebar + Detail panel <span class="tag tag-recommended">Primary direction</span></div>
+    <div class="direction-desc">Classic GNOME two-panel layout. Sync pairs list in sidebar with status dots; selected pair shown in detail panel with stats and actions. Persistent account header and status footer. Most information visible without interaction.</div>
+    <div class="app-shell dir-a">
+      <div class="app-titlebar">
+        <div class="titlebar-btn btn-close"></div>
+        <div class="titlebar-btn btn-min"></div>
+        <div class="titlebar-btn btn-max"></div>
+        <div class="titlebar-title">ProtonDrive Linux Client</div>
+      </div>
+      <div class="app-body">
+        <!-- Account header -->
+        <div class="account-header">
+          <div class="account-avatar">JD</div>
+          <div class="account-name">jeremy@proton.me</div>
+          <div class="storage-wrap">
+            <div class="storage-label"><span>Storage</span><span>47 GB / 200 GB</span></div>
+            <div class="storage-bar"><div class="storage-fill" style="width:23%"></div></div>
+          </div>
+        </div>
+        <!-- Main row -->
+        <div class="main-row">
+          <!-- Sidebar -->
+          <div class="sidebar">
+            <div class="sidebar-header">My Sync Pairs</div>
+            <div class="sidebar-list">
+              <div class="pair-item active">
+                <div class="status-dot dot-synced"></div>
+                <div class="pair-name">Documents</div>
+              </div>
+              <div class="pair-item">
+                <div class="status-dot dot-syncing"></div>
+                <div class="pair-name">Projects</div>
+              </div>
+              <div class="pair-item">
+                <div class="status-dot dot-conflict"></div>
+                <div class="pair-name">Work</div>
+              </div>
+            </div>
+            <div class="sidebar-footer">
+              <button class="add-pair-btn">＋ Add sync pair</button>
+            </div>
+          </div>
+          <!-- Detail -->
+          <div class="detail-panel">
+            <div class="detail-title">Documents</div>
+            <div class="detail-path-row">
+              <span class="path-text">~/Documents</span>
+              <span class="path-arrow">⇄</span>
+              <span class="path-text">ProtonDrive / Documents</span>
+            </div>
+            <div class="detail-stats">
+              <div class="stat-card">
+                <div class="stat-label">Status</div>
+                <div class="stat-value success">All synced</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Last sync</div>
+                <div class="stat-value teal">4 sec ago</div>
+              </div>
+              <div class="stat-card">
+                <div class="stat-label">Files</div>
+                <div class="stat-value">1,247</div>
+              </div>
+            </div>
+            <div class="detail-actions">
+              <button class="btn-ghost">View conflict log</button>
+              <button class="btn-danger">Remove pair</button>
+            </div>
+          </div>
+        </div>
+        <!-- Footer -->
+        <div class="status-footer">
+          <div class="footer-dot"></div>
+          <span class="footer-state">All pairs synced</span>
+          <span class="footer-sep">·</span>
+          <span>Projects syncing 3 files…</span>
+          <span class="footer-sep">·</span>
+          <span>1 conflict in Work</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ DIRECTION B ═══ -->
+  <div class="direction-block" id="dir-b">
+    <div class="direction-label">Direction B</div>
+    <div class="direction-title">Compact card list — no detail panel</div>
+    <div class="direction-desc">All sync pairs displayed as cards in a single scrollable list. Each card shows paths, status pill, and last-sync time inline. No separate detail panel — all info visible at a glance. Better for users with many pairs; less suited for conflict management.</div>
+    <div class="app-shell dir-b">
+      <div class="app-titlebar">
+        <div class="titlebar-btn btn-close"></div>
+        <div class="titlebar-btn btn-min"></div>
+        <div class="titlebar-btn btn-max"></div>
+        <div class="titlebar-title">ProtonDrive Linux Client</div>
+      </div>
+      <div class="app-body">
+        <div class="account-header">
+          <div class="account-avatar">JD</div>
+          <div class="account-name">jeremy@proton.me</div>
+          <div class="storage-wrap">
+            <div class="storage-label"><span>Storage</span><span>47 GB / 200 GB</span></div>
+            <div class="storage-bar"><div class="storage-fill" style="width:23%"></div></div>
+          </div>
+        </div>
+        <div class="pairs-list">
+          <div class="pair-row active">
+            <div class="pair-row-icon">📁</div>
+            <div class="pair-row-info">
+              <div class="pair-row-name">Documents</div>
+              <div class="pair-row-paths">~/Documents ⇄ ProtonDrive/Documents</div>
+            </div>
+            <div class="pair-row-status">
+              <span class="status-pill pill-synced">Synced</span>
+              <span class="pair-row-meta">4s ago · 1,247 files</span>
+            </div>
+          </div>
+          <div class="pair-row">
+            <div class="pair-row-icon">📁</div>
+            <div class="pair-row-info">
+              <div class="pair-row-name">Projects</div>
+              <div class="pair-row-paths">~/Projects ⇄ ProtonDrive/Projects</div>
+            </div>
+            <div class="pair-row-status">
+              <span class="status-pill pill-syncing">Syncing…</span>
+              <span class="pair-row-meta">3 files · 2.1 MB</span>
+            </div>
+          </div>
+          <div class="pair-row">
+            <div class="pair-row-icon">📁</div>
+            <div class="pair-row-info">
+              <div class="pair-row-name">Work</div>
+              <div class="pair-row-paths">~/Work ⇄ ProtonDrive/Work</div>
+            </div>
+            <div class="pair-row-status">
+              <span class="status-pill pill-conflict">1 Conflict</span>
+              <span class="pair-row-meta">2 min ago</span>
+            </div>
+          </div>
+        </div>
+        <div class="add-pair-row">＋ Add sync pair</div>
+        <div class="status-footer">
+          <div class="footer-dot" style="background:var(--warning)"></div>
+          <span class="footer-state">1 conflict needs attention</span>
+          <span class="footer-sep">·</span>
+          <span>Projects syncing 3 files…</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ DIRECTION C ═══ -->
+  <div class="direction-block" id="dir-c">
+    <div class="direction-label">Direction C</div>
+    <div class="direction-title">Dashboard + Activity feed</div>
+    <div class="direction-desc">Stats-first header showing aggregate sync metrics. Activity feed on the right shows recent file-level events. Good for users who want to see what just synced; more complex; may distract from the "invisible when healthy" principle.</div>
+    <div class="app-shell dir-c">
+      <div class="app-titlebar">
+        <div class="titlebar-btn btn-close"></div>
+        <div class="titlebar-btn btn-min"></div>
+        <div class="titlebar-btn btn-max"></div>
+        <div class="titlebar-title">ProtonDrive Linux Client</div>
+      </div>
+      <div class="app-body">
+        <div class="dash-header">
+          <div class="dash-top">
+            <div class="account-avatar" style="width:36px;height:36px;font-size:13px">JD</div>
+            <div class="dash-account">
+              <div class="dash-account-name">jeremy@proton.me</div>
+              <div class="dash-account-sub">Free plan · 47 GB of 200 GB used</div>
+            </div>
+            <div class="dash-storage" style="min-width:180px">
+              <div class="storage-label"><span>Storage</span><span>23%</span></div>
+              <div class="storage-bar"><div class="storage-fill" style="width:23%"></div></div>
+            </div>
+          </div>
+          <div class="dash-stats-row">
+            <div class="dash-stat">
+              <div class="dash-stat-val">3</div>
+              <div class="dash-stat-lbl">Sync pairs</div>
+            </div>
+            <div class="dash-stat">
+              <div class="dash-stat-val" style="color:var(--success)">2</div>
+              <div class="dash-stat-lbl">Synced</div>
+            </div>
+            <div class="dash-stat">
+              <div class="dash-stat-val" style="color:var(--teal-light)">1</div>
+              <div class="dash-stat-lbl">Syncing</div>
+            </div>
+            <div class="dash-stat">
+              <div class="dash-stat-val" style="color:var(--warning)">1</div>
+              <div class="dash-stat-lbl">Conflicts</div>
+            </div>
+          </div>
+        </div>
+        <div class="dash-body">
+          <div class="dash-pairs">
+            <div class="dash-pairs-title">Sync Pairs</div>
+            <div class="dash-pair-item active">
+              <div class="status-dot dot-synced"></div>
+              <div class="dash-pair-name">Documents</div>
+              <div class="dash-pair-status">4s ago</div>
+            </div>
+            <div class="dash-pair-item">
+              <div class="status-dot dot-syncing"></div>
+              <div class="dash-pair-name">Projects</div>
+              <div class="dash-pair-status">syncing…</div>
+            </div>
+            <div class="dash-pair-item">
+              <div class="status-dot dot-conflict"></div>
+              <div class="dash-pair-name">Work</div>
+              <div class="dash-pair-status">⚠ conflict</div>
+            </div>
+            <div style="padding:8px;margin-top:4px">
+              <button class="add-pair-btn" style="justify-content:center">＋ Add pair</button>
+            </div>
+          </div>
+          <div class="activity-panel">
+            <div class="activity-title">Recent activity</div>
+            <div class="activity-item">
+              <div class="activity-icon">✅</div>
+              <div class="activity-text">
+                <div class="activity-file">report-q1.md</div>
+                <div class="activity-meta">Documents · Uploaded</div>
+              </div>
+              <div class="activity-time">4s</div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-icon" style="color:var(--warning)">⚠️</div>
+              <div class="activity-text">
+                <div class="activity-file" style="color:var(--warning)">interview-notes.md</div>
+                <div class="activity-meta">Work · Conflict copy created</div>
+              </div>
+              <div class="activity-time">2m</div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-icon">✅</div>
+              <div class="activity-text">
+                <div class="activity-file">design-v3.fig</div>
+                <div class="activity-meta">Projects · Downloaded</div>
+              </div>
+              <div class="activity-time">8m</div>
+            </div>
+            <div class="activity-item">
+              <div class="activity-icon">✅</div>
+              <div class="activity-text">
+                <div class="activity-file">notes.txt</div>
+                <div class="activity-meta">Documents · Uploaded</div>
+              </div>
+              <div class="activity-time">12m</div>
+            </div>
+          </div>
+        </div>
+        <div class="status-footer">
+          <div class="footer-dot" style="background:var(--teal);animation:pulse 1.5s infinite"></div>
+          <span class="footer-state">Syncing Projects — 3 files · 2.1 MB</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ DIRECTION D ═══ -->
+  <div class="direction-block" id="dir-d">
+    <div class="direction-label">Direction D</div>
+    <div class="direction-title">Wide sidebar with inline pair detail + conflict panel</div>
+    <div class="direction-desc">Wider sidebar (280px) shows pair details inline — paths, progress bar, last-sync time — without needing a separate click. Right panel focuses on actionable items: conflicts, errors, recent changes. Efficient for power users managing multiple pairs.</div>
+    <div class="app-shell dir-d">
+      <div class="app-titlebar">
+        <div class="titlebar-btn btn-close"></div>
+        <div class="titlebar-btn btn-min"></div>
+        <div class="titlebar-btn btn-max"></div>
+        <div class="titlebar-title">ProtonDrive Linux Client</div>
+      </div>
+      <div class="app-body">
+        <div class="account-header">
+          <div class="account-avatar">JD</div>
+          <div class="account-name">jeremy@proton.me</div>
+          <div class="storage-wrap">
+            <div class="storage-label"><span>Storage</span><span>47 GB / 200 GB</span></div>
+            <div class="storage-bar"><div class="storage-fill" style="width:23%"></div></div>
+          </div>
+        </div>
+        <div class="content">
+          <div class="wide-sidebar">
+            <div class="wide-sidebar-header">
+              <div class="wide-sidebar-heading">Sync Pairs</div>
+            </div>
+            <div class="wide-pair active">
+              <div class="wide-pair-top">
+                <div class="status-dot dot-synced"></div>
+                <div class="wide-pair-name">Documents</div>
+                <span class="status-pill pill-synced" style="font-size:9px;padding:1px 6px">Synced</span>
+              </div>
+              <div class="wide-pair-paths">
+                <span>~/Documents</span>
+                <span style="color:var(--teal)">⇄</span>
+                <span>ProtonDrive/Docs</span>
+              </div>
+              <div class="wide-pair-stat">1,247 files · last synced 4s ago</div>
+            </div>
+            <div class="wide-pair">
+              <div class="wide-pair-top">
+                <div class="status-dot dot-syncing"></div>
+                <div class="wide-pair-name">Projects</div>
+                <span class="status-pill pill-syncing" style="font-size:9px;padding:1px 6px">Syncing</span>
+              </div>
+              <div class="wide-pair-paths">
+                <span>~/Projects</span>
+                <span style="color:var(--teal)">⇄</span>
+                <span>ProtonDrive/Projects</span>
+              </div>
+              <div class="wide-progress"><div class="wide-progress-fill" style="width:60%"></div></div>
+              <div class="wide-pair-stat" style="margin-top:4px">3 of 5 files · 1.2 of 2.1 MB</div>
+            </div>
+            <div class="wide-pair">
+              <div class="wide-pair-top">
+                <div class="status-dot dot-conflict"></div>
+                <div class="wide-pair-name">Work</div>
+                <span class="status-pill pill-conflict" style="font-size:9px;padding:1px 6px">Conflict</span>
+              </div>
+              <div class="wide-pair-paths">
+                <span>~/Work</span>
+                <span style="color:var(--teal)">⇄</span>
+                <span>ProtonDrive/Work</span>
+              </div>
+              <div class="wide-pair-stat">842 files · 1 conflict</div>
+            </div>
+            <div class="wide-add">＋ Add sync pair</div>
+          </div>
+          <div class="wide-detail">
+            <div>
+              <div class="detail-section-title">Conflicts requiring attention</div>
+              <div class="conflict-item">
+                <div class="conflict-icon">⚠️</div>
+                <div class="conflict-text">
+                  <div class="conflict-file">interview-notes.md</div>
+                  <div class="conflict-meta">Work · Both versions preserved · 2 min ago</div>
+                </div>
+                <div class="conflict-action">Reveal in Files</div>
+              </div>
+            </div>
+            <div>
+              <div class="detail-section-title">Documents — selected pair</div>
+              <div class="detail-path-row">
+                <span class="path-text">~/Documents</span>
+                <span class="path-arrow">⇄</span>
+                <span class="path-text">ProtonDrive/Documents</span>
+              </div>
+              <div class="detail-stats" style="margin-top:8px">
+                <div class="stat-card">
+                  <div class="stat-label">Files</div>
+                  <div class="stat-value">1,247</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Last sync</div>
+                  <div class="stat-value teal">4s ago</div>
+                </div>
+                <div class="stat-card">
+                  <div class="stat-label">Local size</div>
+                  <div class="stat-value">2.1 GB</div>
+                </div>
+              </div>
+            </div>
+            <div class="detail-actions" style="margin-top:auto">
+              <button class="btn-danger">Remove pair</button>
+            </div>
+          </div>
+        </div>
+        <div class="status-footer">
+          <div class="footer-dot" style="background:var(--warning)"></div>
+          <span class="footer-state">1 conflict needs attention</span>
+          <span class="footer-sep">·</span>
+          <span>Projects syncing 3 files…</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
