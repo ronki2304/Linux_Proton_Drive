@@ -1,108 +1,102 @@
 ---
 title: "Product Brief: ProtonDrive Linux Client"
-status: "final"
-created: "2026-04-01"
-updated: "2026-04-01"
-inputs: ["user interviews", "web research - competitive landscape", "ProtonDrive SDK auth research"]
+status: "complete"
+created: "2026-04-06"
+updated: "2026-04-06"
+inputs: ["product-brief-ProtonDrive-LinuxClient.md (prior iteration)", "product-brief-ProtonDrive-LinuxClient-distillate.md", "research/technical-linux-packaging-formats-research-2026-04-01.md", "lessons-learned-cli-iteration.md", "docs/project-overview.md", "docs/architecture.md", "web research - competitive landscape 2026", "web research - Flathub market data 2026"]
 ---
 
 # Product Brief: ProtonDrive Linux Client
 
 ## Executive Summary
 
-Linux users who pay for ProtonDrive have no working way to sync their files. rclone — the de facto workaround — broke in September 2025 when Proton introduced per-block verification tokens, and was effectively delisted as a supported backend in February 2026. Proton's own desktop clients exist only for Windows and macOS. The gap is real, the frustration is loud, and a native Linux client is the most upvoted feature request on Proton's own feedback forum.
+Over 100 million people trust Proton with their most sensitive files. On Windows and macOS, that trust comes with a desktop client — background sync, conflict handling, peace of mind. On Linux, it comes with nothing. The browser is the only option, rclone's ProtonDrive backend broke in September 2025 and was delisted in February 2026, and the one community GUI attempt ships with WebKitGTK login failures on mainstream distros and no sync engine. Proton's own UserVoice tracker shows 5,700+ votes for a Linux client — the second-most-requested feature in the company's history. Linux users are cancelling subscriptions and moving to pCloud.
 
-ProtonDrive Linux Client is an MIT-licensed open-source project delivering two composable tools: a scriptable CLI with git-style subcommands (shipping first), and a GUI app for two-way folder sync (following). Both are built on Proton's official SDK and share a single config file. The CLI ships as a self-contained binary — no runtime required — and targets the displaced rclone user base directly, before Proton's own announced Q2 2026 CLI can capture that audience.
+ProtonDrive Linux Client is an open-source GTK4/Libadwaita desktop application built for people who chose Proton precisely because they verify everything — for the first time, you can audit the code that moves your encrypted files. Select your folders, authenticate once, and your files stay in sync. It distributes on Flathub — the canonical app store for immutable Linux distros like Bazzite, Silverblue, and SteamOS — and is built on Proton's own official SDK, not a reversed private API. It is the first maintained ProtonDrive GUI sync client available on Flathub.
 
-Built on the official ProtonDriveApps SDK (MIT-licensed, TypeScript), this project inherits production-grade end-to-end encryption rather than reverse-engineering a private API — making it auditable, maintainable, and aligned with Proton's own roadmap.
+The window is open today. Celeste — the only prior multi-cloud sync Flatpak with ProtonDrive support — was archived in November 2025. Proton has announced a CLI for Q2 2026 but made no GUI or Flatpak commitment. This project ships before that window closes.
 
 ## The Problem
 
-ProtonDrive's Linux users are effectively second-class customers. The Windows and macOS clients provide seamless background sync, tray integration, and selective folder sync. On Linux, users have three options — none of them good:
+Linux users who pay for ProtonDrive cannot sync their files. The gap is not a minor inconvenience — it is a platform exclusion:
 
-- **rclone** — broken since September 2025, delisted February 2026. The community patch backlog has no committed resolution timeline. Sysadmins had it in production scripts; those scripts are now broken.
-- **Browser** — no sync, no offline access, no automation. Fine for occasional file retrieval, useless for anyone with real workflows.
-- **DonnieDice/protondrive-linux** — a Tauri GUI released January 2026 that the community welcomed warmly, but which has critical WebKitGTK login failures on mainstream distros, no sync engine, and no scripting interface.
+- **rclone** broke in September 2025 when Proton introduced per-block verification tokens. It was delisted as a supported backend in February 2026 with no committed fix timeline. Sysadmins had it in production; those pipelines are now broken.
+- **The browser** provides no sync, no offline access, and no background operation. It is useful for retrieving a file; it is useless as a sync client.
+- **DonnieDice/protondrive-linux** — a Tauri-based GUI released January 2026 — received a warm community welcome but ships with WebKitGTK authentication failures on Fedora and Ubuntu, has no sync engine, and is not available on Flathub.
+- **pCloud** has a native Linux GUI client. Users are citing this directly as a reason to cancel Proton subscriptions.
 
-The result: Linux users who chose ProtonDrive for its privacy guarantees are reverting to OneDrive and Google Drive — not because they want to, but because they have no viable alternative. Users voting with their own hands, on Proton's own platform, made this the most-requested feature in Proton's history.
+The contradiction is pointed and users say so loudly: a company whose entire brand rests on privacy and trustworthiness provides the most privacy-conscious operating system with no way to sync files. Linux is not a niche — Steam's Linux share hit 5.33% in March 2026, an all-time high, driven by Bazzite, SteamOS, and immutable desktops that rely entirely on Flatpak for third-party apps.
 
 ## The Solution
 
-Two tools, one project, one config file. CLI ships first.
+A focused GTK4/Libadwaita desktop application that does one thing well: sync selected folders between the user's machine and ProtonDrive.
 
-**`protondrive` — Scriptable CLI (v1)**
-A command-line tool modeled on git's subcommand pattern, immediately familiar to developers and sysadmins:
+The user opens the app, authenticates via an embedded browser (handling Proton's CAPTCHA and 2FA flows natively), selects one or more local folders mapped to ProtonDrive folders, and sync begins. The app displays live sync status — files transferring, conflicts resolved, last sync timestamp. Two-way sync runs continuously while the app is open. On conflict, the app creates a conflict copy rather than silently overwriting — the safe default for files protected by end-to-end encryption with no easy recovery path.
 
-```
-protondrive auth login        # one-time interactive login; session token cached
-protondrive sync              # two-way sync per config file
-protondrive upload <local> <remote>
-protondrive download <remote> <local>
-protondrive status
-```
+The app looks and feels native. GTK4/Libadwaita means it inherits the GNOME design language that Bazzite, Silverblue, and Fedora users live in daily. KDE/Plasma users can run the app but the Libadwaita design language will not match their desktop theme — full KDE integration is a v2 consideration. Distributed exclusively via Flathub for v1 — no manual installation steps, no terminal required, one click from the app store.
 
-Authentication is handled once interactively (`auth login`); the session token is cached securely, enabling all subsequent invocations — cron, CI pipelines, shell scripts — to run headlessly without user interaction. Configuration is mandatory and file-based. Ships as a self-contained binary with no Node.js runtime dependency.
-
-**`protondrive-sync` — GUI Sync App (v2)**
-A desktop application presenting a clean, focused window showing all configured sync pairs and their live status. Users configure local folders mapped to ProtonDrive folders; the app handles two-way sync, conflict detection, and progress display. No bloat — not a full file manager. Reads the same config file as the CLI.
+V1 syncs while the app is open. Background sync — running silently after the window is closed — requires a daemon architecture and is a deliberate v2 feature. This is honest scope: a foreground sync client that works reliably is more valuable to users than a background client that works sometimes.
 
 ## What Makes This Different
 
-**Official SDK, not reverse engineering.** The existing community workarounds reverse-engineer a private API — fragile by definition. This project uses Proton's own published SDK, the same code powering their official apps. Both are MIT-licensed, removing any barrier to enterprise adoption, internal deployment, or downstream packaging.
+**The only maintained GUI sync client on Flathub.** Celeste was archived in November 2025. There is no maintained alternative. This is not a crowded field — it is a vacant slot in a growing platform.
 
-**The rclone successor, not a stopgap.** rclone users with a ProtonDrive backend have nowhere to go. This project is the explicit migration target. A one-command migration path from rclone config is a v1 launch artifact — capturing the displaced rclone user base at peak urgency.
+**Official SDK, not reverse engineering.** Every community workaround — rclone, DonnieDice, henrybear327/Proton-API-Bridge — reverse-engineers a private API. Proton can change it at any time. This project is built on the same SDK that powers Proton's own official applications, MIT-licensed and published by Proton. It surfaces breaking changes before they hit end users and aligns with Proton's own development roadmap. When Proton changes their infrastructure, this client changes with it — not breaks.
 
-**Open-source as a trust signal.** ProtonDrive's entire value rests on trustworthiness — E2EE, Swiss jurisdiction, no surveillance. An open-source client that any user can audit line-by-line is the only kind of client a serious privacy user should accept. Closed-source cloud sync tools are a contradiction in terms for this audience.
+**Solved auth — the problem DonnieDice couldn't fix.** DonnieDice's Tauri-based client fails at login on virtually every mainstream distro (Fedora, Ubuntu, Bazzite, Arch). The root cause is documented: Tauri serves its frontend via a custom `tauri://` URI scheme, and WebKitGTK blocks Web Workers from non-`http/https` origins — Proton's auth flow uses Workers for SRP cryptography, so login never completes. Tauri does not expose the API needed to fix this. A native GTK4 app serves the auth flow over `http://127.0.0.1`, which WebKitGTK treats as a fully trusted origin. Workers load, SRP completes, login works. This is not a workaround — it is the correct embedding approach that Tauri's architecture prevented.
 
-**Shared config as infrastructure-grade reproducibility.** The GUI and CLI share one config file. A sysadmin defines sync pairs in a text file, commits it to version control, deploys it to N machines — the GUI on each just works. Config files in dotfiles repos become organic distribution: every public dotfiles repo that references `protondrive` is an acquisition channel.
+**Flatpak-first, immutable-distro ready.** Bazzite users cannot install arbitrary software without containerization. This project's Flatpak packaging is not an afterthought — it is the primary delivery mechanism, designed to work correctly within sandbox constraints (static filesystem permissions for inotify, Background Portal for autostart).
 
-**Conflict handling that protects data.** On two-way sync conflicts, the tool creates a conflict copy rather than silently overwriting — the safe default for a privacy-first audience that cannot easily recover lost files from a surveillance-free storage provider.
+**Open-source as a trust requirement, not a marketing claim.** ProtonDrive's value is that the user's data is encrypted before it leaves their machine. An open-source client is the only kind that a serious privacy-conscious user can audit line-by-line. Closed-source sync clients are a contradiction for this audience — you cannot verify what a closed binary does with your keys.
 
 ## Who This Serves
 
-**Primary: Developers and sysadmins** — Linux power users who automate everything. They need ProtonDrive to behave like any other infrastructure component: configurable, scriptable, reliable. They had rclone in production scripts; those scripts are now broken. They are the most urgently underserved audience and the first target.
+**Primary: Linux desktop users who pay for ProtonDrive and expect sync to work.** They installed Linux for privacy, convenience, or both. They use GNOME or a GNOME-derived desktop. They are comfortable installing apps from Flathub. They do not want to configure a CLI tool — they want to open an app, pick their folders, and have their files synced. This is the mainstream of the underserved Proton Linux audience: not power users, not sysadmins, people who just want it to work.
 
-**Primary: Privacy-conscious power users** — Linux desktop users who chose ProtonDrive for end-to-end encryption and Swiss jurisdiction. They want the same experience Windows users get: background sync, peace of mind, no browser required. They are the GUI app's audience and the project's long-term growth base.
-
-Both groups overlap significantly and share the same toolchain. The CLI user and the GUI user are often the same person.
+**Secondary: Immutable distro users (Bazzite, Silverblue, SteamOS).** These users have no alternative to Flatpak for third-party apps. The Flathub listing is the only way to reach them. This cohort is the fastest-growing segment of the Linux desktop market and is disproportionately the exact audience that chose Proton for privacy reasons.
 
 ## Success Criteria
 
-- **GitHub stars** — 500 within 6 months of first stable CLI release; community trust signal
-- **Distro packaging** — AUR, Flathub, or nixpkgs within 3 months of stable release; a Nix flake at CLI launch targets the primary audience directly
-- **Proton acknowledgment** — mentioned or linked by Proton's official Reddit presence or community channels
-- **Community answer shift** — the top answer on the three most-trafficked ProtonDrive/Linux threads links to this project within 6 months of stable release
+- **Flathub listing** — published and passing Flathub quality review at v1 launch; this is the primary distribution gate
+- **1,000 Flathub installs** within 3 months of stable release; validates organic discovery through the platform
+- **500 GitHub stars** within 6 months; community trust signal and contributor magnet
+- **Community answer shift** — active presence established on r/ProtonMail, r/linux, and Proton community forum within launch week; project linked from at least one Proton-official knowledge base or status page within 6 months
+- **Zero critical data loss reports** — conflict copy behavior must be verified in real-world sync scenarios before stable release
 
 ## Scope
 
-**v1 (CLI) In Scope:**
-- `auth login` with session token caching for headless subsequent use
-- `upload`, `download`, `sync`, `status` subcommands
-- Mandatory config-file-based sync pair configuration
-- Conflict copy on two-way sync conflicts
-- Self-contained binary distribution (AppImage + AUR PKGBUILD + Nix flake)
+**V1 (GUI — Flathub) In Scope:**
+- GTK4/Libadwaita desktop application
+- Authentication via embedded WebKitGTK browser (handles CAPTCHA and 2FA)
+- One or more user-selected folder pairs (local ↔ ProtonDrive)
+- Two-way continuous sync while app is open
+- Conflict copy on sync conflicts (no silent overwrite)
+- Live sync status display (in-progress, last sync, conflict log)
+- Flatpak packaging with correct sandbox permissions
+- Flathub submission and quality review compliance
 - MIT license
-- rclone config migration guide as launch artifact
 
-**v2 (GUI) In Scope:**
-- Two-way folder sync window with live status
-- Shared config file with CLI
-- Linux-native packaging
+**V2 and Beyond:**
+- Background sync daemon (systemd user service)
+- System tray integration
+- Desktop notifications
+- CLI companion tool
+- FUSE/virtual filesystem mount
 
-**Out of Scope (both versions):**
-- Virtual filesystem / FUSE mount (post-v2)
+**Out of Scope (V1):**
 - Windows or macOS support
-- Selective sync at file-granularity (folder-level only for v1)
-- Notifications / tray daemon (post-v1)
-- 2FA support (blocked on upstream SDK — tracked as ProtonDriveApps/sdk issue #6)
+- File manager overlay icons (sandbox limitation; deferred)
+- Selective sync at file granularity (folder-level only)
+- Snap or AppImage packaging (Flathub first)
 
 **Known constraints:**
-- The ProtonDriveApps SDK ships no auth module — authentication must be implemented by this project using Proton's SRP protocol. Session token caching enables headless use after one-time login.
-- The SDK has a planned breaking cryptographic model migration in 2026. v1 architecture must accommodate this migration path.
-- Credential storage security (OS keychain vs. encrypted config) must be defined before v1 ships — this is an explicit trust requirement for the target audience.
+- The ProtonDrive SDK has no built-in auth module; authentication uses Proton's SRP protocol, implemented by this project
+- Flatpak inotify requires static `--filesystem` permission; portal FUSE does not fire inotify events (confirmed upstream bug)
+- Background autostart in v1 requires Flatpak Background Portal user approval; no silent systemd registration
+- Proton crypto migration expected in 2026; SDK wrapper layer must accommodate version transitions
 
 ## Vision
 
-If this succeeds, ProtonDrive Linux Client becomes the canonical answer to "how do I use ProtonDrive on Linux" — the project Proton points to, ships Flatpak updates for, and eventually blesses with early SDK access. Because this project tracks the official SDK, it surfaces breaking changes and migration friction before they hit end users — making it genuinely useful to Proton's developer relations, not just to the community.
+If this lands, ProtonDrive Linux Client becomes what Proton points to when asked "how do I use ProtonDrive on Linux" — the community answer, the Flathub listing Proton eventually blesses, the project that surfaces SDK breaking changes before they hit users. Because it tracks the official SDK, it is genuinely useful to Proton's developer relations, not just to the community.
 
-In 2-3 years: daemon-based background sync, FUSE mount support, desktop notifications, and a Proton-blessed integration. The longer play: establish this as the reference implementation for a privacy-respecting, SDK-native Linux cloud client — a template others can follow for Proton Mail, Proton Calendar, and beyond.
+In 2-3 years: background sync daemon, FUSE mount, desktop notifications, and a Proton-acknowledged integration. The longer arc: establish this as the reference implementation for open-source, SDK-native Linux cloud sync — a pattern that others can follow for privacy-first cloud storage on Linux as the platform continues to grow.
