@@ -361,9 +361,9 @@ Bazzite, Fedora Silverblue, and SteamOS users have no alternative to Flatpak for
 
 ### Sync Pair Management
 
-- **FR8:** User is guided through first sync pair setup on first launch via an onboarding flow
+- **FR8:** User completes first sync pair setup on first launch via a step-by-step onboarding wizard (authenticate → select local folder → select remote folder → confirm and start sync)
 - **FR9:** User can add a new sync pair (local folder ↔ ProtonDrive folder) from the main application window at any time after first run
-- **FR10:** User can manage multiple independent sync pairs
+- **FR10:** User can manage at least 5 independent sync pairs simultaneously
 - **FR11:** User can remove a sync pair without affecting local or remote files
 - **FR12:** User sees an explicit confirmation when removing a sync pair, stating no files will be deleted on either side
 
@@ -380,7 +380,7 @@ Bazzite, Fedora Silverblue, and SteamOS users have no alternative to Flatpak for
 - **FR21:** The system shows an offline indicator and queues changes when network drops mid-session
 - **FR22:** The system resumes sync automatically when network becomes available, without user action
 - **FR23:** The system applies exponential backoff when rate-limited by the API and surfaces the rate-limited state to the user
-- **FR24:** The system shows a meaningful error message when sync fails for reasons other than network or auth, with a suggested resolution
+- **FR24:** The system shows a specific error message with an actionable resolution when sync fails for reasons other than network or auth. Known failure categories and expected messages: disk full ("Free up space on [drive] to continue syncing"), permission denied ("Check folder permissions for [path]"), inotify watch limit exceeded ("Too many files to watch — close other apps or increase system inotify limit"), file locked by another process ("[file] is in use — sync will retry when it's released"), SDK/API error ("Sync error [code] — try again or check ProtonDrive status"). Each error message identifies the cause and provides one actionable next step
 
 ### Conflict Management
 
@@ -454,5 +454,5 @@ Bazzite, Fedora Silverblue, and SteamOS users have no alternative to Flatpak for
 
 ### Open Questions
 
-- **Pause/resume sync:** desired capability — feasibility depends on whether the SDK exposes interruption points within in-flight transfers; to be assessed in architecture phase before committing to scope
-- **Bandwidth throttling (byte-rate):** desired capability — byte-rate throttling requires SDK support or network-layer interception; concurrency-based throttling is resolved (NFR4: default cap of 3, user-configurable in V1); architecture phase to determine byte-rate feasibility
+- **Pause/resume sync:** deferred — SDK does not expose interruption points for in-flight transfers; architecture phase confirmed no clean mechanism; revisit if SDK adds cancellation support in a future release
+- **Bandwidth throttling (byte-rate):** deferred to V1+ — requires SDK rate-control support not yet available; concurrency-based throttling is resolved (NFR4: default cap of 3, user-configurable in V1); byte-rate throttling will be evaluated when SDK exposes rate controls
