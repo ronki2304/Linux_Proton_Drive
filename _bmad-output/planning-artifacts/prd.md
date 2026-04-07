@@ -86,7 +86,7 @@ For immutable distro users (Bazzite, Silverblue, SteamOS) — the fastest-growin
 
 **Flathub submission timing:** after MVP is complete and tested — submit a stable app, not a moving target.
 
-**Architecture constraint:** V1 background daemon requires an IPC-capable sync engine architecture designed from day one. The sync engine language choice (deferred to architecture phase) must account for headless/daemon operation; failing to design for this in MVP forces a rework at V1.
+**Architecture constraint:** V1 background daemon requires an IPC-capable sync engine architecture designed from day one. The sync engine is TypeScript/Node, communicating with the Python GTK4 UI over Unix socket IPC — designed for headless/daemon operation from MVP to avoid rework at V1.
 
 ### MVP — Initial Release
 
@@ -133,7 +133,7 @@ For immutable distro users (Bazzite, Silverblue, SteamOS) — the fastest-growin
 ### Risk Mitigation
 
 **Technical risks:**
-- *Sync engine language TBD* — deferred to architecture phase; must account for V1 daemon/headless operation from day one; gates IPC design and testing strategy
+- *Sync engine is TypeScript/Node* — communicates with Python GTK4 UI over Unix socket IPC; designed for V1 daemon/headless operation from day one
 - *SDK pre-release* — wrapper layer insulates UI; version pinned in lockfile; treat every minor bump as potentially breaking
 - *WebKitGTK auth regression* — GNOME runtime version pinned in manifest; tested on Fedora 43, Ubuntu 24/25, Bazzite, Arch, SteamOS before beta
 
@@ -195,7 +195,7 @@ Bazzite, Fedora Silverblue, and SteamOS users have no alternative to Flatpak for
 
 ### Technical Constraints (Flatpak)
 
-- Static `--filesystem` permission required for inotify — portal FUSE does not fire inotify events (confirmed upstream bug xdg-desktop-portal #567); Flathub submission must include justification
+- Static `--filesystem=home` permission required — the app must watch arbitrary user-chosen sync directories via inotify, and portal-mediated FUSE access does not fire inotify events (confirmed upstream bug xdg-desktop-portal #567); no portal-based alternative provides both dynamic folder selection and file watching; `--filesystem=home` is the minimum scope that supports "pick any folder in your home directory"; Flathub submission must include a plain-language justification explaining this platform limitation
 - Credential storage via Secret portal or libsecret local fallback — never via direct `--talk-name=org.freedesktop.secrets` (insecure: grants cross-app secret access)
 - System proxy settings must be respected (`http_proxy`/`https_proxy` env vars and GNOME proxy settings) — or explicitly documented as unsupported in v1 with a filed issue
 - No in-app update mechanism — Flathub OSTree is the sole update delivery channel; self-update would bypass sandbox verification
@@ -237,7 +237,7 @@ Bazzite, Fedora Silverblue, and SteamOS users have no alternative to Flatpak for
 - **App ID:** reverse-DNS format (e.g. `io.github.username.ProtonDriveLinuxClient`) — must be decided before implementation begins; propagates to manifest, AppStream, desktop file, D-Bus service names, and XDG paths
 - **AppStream/metainfo XML:** required deliverable — app ID, name, summary, description, screenshots, release notes, developer info, OARS content rating (`oars-1.1`, all fields `none` for this app type)
 - **Desktop file:** `Categories=Network;FileTransfer;`, `Keywords=sync;proton;drive;cloud;`, correct Flatpak `Exec=` line, `StartupNotify=true`
-- **finish-args justification document:** written justification for every Flatpak permission prepared before submission — `--share=network`, `--filesystem=` (inotify requirement), `--talk-name=org.freedesktop.portal.Secret`; Flathub reviewers will ask about each
+- **finish-args justification document:** written justification for every Flatpak permission prepared before submission — `--share=network`, `--filesystem=home` (inotify requires direct filesystem access; portal FUSE does not fire inotify events; no portal alternative supports both dynamic folder selection and file watching), `--talk-name=org.freedesktop.portal.Secret`; the `--filesystem=home` justification must explain the platform limitation in plain language for both Flathub reviewers and end users reading the manifest
 
 ### Update Strategy
 
@@ -254,8 +254,6 @@ Bazzite, Fedora Silverblue, and SteamOS users have no alternative to Flatpak for
 
 ### Open Questions
 
-- **Sync engine language:** must be decided before architecture begins — Rust, Go, or TypeScript in a non-Bun runtime; determines Flatpak bundle structure, runtime dependencies, and V1 daemon design; this is the first architecture decision
-- **IPC mechanism (in-process vs. out-of-process):** if sync engine runs out-of-process (separate subprocess or D-Bus service), language choice is unconstrained; if in-process, language is constrained to the UI layer; gates the V1 daemon architecture
 - **Maximum file size:** deferred to SDK capability discovery and early beta testing; if a practical limit exists it will be documented and surfaced in the UI
 - **inotify watch limit on large folders:** `ENOSPC` behaviour — visible error + fallback to polling is the likely approach; to be validated during implementation
 - **Bandwidth throttling (byte-rate):** desired capability — byte-rate throttling requires SDK support or network-layer interception; architecture phase to determine feasibility; concurrency-based throttling is resolved (NFR4: default cap, user-configurable in V1)
