@@ -12,9 +12,12 @@ from gi.repository import Adw, Gio, GLib
 
 from protondrive.credential_store import CredentialManager
 from protondrive.engine import EngineClient
+from protondrive.errors import AuthError
 from protondrive.window import MainWindow
 
 APP_ID = "io.github.ronki2304.ProtonDriveLinuxClient"
+
+TOKEN_VALIDATION_TIMEOUT_MS = 10000
 
 
 class Application(Adw.Application):
@@ -29,6 +32,7 @@ class Application(Adw.Application):
         self._engine: EngineClient | None = None
         self._credential_manager: CredentialManager | None = None
         self._window: MainWindow | None = None
+        self._token_validation_timer_id: int | None = None
 
     @property
     def settings(self) -> Gio.Settings:
@@ -44,7 +48,10 @@ class Application(Adw.Application):
         style_manager.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         style_manager.set_accent_color(Adw.AccentColor.TEAL)
 
-        self._credential_manager = CredentialManager()
+        try:
+            self._credential_manager = CredentialManager()
+        except AuthError:
+            self._credential_manager = None
         self._engine = EngineClient()
         self._engine.on_event("ready", self._on_engine_ready)
         self._engine.on_session_ready(self._on_session_ready)
@@ -83,20 +90,54 @@ class Application(Adw.Application):
         if token is not None:
             if self._engine is not None:
                 self._engine.send_token_refresh(token)
+            self._start_validation_timeout()
         else:
             if self._window is not None:
                 self._window.show_pre_auth()
 
+    def _start_validation_timeout(self) -> None:
+        """Start timeout for token validation response (NFR1)."""
+        self._cancel_validation_timeout()
+        self._token_validation_timer_id = GLib.timeout_add(
+            TOKEN_VALIDATION_TIMEOUT_MS, self._on_validation_timeout
+        )
+
+    def _cancel_validation_timeout(self) -> None:
+        """Cancel pending token validation timeout."""
+        if self._token_validation_timer_id is not None:
+            GLib.source_remove(self._token_validation_timer_id)
+            self._token_validation_timer_id = None
+
+    def _on_validation_timeout(self) -> bool:
+        """Token validation timed out — route to pre-auth."""
+        self._token_validation_timer_id = None
+        if self._credential_manager is not None:
+            try:
+                self._credential_manager.delete_token()
+            except Exception:
+                pass
+        if self._window is not None:
+            self._window.show_pre_auth()
+        return False
+
     def _on_session_ready(self, payload: dict[str, Any]) -> None:
         """Token validated — show main window with account info."""
+        self._cancel_validation_timeout()
         if self._window is not None:
             self._window.show_main()
             self._window.on_session_ready(payload)
 
     def _on_token_expired(self, payload: dict[str, Any]) -> None:
         """Token expired at launch — route to pre-auth silently (no error)."""
+        self._cancel_validation_timeout()
+
         if self._credential_manager is not None:
-            self._credential_manager.delete_token()
+            try:
+                self._credential_manager.delete_token()
+            except Exception:
+                pass
+
+        self.settings.set_boolean("wizard-auth-complete", False)
 
         if self._window is not None:
             self._window.show_pre_auth()
@@ -115,7 +156,18 @@ class Application(Adw.Application):
         self.settings.set_boolean("wizard-auth-complete", False)
 
         if self._window is not None:
+            self._window.clear_session()
             self._window.show_pre_auth()
+
+        # Restart engine so re-login flow has a live connection
+        if self._engine is not None:
+            GLib.timeout_add(1000, self._restart_engine_after_logout)
+
+    def _restart_engine_after_logout(self) -> bool:
+        """Restart engine after logout shutdown completes."""
+        if self._engine is not None:
+            self._engine.restart()
+        return False
 
     def _on_engine_error(self, message: str, fatal: bool, pair_id: str | None = None) -> None:
         """Handle engine errors."""

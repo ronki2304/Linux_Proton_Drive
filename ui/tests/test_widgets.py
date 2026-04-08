@@ -25,6 +25,8 @@ def _setup_mocks():
     gtk_mock.Template.Child = MagicMock(return_value=MagicMock())
     gtk_mock.AccessibleProperty = MagicMock()
     gtk_mock.AccessibleProperty.LABEL = "LABEL"
+    gtk_mock.AccessibleRole = MagicMock()
+    gtk_mock.AccessibleRole.GROUP = "GROUP"
 
     class FakeBox:
         def __init__(self, **kwargs):
@@ -34,6 +36,10 @@ def _setup_mocks():
         def update_property(self, props, vals):
             self._accessible_props = props
             self._accessible_vals = vals
+        def set_accessible_role(self, role):
+            self._accessible_role = role
+        def connect(self, signal, handler):
+            pass
 
     gtk_mock.Box = FakeBox
     gtk_mock.Label = MagicMock
@@ -69,8 +75,6 @@ def _make_bar():
     bar.account_name_label = MagicMock()
     bar.storage_bar = MagicMock()
     bar.storage_label = MagicMock()
-    bar.storage_bar.get_style_context = MagicMock(return_value=MagicMock())
-    bar.storage_label.get_style_context = MagicMock(return_value=MagicMock())
     bar.update_property = MagicMock()
     return bar
 
@@ -122,21 +126,29 @@ class TestStorageThresholds:
 
     def test_normal_no_warning_class(self) -> None:
         bar = _make_bar()
-        bar_ctx = bar.storage_bar.get_style_context()
         bar.update_account("User", "u@p.me", 5 * 1024**3, 10 * 1024**3, "P")
-        bar_ctx.add_class.assert_not_called()
+        bar.storage_bar.add_css_class.assert_not_called()
+
+    def test_warning_at_90_percent(self) -> None:
+        bar = _make_bar()
+        bar.update_account("User", "u@p.me", 9 * 1024**3, 10 * 1024**3, "P")
+        bar.storage_bar.add_css_class.assert_called_with("warning")
 
     def test_warning_at_91_percent(self) -> None:
         bar = _make_bar()
-        bar_ctx = bar.storage_bar.get_style_context()
         bar.update_account("User", "u@p.me", int(9.1 * 1024**3), 10 * 1024**3, "P")
-        bar_ctx.add_class.assert_called_with("warning")
+        bar.storage_bar.add_css_class.assert_called_with("warning")
+
+    def test_critical_at_99_percent(self) -> None:
+        bar = _make_bar()
+        # Use exact integer math: 99% of 100 GB = 99 GB
+        bar.update_account("User", "u@p.me", 99 * 1024**3, 100 * 1024**3, "P")
+        bar.storage_bar.add_css_class.assert_called_with("error")
 
     def test_critical_at_995_percent(self) -> None:
         bar = _make_bar()
-        bar_ctx = bar.storage_bar.get_style_context()
         bar.update_account("User", "u@p.me", int(9.95 * 1024**3), 10 * 1024**3, "P")
-        bar_ctx.add_class.assert_called_with("error")
+        bar.storage_bar.add_css_class.assert_called_with("error")
 
     def test_storage_full_label(self) -> None:
         bar = _make_bar()

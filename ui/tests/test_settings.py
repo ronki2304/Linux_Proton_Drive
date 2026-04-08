@@ -80,9 +80,7 @@ def _make_settings():
     page.plan_row = MagicMock()
     page.storage_row = MagicMock()
     page.storage_bar = MagicMock()
-    page.storage_bar.get_style_context = MagicMock(return_value=MagicMock())
     page.storage_label = MagicMock()
-    page.storage_label.get_style_context = MagicMock(return_value=MagicMock())
     page.manage_account_row = MagicMock()
     page.logout_button = MagicMock()
     return page
@@ -119,17 +117,26 @@ class TestAccountPopulation:
 
 class TestStorageThresholds:
 
+    def test_warning_at_90_percent(self) -> None:
+        p = _make_settings()
+        p.update_account("U", "u@p.me", 9 * 1024**3, 10 * 1024**3, "P")
+        p.storage_bar.add_css_class.assert_called_with("warning")
+
     def test_warning_at_91_percent(self) -> None:
         p = _make_settings()
-        bar_ctx = p.storage_bar.get_style_context()
         p.update_account("U", "u@p.me", int(9.1 * 1024**3), 10 * 1024**3, "P")
-        bar_ctx.add_class.assert_called_with("warning")
+        p.storage_bar.add_css_class.assert_called_with("warning")
+
+    def test_critical_at_99_percent(self) -> None:
+        p = _make_settings()
+        # Use exact integer math: 99% of 100 GB = 99 GB
+        p.update_account("U", "u@p.me", 99 * 1024**3, 100 * 1024**3, "P")
+        p.storage_bar.add_css_class.assert_called_with("error")
 
     def test_critical_at_995_percent(self) -> None:
         p = _make_settings()
-        bar_ctx = p.storage_bar.get_style_context()
         p.update_account("U", "u@p.me", int(9.95 * 1024**3), 10 * 1024**3, "P")
-        bar_ctx.add_class.assert_called_with("error")
+        p.storage_bar.add_css_class.assert_called_with("error")
 
     def test_storage_full_label(self) -> None:
         p = _make_settings()
@@ -148,17 +155,36 @@ class TestLogoutDialog:
         assert kwargs["heading"] == "Sign out?"
         assert "will not be deleted" in kwargs["body"]
 
+    def test_logout_disables_button_during_dialog(self) -> None:
+        p = _make_settings()
+        p.get_root = MagicMock(return_value=MagicMock())
+        p._on_logout_clicked(MagicMock())
+        p.logout_button.set_sensitive.assert_called_with(False)
+
+    def test_cancel_response_re_enables_button(self) -> None:
+        p = _make_settings()
+        p._on_logout_response(MagicMock(), "cancel")
+        p.logout_button.set_sensitive.assert_called_with(True)
+
     def test_cancel_response_does_not_logout(self) -> None:
         p = _make_settings()
         called = []
-        p.set_logout_callback(lambda: called.append(True))
+
+        def on_logout():
+            called.append(True)
+
+        p.set_logout_callback(on_logout)
         p._on_logout_response(MagicMock(), "cancel")
         assert len(called) == 0
 
     def test_sign_out_response_triggers_callback(self) -> None:
         p = _make_settings()
         called = []
-        p.set_logout_callback(lambda: called.append(True))
+
+        def on_logout():
+            called.append(True)
+
+        p.set_logout_callback(on_logout)
         p._on_logout_response(MagicMock(), "sign-out")
         assert len(called) == 1
 

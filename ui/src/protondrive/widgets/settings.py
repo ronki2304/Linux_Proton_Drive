@@ -55,23 +55,20 @@ class SettingsPage(Adw.Bin):
         self, fraction: float, storage_used: int, storage_total: int
     ) -> None:
         """Apply warning/critical CSS classes to storage bar."""
-        ctx = self.storage_bar.get_style_context()
-        label_ctx = self.storage_label.get_style_context()
-
         for cls in ("warning", "error"):
-            ctx.remove_class(cls)
-            label_ctx.remove_class(cls)
+            self.storage_bar.remove_css_class(cls)
+            self.storage_label.remove_css_class(cls)
 
         used_str = _format_bytes(storage_used)
         total_str = _format_bytes(storage_total)
 
-        if fraction > 0.99:
-            ctx.add_class("error")
-            label_ctx.add_class("error")
+        if fraction >= 0.99:
+            self.storage_bar.add_css_class("error")
+            self.storage_label.add_css_class("error")
             self.storage_label.set_text("Storage full")
-        elif fraction > 0.9:
-            ctx.add_class("warning")
-            label_ctx.add_class("warning")
+        elif fraction >= 0.9:
+            self.storage_bar.add_css_class("warning")
+            self.storage_label.add_css_class("warning")
             self.storage_label.set_text(f"{used_str} / {total_str}")
         else:
             self.storage_label.set_text(f"{used_str} / {total_str}")
@@ -83,6 +80,7 @@ class SettingsPage(Adw.Bin):
 
     def _on_logout_clicked(self, button: Gtk.Button) -> None:
         """Show logout confirmation dialog."""
+        self.logout_button.set_sensitive(False)
         dialog = Adw.AlertDialog(
             heading="Sign out?",
             body=(
@@ -106,6 +104,7 @@ class SettingsPage(Adw.Bin):
 
     def _on_logout_response(self, dialog: Adw.AlertDialog, response: str) -> None:
         """Handle logout dialog response."""
+        self.logout_button.set_sensitive(True)
         if response == "sign-out" and self._logout_callback is not None:
             self._logout_callback()
 

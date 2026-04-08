@@ -62,6 +62,10 @@ class MainWindow(Adw.ApplicationWindow):
         self._pre_auth_screen = None
         self._cleanup_auth_window()
 
+    def clear_session(self) -> None:
+        """Clear cached session data on logout."""
+        self._session_data = None
+
     def show_settings(self) -> None:
         """Open the settings page."""
         if self._settings_page is None:
@@ -77,24 +81,55 @@ class MainWindow(Adw.ApplicationWindow):
                 plan=self._session_data.get("plan", ""),
             )
 
+        self._previous_content = self.get_content()
         self.set_content(self._settings_page)
+
+        # Escape key closes settings
+        key_controller = Gtk.EventControllerKey.new()
+        key_controller.connect("key-pressed", self._on_settings_key_pressed)
+        self._settings_page.add_controller(key_controller)
+
+    def _on_settings_key_pressed(
+        self,
+        controller: Gtk.EventControllerKey,
+        keyval: int,
+        keycode: int,
+        state: object,
+    ) -> bool:
+        """Handle Escape key to close settings page."""
+        from gi.repository import Gdk
+
+        if keyval == Gdk.KEY_Escape:
+            self._close_settings()
+            return True
+        return False
+
+    def _close_settings(self) -> None:
+        """Return to previous content from settings."""
+        if hasattr(self, "_previous_content") and self._previous_content is not None:
+            self.set_content(self._previous_content)
+            self._previous_content = None
 
     def show_about(self) -> None:
         """Show the About dialog."""
-        about = Adw.AboutWindow(
+        about = Adw.AboutDialog(
             application_name="ProtonDrive Linux Client",
             application_icon=APP_ID,
             version="0.1.0",
             license_type=Gtk.License.MIT_X11,
             issue_url="https://github.com/ronki2304/ProtonDrive-LinuxClient/issues",
             website="https://github.com/ronki2304/ProtonDrive-LinuxClient",
-            transient_for=self,
+            debug_info=(
+                f"Flatpak App ID: {APP_ID}\n"
+                f"SDK: @protontech/drive-sdk 0.14.3\n"
+            ),
+            debug_info_filename="protondrive-debug-info.txt",
         )
         about.add_link(
             "Flatpak Manifest",
             f"https://github.com/ronki2304/ProtonDrive-LinuxClient/blob/main/flatpak/{APP_ID}.yml",
         )
-        about.present()
+        about.present(self)
 
     def on_session_ready(self, payload: dict[str, Any]) -> None:
         """Handle session_ready from engine — same for initial auth and re-auth."""

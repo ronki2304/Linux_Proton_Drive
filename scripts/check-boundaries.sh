@@ -41,9 +41,9 @@ check "No @protontech/drive-sdk imports outside sdk.ts" \
   --include="*.ts" \
   --exclude="sdk.ts" --exclude="sdk.test.ts"
 
-# 2. openpgp imports outside sdk.ts
+# 2. openpgp imports outside sdk.ts (catches openpgp and openpgp/lightweight etc.)
 check "No openpgp imports outside sdk.ts" \
-  grep -rn 'from "openpgp"\|from '\''openpgp'\''' "$PROJECT_ROOT/engine/src/" \
+  grep -rn 'from ["'\''"]openpgp' "$PROJECT_ROOT/engine/src/" \
   --include="*.ts" \
   --exclude="sdk.ts" --exclude="sdk.test.ts"
 
@@ -63,21 +63,23 @@ check "No axios imports in engine" \
   --include="*.ts" \
   --exclude="sdk.ts" --exclude="sdk.test.ts"
 
-# 4. Network imports in UI outside auth.py
-check "No network library imports in UI outside auth.py" \
-  grep -rn 'import http\.client\|import urllib\|import requests\|import aiohttp\|import httpx' \
+# 4. Network imports in UI outside auth.py/auth_window.py
+# Note: urllib.parse is allowed (local URL parsing, no network I/O)
+# Only flag urllib.request and http.client (actual network code)
+check "No network library imports in UI outside auth files" \
+  grep -rn 'import http\.client\|from http\.client\|import urllib\.request\|from urllib\.request\|import requests\|from requests\|import aiohttp\|from aiohttp\|import httpx\|from httpx' \
   "$PROJECT_ROOT/ui/src/" \
   --include="*.py" \
-  --exclude="auth.py"
+  --exclude="auth.py" --exclude="auth_window.py"
 
 # 5. sdk.ts one-way dependency (only errors.ts allowed)
 check "sdk.ts does not import from disallowed modules" \
   grep -En 'from "./sync-engine|from "./ipc|from "./state-db|from "./conflict|from "./watcher|from "./main' \
   "$PROJECT_ROOT/engine/src/sdk.ts"
 
-# 6. ipc.ts does not import from sdk.ts
+# 6. ipc.ts does not import from sdk.ts (check both quote styles)
 check "ipc.ts does not import from sdk" \
-  grep -En 'from "./sdk' "$PROJECT_ROOT/engine/src/ipc.ts"
+  grep -En "from [\"']\\./sdk" "$PROJECT_ROOT/engine/src/ipc.ts"
 
 # 7. errors.ts zero internal imports
 check "errors.ts has zero internal imports" \

@@ -18,6 +18,18 @@ class AccountHeaderBar(Gtk.Box):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
+        self.set_accessible_role(Gtk.AccessibleRole.GROUP)
+        self.connect("notify::default-width", self._on_size_changed)
+
+    def _on_size_changed(self, widget: Gtk.Widget, pspec: object) -> None:
+        """Hide storage label text when window is narrow (<480px)."""
+        allocation = self.get_allocation()
+        root = self.get_root()
+        if root is not None and hasattr(root, "get_width"):
+            width = root.get_width()
+        else:
+            width = allocation.width
+        self.storage_label.set_visible(width >= 480)
 
     def update_account(
         self,
@@ -58,24 +70,21 @@ class AccountHeaderBar(Gtk.Box):
         self, fraction: float, storage_used: int, storage_total: int
     ) -> None:
         """Apply CSS classes based on storage usage thresholds."""
-        ctx = self.storage_bar.get_style_context()
-        label_ctx = self.storage_label.get_style_context()
-
         # Clear previous state classes
         for cls in ("warning", "error"):
-            ctx.remove_class(cls)
-            label_ctx.remove_class(cls)
+            self.storage_bar.remove_css_class(cls)
+            self.storage_label.remove_css_class(cls)
 
         used_str = _format_bytes(storage_used)
         total_str = _format_bytes(storage_total)
 
-        if fraction > 0.99:
-            ctx.add_class("error")
-            label_ctx.add_class("error")
+        if fraction >= 0.99:
+            self.storage_bar.add_css_class("error")
+            self.storage_label.add_css_class("error")
             self.storage_label.set_text("Storage full")
-        elif fraction > 0.9:
-            ctx.add_class("warning")
-            label_ctx.add_class("warning")
+        elif fraction >= 0.9:
+            self.storage_bar.add_css_class("warning")
+            self.storage_label.add_css_class("warning")
             self.storage_label.set_text(f"{used_str} / {total_str}")
         else:
             self.storage_label.set_text(f"{used_str} / {total_str}")
