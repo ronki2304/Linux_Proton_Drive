@@ -1,0 +1,33 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveAuthWindow: Adw.Bin {
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      [title]
+      Gtk.Label url_label {
+        label: "";
+        ellipsize: end;
+        styles [
+          "dim-label",
+        ]
+      };
+    }
+
+    content: Gtk.Overlay {
+      child: Gtk.Box webview_container {
+        orientation: vertical;
+        hexpand: true;
+        vexpand: true;
+      };
+
+      [overlay]
+      Adw.Banner error_banner {
+        title: "Could not reach Proton. Check your internet connection.";
+        button-label: "Retry";
+        revealed: false;
+      };
+    };
+  };
+}

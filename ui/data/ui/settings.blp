@@ -1,0 +1,94 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveSettingsPage: Adw.Bin {
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {
+      title-widget: Adw.WindowTitle {
+        title: "Settings";
+      };
+    }
+
+    content: Adw.PreferencesPage {
+      Adw.PreferencesGroup {
+        title: "Account";
+
+        Adw.ActionRow display_name_row {
+          title: "Display name";
+          subtitle: "";
+        }
+
+        Adw.ActionRow email_row {
+          title: "Email";
+          subtitle: "";
+        }
+
+        Adw.ActionRow plan_row {
+          title: "Plan";
+          subtitle: "";
+        }
+      }
+
+      Adw.PreferencesGroup {
+        title: "Storage";
+
+        Adw.ActionRow storage_row {
+          title: "Usage";
+
+          [suffix]
+          Gtk.Box {
+            orientation: horizontal;
+            spacing: 8;
+            valign: center;
+
+            Gtk.LevelBar storage_bar {
+              min-value: 0.0;
+              max-value: 1.0;
+              value: 0.0;
+              width-request: 140;
+              valign: center;
+            }
+
+            Gtk.Label storage_label {
+              label: "";
+
+              styles [
+                "dim-label",
+                "caption",
+              ]
+            };
+          }
+        }
+      }
+
+      Adw.PreferencesGroup {
+        Adw.ActionRow manage_account_row {
+          title: "Manage account at Proton";
+          activatable: true;
+
+          [suffix]
+          Gtk.Image {
+            icon-name: "external-link-symbolic";
+          }
+        }
+      }
+
+      Adw.PreferencesGroup {
+        Adw.ActionRow {
+          [child]
+          Gtk.Button logout_button {
+            label: "Log out";
+            halign: center;
+            valign: center;
+
+            styles [
+              "destructive-action",
+              "pill",
+            ]
+          }
+        }
+      }
+    };
+  };
+}

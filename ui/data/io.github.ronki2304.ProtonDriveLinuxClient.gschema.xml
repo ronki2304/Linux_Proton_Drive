@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="protondrive">
+  <schema id="io.github.ronki2304.ProtonDriveLinuxClient" path="/io/github/ronki2304/ProtonDriveLinuxClient/">
+    <key name="window-width" type="i">
+      <default>780</default>
+      <summary>Window width</summary>
+    </key>
+    <key name="window-height" type="i">
+      <default>520</default>
+      <summary>Window height</summary>
+    </key>
+    <key name="wizard-auth-complete" type="b">
+      <default>false</default>
+      <summary>Auth completed in wizard but no pair configured yet</summary>
+    </key>
+  </schema>
+</schemalist>

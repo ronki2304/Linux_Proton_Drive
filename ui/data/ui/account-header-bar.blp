@@ -1,0 +1,73 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveAccountHeaderBar: Gtk.Box {
+  orientation: horizontal;
+  spacing: 8;
+  margin-start: 12;
+  margin-end: 12;
+  margin-top: 4;
+  margin-bottom: 4;
+
+  styles [
+    "account-header-bar",
+  ]
+
+  Gtk.Box {
+    width-request: 28;
+    height-request: 28;
+    halign: center;
+    valign: center;
+
+    styles [
+      "avatar-circle",
+    ]
+
+    Gtk.Label avatar_label {
+      label: "";
+      halign: center;
+      valign: center;
+
+      styles [
+        "avatar-initials",
+      ]
+    };
+  }
+
+  Gtk.Label account_name_label {
+    label: "";
+    halign: start;
+    hexpand: false;
+
+    styles [
+      "account-name",
+    ]
+  }
+
+  Gtk.Box {
+    orientation: horizontal;
+    spacing: 8;
+    halign: end;
+    hexpand: true;
+    valign: center;
+
+    Gtk.LevelBar storage_bar {
+      min-value: 0.0;
+      max-value: 1.0;
+      value: 0.0;
+      width-request: 140;
+      valign: center;
+    }
+
+    Gtk.Label storage_label {
+      label: "";
+      halign: end;
+
+      styles [
+        "storage-label",
+        "dim-label",
+        "caption",
+      ]
+    };
+  }
+}

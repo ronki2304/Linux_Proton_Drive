@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/ronki2304/ProtonDriveLinuxClient">
+    <file alias="ui/window.ui" preprocess="xml-stripblanks">window.ui</file>
+    <file alias="ui/pre-auth.ui" preprocess="xml-stripblanks">pre-auth.ui</file>
+    <file alias="ui/auth-window.ui" preprocess="xml-stripblanks">auth-window.ui</file>
+    <file alias="ui/account-header-bar.ui" preprocess="xml-stripblanks">account-header-bar.ui</file>
+    <file alias="ui/settings.ui" preprocess="xml-stripblanks">settings.ui</file>
+  </gresource>
+</gresources>

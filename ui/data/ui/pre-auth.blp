@@ -1,0 +1,20 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDrivePreAuthScreen: Adw.Bin {
+  child: Adw.StatusPage {
+    icon-name: "dialog-password-symbolic";
+    title: "Sign in to Proton";
+    description: "Your password is sent directly to Proton — this app only receives a session token after you sign in.";
+
+    child: Gtk.Button sign_in_button {
+      label: "Open Proton sign-in";
+      halign: center;
+
+      styles [
+        "suggested-action",
+        "pill",
+      ]
+    };
+  };
+}
