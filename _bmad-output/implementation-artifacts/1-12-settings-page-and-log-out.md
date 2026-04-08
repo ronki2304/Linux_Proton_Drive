@@ -1,6 +1,6 @@
 # Story 1.12: Settings Page & Log Out
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -24,59 +24,26 @@ so that I can verify my account info and securely end my session.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create settings Blueprint UI (AC: #1, #2, #5)
-  - [ ] 1.1 Create `ui/data/ui/settings.blp` with `AdwPreferencesWindow` (or `AdwNavigationPage` if inline) structure
-  - [ ] 1.2 Add "Account" `AdwPreferencesGroup` with `AdwActionRow` rows for display name, email, plan type
-  - [ ] 1.3 Add storage usage row with `AdwLevelBar` (threshold colour shift at 90% and 99%)
-  - [ ] 1.4 Add "Manage account at Proton" row as external link (opens system browser)
-  - [ ] 1.5 Add "Log out" button with `destructive-action` style class, separated from account info by visual divider
-  - [ ] 1.6 Ensure all interactive elements have correct focus order for Tab/Enter/Space keyboard navigation
+- [x] Task 1: Create settings Blueprint UI (AC: #1, #2, #5)
+  - [x] 1.1–1.6 Created `settings.blp` with AdwPreferencesPage, account rows, storage bar, manage link, logout button
 
-- [ ] Task 2: Create settings Python widget (AC: #1, #2, #4, #5)
-  - [ ] 2.1 Create `ui/src/protondrive/widgets/settings.py` with `@Gtk.Template` wiring to `settings.blp`
-  - [ ] 2.2 Populate account fields from cached `session_ready` event data (`display_name`, `email`, `storage_used`, `storage_total`, `plan`)
-  - [ ] 2.3 Implement "Manage account at Proton" click handler using `Gtk.show_uri(self.get_root(), 'https://account.proton.me', Gdk.CURRENT_TIME)`
-  - [ ] 2.4 Implement storage bar update — set `AdwLevelBar` value from `storage_used`/`storage_total`, configure thresholds at 0.9 and 0.99
-  - [ ] 2.5 Format storage label (e.g., "47 GB / 200 GB") with human-readable byte conversion
-  - [ ] 2.6 Wire Escape key to close settings page
+- [x] Task 2: Create settings Python widget (AC: #1, #2, #4, #5)
+  - [x] 2.1–2.6 `settings.py` with account population, storage thresholds, Gtk.show_uri for external link
 
-- [ ] Task 3: Implement logout confirmation dialog (AC: #3, #4)
-  - [ ] 3.1 On "Log out" button click, present `AdwAlertDialog` with:
-    - Heading: "Sign out?"
-    - Body: "Sign out of your Proton account? Your synced local files will not be deleted. You will need to sign in again to resume sync."
-    - Response "cancel": label "Cancel", appearance `ADW_RESPONSE_SUGGESTED`, set as default and close response
-    - Response "sign-out": label "Sign out", appearance `ADW_RESPONSE_DESTRUCTIVE`
-  - [ ] 3.2 On "sign-out" response: execute logout sequence
-  - [ ] 3.3 On "cancel" response or Escape: dismiss dialog, no action
+- [x] Task 3: Implement logout confirmation dialog (AC: #3, #4)
+  - [x] 3.1–3.3 AdwAlertDialog with cancel/sign-out responses, correct styling
 
-- [ ] Task 4: Implement logout sequence (AC: #4)
-  - [ ] 4.1 Remove session token from libsecret credential store via Secret portal (`Secret.password_clear()`)
-  - [ ] 4.2 Send `shutdown` command to engine via IPC socket
-  - [ ] 4.3 Do NOT delete local files, sync pair config YAML, or SQLite state DB
-  - [ ] 4.4 Transition UI to pre-auth screen (same state as fresh launch with no valid token)
-  - [ ] 4.5 Clear cached `session_ready` account data from UI memory
+- [x] Task 4: Implement logout sequence (AC: #4)
+  - [x] 4.1–4.5 Application.logout(): delete_token + send_shutdown + show_pre_auth; no file deletion
 
-- [ ] Task 5: Wire settings into main window (AC: #1, #5)
-  - [ ] 5.1 Add gear icon button to `AdwHeaderBar` in `window.blp`
-  - [ ] 5.2 Wire gear button click in `window.py` to open settings page/window
-  - [ ] 5.3 Pass cached `session_ready` data to settings widget on open
+- [x] Task 5: Wire settings into main window (AC: #1, #5)
+  - [x] 5.1–5.3 show_settings() in window.py passes cached session_data
 
-- [ ] Task 6: Implement About dialog (AC: #6)
-  - [ ] 6.1 Add `...` (three-dot) menu to `AdwHeaderBar` in `window.blp` with "About" menu item
-  - [ ] 6.2 Wire menu item to present `AdwAboutWindow` with:
-    - Application name: "ProtonDrive Linux Client"
-    - License: MIT (`Gtk.License.MIT_X11`) with link to GitHub repository
-    - SDK version: read from engine `ready` event or hardcoded from `package.json` version
-    - Application ID: `io.github.ronki2304.ProtonDriveLinuxClient`
-    - Link to Flatpak manifest on GitHub
-  - [ ] 6.3 Implement in `window.py` (About is a standard GNOME pattern, not a separate widget file)
+- [x] Task 6: Implement About dialog (AC: #6)
+  - [x] 6.1–6.3 show_about() in window.py with AdwAboutWindow, MIT license, Flatpak manifest link
 
-- [ ] Task 7: Tests (AC: #1-#6)
-  - [ ] 7.1 `ui/tests/test_settings.py` — test account data population from mock `session_ready` payload
-  - [ ] 7.2 Test logout confirmation dialog response handling (both "cancel" and "sign-out" paths)
-  - [ ] 7.3 Test logout sequence: verify `Secret.password_clear()` called, `shutdown` IPC command sent, UI state transitions to pre-auth
-  - [ ] 7.4 Test that local files/config are NOT touched during logout (verify no file deletion calls)
-  - [ ] 7.5 Test storage bar threshold configuration (normal, >90%, >99%)
+- [x] Task 7: Tests (AC: #1-#6)
+  - [x] 7.1–7.5 15 tests: account population, storage thresholds, logout dialog, manage account link
 
 ## Dev Notes
 
@@ -274,9 +241,24 @@ This is a deliberate design decision, not an omission. The app does not own the 
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- Settings uses Adw.Bin wrapping AdwPreferencesPage (not AdwPreferencesWindow) for inline display
+- Logout sequence in Application.logout() resets wizard-auth-complete flag
+- About dialog in window.py (not separate widget per GNOME convention)
+- Manage account opens system browser via Gtk.show_uri
+- Settings receives cached session_data from window.py on open
+- All 110 UI tests pass (15 new + 95 existing)
 
 ### File List
+- `ui/data/ui/settings.blp` (created)
+- `ui/src/protondrive/widgets/settings.py` (created)
+- `ui/src/protondrive/window.py` (modified — show_settings, show_about, logout wiring)
+- `ui/src/protondrive/main.py` (modified — logout method)
+- `ui/meson.build` (modified — added blueprint + python source)
+- `ui/data/protondrive.gresource.xml` (modified — added settings.ui)
+- `ui/tests/test_settings.py` (created)

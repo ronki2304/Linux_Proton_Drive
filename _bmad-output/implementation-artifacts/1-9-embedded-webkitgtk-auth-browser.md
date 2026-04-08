@@ -1,6 +1,6 @@
 # Story 1.9: Embedded WebKitGTK Auth Browser
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -24,56 +24,29 @@ so that I can use CAPTCHA, 2FA, and all standard Proton auth flows without leavi
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create Blueprint layout for auth window (AC: #2, #6)
-  - [ ] 1.1 Create `ui/data/ui/auth-window.blp` with template class `ProtonDriveAuthWindow`
-  - [ ] 1.2 Define `AdwHeaderBar` with read-only URL label (not an editable entry) showing current domain
-  - [ ] 1.3 Add a placeholder container for the WebKitGTK `WebView` widget (WebView must be created in Python — it has no Blueprint representation)
-  - [ ] 1.4 Add an error banner (`AdwBanner`) with "Retry" button, hidden by default
-  - [ ] 1.5 Register `.blp` file in `ui/data/ui/meson.build` for Blueprint compilation
+- [x] Task 1: Create Blueprint layout for auth window (AC: #2, #6)
+  - [x] 1.1–1.5 Created `auth-window.blp` with AdwHeaderBar + url_label, Gtk.Box container, AdwBanner
 
-- [ ] Task 2: Implement auth window Python wiring (AC: #1, #2, #3, #4, #6)
-  - [ ] 2.1 Create `ui/src/protondrive/auth_window.py` with `@Gtk.Template` decorator pointing to compiled `auth-window.ui`
-  - [ ] 2.2 Import WebKitGTK as `gi.require_version('WebKit', '6.0')` then `from gi.repository import WebKit`
-  - [ ] 2.3 Create `WebKit.WebView` programmatically in `__init__` and pack into the Blueprint placeholder container
-  - [ ] 2.4 Set `__gtype_name__ = 'ProtonDriveAuthWindow'` matching the Blueprint template class name
-  - [ ] 2.5 Wire `Gtk.Template.Child()` for `url_label`, `error_banner`, and the WebView container
-  - [ ] 2.6 Connect WebView `load-changed` signal to update the read-only URL label with the current URI's domain
-  - [ ] 2.7 Connect WebView `load-failed` signal to show the error banner with "Retry"
+- [x] Task 2: Implement auth window Python wiring (AC: #1, #2, #3, #4, #6)
+  - [x] 2.1–2.7 Created `auth_window.py` with WebKit 6.0, programmatic WebView, Template.Child wiring
 
-- [ ] Task 3: Implement auth flow ordering — server binds before WebView navigates (AC: #3)
-  - [ ] 3.1 Accept `AuthCallbackServer` (from `auth.py`) as a constructor parameter or create the server internally
-  - [ ] 3.2 Implement `start_auth()` method that enforces the sequence: server binds socket → server starts async → WebView navigates to `http://127.0.0.1:{port}/auth-start`
-  - [ ] 3.3 Verify server port is available before constructing the navigation URI
-  - [ ] 3.4 Never navigate the WebView before the server socket is confirmed bound
+- [x] Task 3: Implement auth flow ordering (AC: #3)
+  - [x] 3.1–3.4 `start_auth()` enforces: server binds → server starts → WebView navigates
 
-- [ ] Task 4: Implement WebView navigation policy (AC: #1)
-  - [ ] 4.1 Allow all navigation — Proton redirects through multiple subdomains (`account.proton.me`, `mail.proton.me/api`, etc.); strict URL allowlists break when Proton changes domains
-  - [ ] 4.2 Security boundary is the localhost callback server, not URL filtering — document this in a code comment
+- [x] Task 4: Implement WebView navigation policy (AC: #1)
+  - [x] 4.1–4.2 All navigation allowed; security boundary documented in docstring
 
-- [ ] Task 5: Implement URL bar update on navigation (AC: #2)
-  - [ ] 5.1 On each `load-changed` event (specifically `COMMITTED` or `FINISHED`), extract domain from `webview.get_uri()`
-  - [ ] 5.2 Update the read-only URL label to show the domain (e.g., `accounts.proton.me`)
-  - [ ] 5.3 URL label must not be editable — it is purely informational for user trust (UX-DR2)
+- [x] Task 5: Implement URL bar update on navigation (AC: #2)
+  - [x] 5.1–5.3 Domain extracted on COMMITTED/FINISHED; read-only Gtk.Label (not entry)
 
-- [ ] Task 6: Implement WebView cleanup after auth (AC: #4)
-  - [ ] 6.1 On token received callback, call `self.webview.try_close()` to trigger WebKit internal cleanup
-  - [ ] 6.2 Set `self.webview = None` to release the GObject reference
-  - [ ] 6.3 WebView holds network session and cached credentials — both must be released by this cleanup
-  - [ ] 6.4 Emit a signal or invoke a callback to notify the parent (called via `window.py`) that auth completed with the token
+- [x] Task 6: Implement WebView cleanup after auth (AC: #4)
+  - [x] 6.1–6.4 try_close + None + removed from container + auth-completed signal emitted
 
-- [ ] Task 7: Implement error handling with retry (AC: #5)
-  - [ ] 7.1 On `load-failed` signal, show the `AdwBanner` with error message and "Retry" button
-  - [ ] 7.2 "Retry" button reloads `http://127.0.0.1:{port}/auth-start` (server must still be running)
-  - [ ] 7.3 Hide the error banner on successful navigation after retry
+- [x] Task 7: Implement error handling with retry (AC: #5)
+  - [x] 7.1–7.3 AdwBanner shown on load-failed, hidden on success, retry reloads auth-start
 
-- [ ] Task 8: Write tests for auth window (AC: #1–#6)
-  - [ ] 8.1 Create `ui/tests/test_auth_window.py`
-  - [ ] 8.2 Test auth flow ordering: assert server socket is bound before WebView `load_uri` is called
-  - [ ] 8.3 Test WebView cleanup: assert `try_close()` called and reference set to `None` after token received
-  - [ ] 8.4 Test URL label updates on navigation events
-  - [ ] 8.5 Test error banner visibility on load failure
-  - [ ] 8.6 Tests require Xvfb (widget tests — CI-optional via `CI_SKIP_WIDGET_TESTS=1`)
-  - [ ] 8.7 Mock the auth callback server — never make real network requests in tests
+- [x] Task 8: Write tests for auth window (AC: #1–#6)
+  - [x] 8.1–8.7 16 tests: ordering, cleanup, URL label, error banner, WebKit import check
 
 ## Dev Notes
 
@@ -168,18 +141,21 @@ CI_SKIP_WIDGET_TESTS=1 meson test -C builddir
 ## Dev Agent Record
 
 ### Agent Model Used
-(to be filled during implementation)
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
-(to be filled during implementation)
+N/A
 
 ### Completion Notes List
-(to be filled during implementation)
+- WebView created programmatically in `start_auth()` (not `__init__`) — allows multiple auth cycles during app lifetime
+- `cleanup()` method for forced teardown if auth window destroyed before completion
+- localhost URL shows "Connecting..." instead of raw IP in URL bar
+- `auth-completed` signal carries token string parameter for window.py to handle
+- All 67 UI tests pass (16 new + 51 existing)
 
 ### File List
-(to be filled during implementation — expected files below)
-
-- `ui/data/ui/auth-window.blp`
-- `ui/src/protondrive/auth_window.py`
-- `ui/tests/test_auth_window.py`
-- `ui/data/ui/meson.build` (modified — add auth-window.blp)
+- `ui/data/ui/auth-window.blp` (created)
+- `ui/src/protondrive/auth_window.py` (created)
+- `ui/tests/test_auth_window.py` (created)
+- `ui/meson.build` (modified — added blueprint + python source)
+- `ui/data/protondrive.gresource.xml` (modified — added auth-window.ui)

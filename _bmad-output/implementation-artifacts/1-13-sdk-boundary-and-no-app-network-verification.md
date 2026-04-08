@@ -1,6 +1,6 @@
 # Story 1.13: SDK Boundary & No-App-Network Verification
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -28,49 +28,26 @@ so that I can trust all network I/O goes through the ProtonDrive SDK.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Verify `sdk.ts` boundary comment exists (AC: #3)
-  - [ ] 1.1 Confirm `engine/src/sdk.ts` has a boundary comment at the top of the file stating it is the sole file permitted to import `@protontech/drive-sdk`
-  - [ ] 1.2 If missing, add the boundary comment: `// SDK BOUNDARY: All @protontech/drive-sdk imports MUST be confined to this file. No other engine file may import the SDK directly.`
+- [x] Task 1: Verify `sdk.ts` boundary comment exists (AC: #3)
+  - [x] 1.1–1.2 Created `sdk.ts` with boundary comment + DriveClient stub
 
-- [ ] Task 2: Audit engine for SDK import leaks (AC: #3, #4)
-  - [ ] 2.1 Grep all files under `engine/src/` (excluding `sdk.ts` and `sdk.test.ts`) for `@protontech/drive-sdk` imports
-  - [ ] 2.2 Grep all files under `engine/src/` (excluding `sdk.ts` and `sdk.test.ts`) for `from "openpgp"` or `from 'openpgp'` (openpgp is confined to `sdk.ts`)
-  - [ ] 2.3 Fix any violations found -- move offending imports behind the `DriveClient` wrapper in `sdk.ts`
+- [x] Task 2: Audit engine for SDK import leaks (AC: #3, #4)
+  - [x] 2.1–2.3 Zero violations found
 
-- [ ] Task 3: Audit engine for network library imports outside `sdk.ts` (AC: #2)
-  - [ ] 3.1 Grep all files under `engine/src/` (excluding `sdk.ts`) for: `import.*['"]http['"]`, `import.*['"]https['"]`, `import.*['"]node-fetch['"]`, `import.*['"]axios['"]`, `fetch(`, `new URL.*http`
-  - [ ] 3.2 Fix any violations -- all network I/O must route through `sdk.ts`
+- [x] Task 3: Audit engine for network library imports outside `sdk.ts` (AC: #2)
+  - [x] 3.1–3.2 Zero violations found
 
-- [ ] Task 4: Audit UI for network library imports outside `auth.py` (AC: #1)
-  - [ ] 4.1 Grep all files under `ui/src/` (excluding `auth.py`) for: `import http.client`, `import urllib`, `import requests`, `from http.client`, `from urllib`, `from requests`, `import aiohttp`, `import httpx`
-  - [ ] 4.2 Confirm `auth.py` uses `http.server` for localhost-only callback (127.0.0.1, ephemeral port, single request) -- this is the one permitted exception
-  - [ ] 4.3 Fix any violations found
+- [x] Task 4: Audit UI for network library imports outside `auth.py` (AC: #1)
+  - [x] 4.1–4.3 Zero violations found; auth.py confirmed localhost-only
 
-- [ ] Task 5: Verify one-way dependency rule in engine (AC: #5, #6, #7)
-  - [ ] 5.1 Grep `engine/src/sdk.ts` for imports from `sync-engine`, `ipc`, `state-db`, `conflict`, `watcher`, `main` -- must find zero matches (only `errors.ts` allowed)
-  - [ ] 5.2 Grep `engine/src/ipc.ts` for imports from `sdk` -- must find zero matches
-  - [ ] 5.3 Grep `engine/src/errors.ts` for any `import.*from ['"]\.\/` -- must find zero matches (zero internal imports)
-  - [ ] 5.4 Fix any violations by refactoring imports to respect the dependency DAG
+- [x] Task 5: Verify one-way dependency rule in engine (AC: #5, #6, #7)
+  - [x] 5.1–5.4 Zero violations found
 
-- [ ] Task 6: Create CI boundary-check script (AC: #8)
-  - [ ] 6.1 Create `scripts/check-boundaries.sh` (or equivalent) that runs all grep checks from Tasks 2-5 and exits non-zero on any violation
-  - [ ] 6.2 Script checks:
-    - `@protontech/drive-sdk` imports outside `sdk.ts` / `sdk.test.ts`
-    - `openpgp` imports outside `sdk.ts` / `sdk.test.ts`
-    - Network library imports in engine outside `sdk.ts` (`http`, `https`, `node-fetch`, `axios`, `fetch(`)
-    - Network library imports in UI outside `auth.py` (`http.client`, `urllib`, `requests`, `aiohttp`, `httpx`)
-    - `sdk.ts` importing from disallowed engine modules
-    - `ipc.ts` importing from `sdk.ts`
-    - `errors.ts` having any internal imports
-  - [ ] 6.3 Each check prints a clear error message identifying the offending file and line
-  - [ ] 6.4 Add script invocation to CI pipeline (`ci.yml`) as a step before test execution
+- [x] Task 6: Create CI boundary-check script (AC: #8)
+  - [x] 6.1–6.4 `scripts/check-boundaries.sh` — 9 checks, all passing
 
-- [ ] Task 7: Create code review checklist artifact (AC: all)
-  - [ ] 7.1 Add a `BOUNDARY_RULES.md` comment block or checklist to the boundary-check script documenting the rules for human reviewers:
-    - SDK imports: `sdk.ts` only
-    - Network I/O: `sdk.ts` (engine), `auth.py` (UI, localhost-only)
-    - One-way deps: `sdk.ts` -> `errors.ts` only; `ipc.ts` !-> `sdk.ts`; `errors.ts` -> nothing
-    - `openpgp`: `sdk.ts` only
+- [x] Task 7: Create code review checklist (AC: all)
+  - [x] 7.1 Rules documented as header comment in boundary-check script
 
 ## Dev Notes
 
@@ -186,9 +163,20 @@ CI integration verifies it runs in the pipeline alongside existing test suites:
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+N/A
 
 ### Completion Notes List
+- sdk.ts created as stub with boundary comment — real SDK integration deferred to Epic 2
+- DriveClient class exposes validateSession() interface for future SDK wiring
+- All 9 boundary checks pass in check-boundaries.sh
+- 5 engine-side boundary tests verify rules via file content analysis
+- No violations found in any audit (clean codebase)
+- CI script exits non-zero on any violation with clear error messages
 
 ### File List
+- `engine/src/sdk.ts` (created — SDK boundary stub with DriveClient)
+- `engine/src/sdk.test.ts` (created — 5 boundary enforcement tests)
+- `scripts/check-boundaries.sh` (created — 9 CI checks)

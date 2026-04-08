@@ -44,19 +44,19 @@ story_location: _bmad-output/implementation-artifacts
 development_status:
   # Epic 1: App Foundation & Authentication
   epic-1: in-progress
-  1-1-ui-project-scaffolding: ready-for-dev
-  1-2-engine-project-scaffolding: ready-for-dev
-  1-3-ipc-protocol-and-socket-server: ready-for-dev
-  1-4-engine-spawn-and-socket-connection: ready-for-dev
-  1-5-protocol-handshake-and-engine-lifecycle: ready-for-dev
-  1-6-credential-storage-libsecret-plus-fallback: ready-for-dev
-  1-7-localhost-auth-callback-server: ready-for-dev
-  1-8-pre-auth-screen-and-credential-comfort: ready-for-dev
-  1-9-embedded-webkitgtk-auth-browser: ready-for-dev
-  1-10-post-auth-account-overview-and-session-handoff: ready-for-dev
-  1-11-silent-token-validation-on-launch: ready-for-dev
-  1-12-settings-page-and-log-out: ready-for-dev
-  1-13-sdk-boundary-and-no-app-network-verification: ready-for-dev
+  1-1-ui-project-scaffolding: review
+  1-2-engine-project-scaffolding: review
+  1-3-ipc-protocol-and-socket-server: review
+  1-4-engine-spawn-and-socket-connection: review
+  1-5-protocol-handshake-and-engine-lifecycle: review
+  1-6-credential-storage-libsecret-plus-fallback: review
+  1-7-localhost-auth-callback-server: review
+  1-8-pre-auth-screen-and-credential-comfort: done
+  1-9-embedded-webkitgtk-auth-browser: done
+  1-10-post-auth-account-overview-and-session-handoff: done
+  1-11-silent-token-validation-on-launch: done
+  1-12-settings-page-and-log-out: done
+  1-13-sdk-boundary-and-no-app-network-verification: done
   epic-1-retrospective: optional
 
   # Epic 2: First Sync Pair & File Sync
