@@ -1,5 +1,57 @@
 # Deferred Work
 
+## Resolution Plan (from Epic 1 Retrospective, 2026-04-08)
+
+### Epic 2 Story 0 — Technical Debt Cleanup (9 items)
+
+Items that directly affect Epic 2 stability. Must be resolved before starting Epic 2 feature stories.
+
+| # | Item | Source | Why it matters for Epic 2 |
+|---|------|--------|--------------------------|
+| 1 | `writeMessage` ignores `socket.write()` backpressure | 1-3 W3 | Continuous sync progress events will flood the socket |
+| 2 | `restart()` reentrancy risk if error callback triggers restart | 1-5 W6 | Sync failures in Epic 2 will hit this path |
+| 3 | `_write_message` failure doesn't tear down stale connection | 1-5 W4 | Sync disconnects need clean teardown |
+| 4 | `cleanup()` doesn't close connection explicitly | 1-5 W1 | Engine lifecycle must be solid for long-running sync |
+| 5 | `send_command` queues dict by reference — mutation risk | 1-5 W5 | Sync queue replay could mutate queued commands |
+| 6 | Malformed JSON messages silently dropped with no logging | 1-4 W2 | Sync debugging impossible without visibility |
+| 7 | `_on_auth_completed` transitions to main UI even if token storage fails | 1-8, 1-6 | Setup wizard (Story 2.4) reuses this flow |
+| 8 | WebView network session not explicitly cleared after auth | 1-9 W4 | Auth reuse in setup wizard could leak sessions |
+| 9 | `sys.modules` pollution in test fixtures | 1-4 W6, 1-8 | 110+ tests and growing — fix now or never |
+
+### Stays with planned epic (not in Story 0)
+
+| Item | Planned Epic | Reason |
+|------|-------------|--------|
+| `_on_engine_error` is `pass` — no error display | Epic 5 | Error UI designed in Epic 5 |
+| Fatal vs non-fatal error distinction in UI rendering | Epic 5 | Needs error display first |
+| `rate_limited` UI paused state | Epic 3 | Offline/network epic |
+| Responsive CSS for storage label hiding | Cosmetic | Not blocking |
+| Auth server timeout | Low risk | Daemon thread dies with process |
+| Thread safety on `_token_received` flag | Low risk | Single-request server |
+| `_on_load_changed` hides error banner on sub-resources | Low risk | WebKitGTK main-frame only in practice |
+| `logout()` swallows `delete_token()` exceptions | Epic 5 | Error handling scope |
+| `start_auth_flow()` dead code | Cleanup | Harmless until called |
+| `EngineConnectionError` defined but never raised | Cleanup | Dead code, may be used later |
+| Unbounded buffer growth in `MessageReader` | Low risk | Local Unix socket only |
+| `shutdown` bypasses `commandHandler` | Future | No cleanup hooks needed yet |
+| `encodeMessage` can exceed `MAX_PAYLOAD_SIZE` | Future | No large messages in current scope |
+| `setTimeout`-based test synchronization | Low risk | Works for now |
+| No test for client disconnect during async command | Low priority | Complex to test |
+| `read_bytes_async` short reads | Low risk | Gio buffers for Unix sockets |
+| Synchronous `client.connect()` | Acceptable | Near-instant on localhost |
+| No tests for backoff timing / Gio read loop | Nice-to-have | Requires GLib integration testing |
+| No timeout on auth server (×2) | Low risk | Daemon thread dies with process |
+| `time.sleep` synchronization in auth tests | Low flake | Would need threading events |
+| `_on_token_expired` during active auth leaks resources | Edge case | Cross-story lifecycle |
+| `do_activate` shows empty main UI before engine ready | Resolved | Fixed in Story 1.11 |
+| `_on_auth_completed` calls `show_main()` before engine confirms session | Resolved | Fixed in Story 1.10/1.11 |
+| `on_event("ready")` handler never dispatches to Application callback | Resolved | Fixed in Story 1.5 |
+| Version mismatch and crash both `fatal=True` — indistinguishable | Epic 5 | Needs design decision with error UI |
+
+---
+
+## Original Deferred Items by Story
+
 ## Deferred from: code review of 1-1-ui-project-scaffolding (2026-04-08)
 
 - `_on_engine_error` is `pass` — needs error display implementation (Story 5.x)
