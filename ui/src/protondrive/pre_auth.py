@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Callable
-
 from gi.repository import Adw, GObject, Gtk
 
 
@@ -25,4 +23,5 @@ class PreAuthScreen(Adw.Bin):
 
     def _on_sign_in_clicked(self, button: Gtk.Button) -> None:
         """Emit sign-in-requested signal for window.py to handle."""
+        button.set_sensitive(False)
         self.emit("sign-in-requested")

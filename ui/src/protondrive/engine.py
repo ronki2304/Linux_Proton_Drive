@@ -10,6 +10,8 @@ from typing import Any, Callable
 
 from gi.repository import Gio, GLib
 
+from protondrive.errors import AppError, EngineNotFoundError, IpcError
+
 APP_ID = "io.github.ronki2304.ProtonDriveLinuxClient"
 SOCKET_NAME = "sync-engine.sock"
 MAX_RETRY_DELAY_MS = 2000
@@ -18,18 +20,6 @@ INITIAL_RETRY_DELAY_MS = 100
 SUPPORTED_PROTOCOL_VERSION = 1
 SHUTDOWN_TIMEOUT_SECONDS = 5
 MAX_MESSAGE_SIZE = 16 * 1024 * 1024  # 16 MB
-
-
-class AppError(Exception):
-    """Base error for all application errors."""
-
-
-class IpcError(AppError):
-    """Error in engine IPC communication."""
-
-
-class EngineNotFoundError(AppError):
-    """Engine binary or script not found."""
 
 
 def get_engine_path() -> tuple[str, str]:
@@ -84,6 +74,11 @@ class EngineClient:
         self._kill_timer_id: int | None = None
         self._retry_timer_id: int | None = None
 
+    @property
+    def is_running(self) -> bool:
+        """True if engine process is alive or connection attempts are in progress."""
+        return self._engine_pid is not None or self._retry_timer_id is not None
+
     def on_event(self, event_type: str, handler: Any) -> None:
         """Register handler for a specific IPC event type."""
         self._event_handlers[event_type] = handler
@@ -109,6 +104,7 @@ class EngineClient:
 
     def start(self) -> None:
         """Spawn engine and begin connection attempts."""
+        self._shutdown_initiated = False
         try:
             node_path, engine_script = get_engine_path()
         except EngineNotFoundError as e:
@@ -202,6 +198,8 @@ class EngineClient:
         self, stream: Gio.DataInputStream, result: Gio.AsyncResult
     ) -> None:
         """Handle received length prefix bytes."""
+        if self._shutdown_initiated:
+            return
         try:
             gbytes = stream.read_bytes_finish(result)
         except GLib.Error:
@@ -234,6 +232,8 @@ class EngineClient:
         self, stream: Gio.DataInputStream, result: Gio.AsyncResult
     ) -> None:
         """Handle received message payload."""
+        if self._shutdown_initiated:
+            return
         try:
             gbytes = stream.read_bytes_finish(result)
         except GLib.Error:
@@ -306,6 +306,10 @@ class EngineClient:
         self._flush_pending_commands()
         self.send_command({"type": "get_status"})
 
+        handler = self._event_handlers.get("ready")
+        if handler is not None:
+            handler({"type": "ready", "payload": payload})
+
     def _flush_pending_commands(self) -> None:
         """Send all queued commands."""
         pending = self._pending_commands
@@ -350,6 +354,9 @@ class EngineClient:
     def send_shutdown(self) -> None:
         """Send shutdown command to engine and start kill timer."""
         self._shutdown_initiated = True
+        if self._retry_timer_id is not None:
+            GLib.source_remove(self._retry_timer_id)
+            self._retry_timer_id = None
         if self._connection is not None:
             self._write_message({"type": "shutdown"})
         if self._engine_pid is not None:
@@ -383,11 +390,10 @@ class EngineClient:
             # Expected exit during app close — no error
             return
 
-        if self._engine_ready:
-            self._engine_ready = False
-            self._emit_error(
-                "Sync engine stopped unexpectedly.", fatal=True
-            )
+        self._engine_ready = False
+        self._emit_error(
+            "Sync engine stopped unexpectedly.", fatal=True
+        )
 
     def _emit_error(
         self,

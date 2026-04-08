@@ -58,7 +58,7 @@ class Application(Adw.Application):
             win = self._window
         win.present()
 
-        if self._engine is not None:
+        if self._engine is not None and not self._engine.is_running:
             self._engine.start()
 
     def start_auth_flow(self) -> None:

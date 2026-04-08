@@ -1,6 +1,6 @@
 # Story 1.6: Credential Storage (libsecret + Fallback)
 
-Status: review
+Status: done
 
 ## Story
 
@@ -165,6 +165,15 @@ Use `AuthError` for:
 - [Source: _bmad-output/planning-artifacts/architecture.md SS Credential Storage]
 - [Source: _bmad-output/planning-artifacts/prd.md SS FR34, FR35, FR36, NFR6, NFR7]
 - [Source: _bmad-output/project-context.md SS Python rules, Error handling, Security]
+
+### Review Findings
+
+- [x] [Review][Patch] AuthError doesn't inherit from AppError — created shared errors.py [credential_store.py:24]
+- [x] [Review][Patch] _write_secure uses predictable temp path (race + permission TOCTOU) — switched to tempfile.mkstemp [credential_store.py:203]
+- [x] [Review][Patch] Module-level Secret.Schema.new() crashes import when Secret unavailable — lazy-init in SecretPortalStore [credential_store.py:56]
+- [x] [Review][Patch] EncryptedFileStore.is_available() doesn't verify cryptography import — added try-import [credential_store.py:155]
+- [x] [Review][Defer] Salt not deleted on delete_token — not sensitive, functional as-is
+- [x] [Review][Defer] Retrieve returns None on corrupted salt — triggers re-auth, acceptable
 
 ## Dev Agent Record
 

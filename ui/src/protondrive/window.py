@@ -5,6 +5,7 @@ from typing import Any
 from gi.repository import Adw, Gtk
 
 from protondrive.auth_window import AuthWindow
+from protondrive.errors import AuthError
 from protondrive.pre_auth import PreAuthScreen
 from protondrive.widgets.account_header_bar import AccountHeaderBar
 from protondrive.widgets.settings import SettingsPage
@@ -49,7 +50,11 @@ class MainWindow(Adw.ApplicationWindow):
                 "auth-completed", self._on_auth_completed
             )
         self.set_content(self._auth_window)
-        self._auth_window.start_auth()
+        try:
+            self._auth_window.start_auth()
+        except AuthError:
+            self._cleanup_auth_window()
+            self.show_pre_auth()
 
     def show_main(self) -> None:
         """Switch to the main split-view layout."""
@@ -116,7 +121,9 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_sign_in_requested(self, screen: PreAuthScreen) -> None:
         """Handle sign-in button click — start auth flow."""
-        self.show_auth_browser()
+        app = self.get_application()
+        if app is not None and hasattr(app, "start_auth_flow"):
+            app.start_auth_flow()
 
     def _on_auth_completed(self, auth_window: AuthWindow, token: str) -> None:
         """Handle auth completion — store token and transition to main UI."""

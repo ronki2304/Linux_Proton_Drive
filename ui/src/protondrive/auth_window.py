@@ -36,6 +36,7 @@ class AuthWindow(Adw.Bin):
         self._auth_server: AuthCallbackServer | None = None
         self._webview: WebKit.WebView | None = None
         self._auth_start_url: str | None = None
+        self._completed: bool = False
 
         self.error_banner.connect("button-clicked", self._on_retry_clicked)
 
@@ -44,6 +45,9 @@ class AuthWindow(Adw.Bin):
 
         Auth server must bind BEFORE WebView navigates — ordering is load-bearing.
         """
+        self.cleanup()
+        self._completed = False
+
         self._auth_server = AuthCallbackServer()
         port = self._auth_server.get_port()
         self._auth_server.start_async(self._on_token_received)
@@ -88,11 +92,17 @@ class AuthWindow(Adw.Bin):
 
     def _on_retry_clicked(self, banner: Adw.Banner) -> None:
         """Retry auth by reloading the auth-start URL."""
+        if self._completed:
+            return
         if self._webview is not None and self._auth_start_url is not None:
             self._webview.load_uri(self._auth_start_url)
 
     def _on_token_received(self, token: str) -> None:
         """Clean up WebView and auth server, emit auth-completed signal."""
+        if self._completed:
+            return
+        self._completed = True
+
         if self._auth_server is not None:
             self._auth_server.stop()
             self._auth_server = None

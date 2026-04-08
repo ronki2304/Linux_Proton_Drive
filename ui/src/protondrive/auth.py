@@ -5,15 +5,13 @@ from __future__ import annotations
 import http.server
 import threading
 from typing import Callable
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from gi.repository import GLib
 
+from protondrive.errors import AuthError
+
 PROTON_AUTH_URL = "https://account.proton.me"
-
-
-class AuthError(Exception):
-    """Authentication-related failures."""
 
 
 class _AuthRequestHandler(http.server.BaseHTTPRequestHandler):
@@ -35,7 +33,7 @@ class _AuthRequestHandler(http.server.BaseHTTPRequestHandler):
         """Redirect to Proton auth with callback URL."""
         port = self.server.server_address[1]
         callback_url = f"http://127.0.0.1:{port}/callback"
-        redirect_url = f"{PROTON_AUTH_URL}?redirect_uri={callback_url}"
+        redirect_url = f"{PROTON_AUTH_URL}?{urlencode({'redirect_uri': callback_url})}"
 
         self.send_response(302)
         self.send_header("Location", redirect_url)
@@ -95,6 +93,8 @@ class AuthCallbackServer(http.server.HTTPServer):
         self._token: str | None = None
         self._token_received: bool = False
         self._thread: threading.Thread | None = None
+        self._serving: bool = False
+        self._stopped: bool = False
 
     def get_port(self) -> int:
         """Return the ephemeral port assigned by the OS."""
@@ -103,14 +103,20 @@ class AuthCallbackServer(http.server.HTTPServer):
     def start_async(self, callback: Callable[[str], None]) -> None:
         """Start serving on a background thread."""
         self._callback = callback
+        self._serving = True
         self._thread = threading.Thread(
             target=self.serve_forever, daemon=True
         )
         self._thread.start()
 
     def stop(self) -> None:
-        """Shut down the server and wait for the thread to exit."""
-        self.shutdown()
+        """Shut down the server and wait for the thread to exit. Safe to call multiple times."""
+        if self._stopped:
+            return
+        self._stopped = True
+
+        if self._serving:
+            self.shutdown()
         self.server_close()
         if self._thread is not None:
             self._thread.join(timeout=5)

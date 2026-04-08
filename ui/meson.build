@@ -75,6 +75,7 @@ python_sources = [
   'src/protondrive/__main__.py',
   'src/protondrive/main.py',
   'src/protondrive/window.py',
+  'src/protondrive/errors.py',
   'src/protondrive/engine.py',
   'src/protondrive/credential_store.py',
   'src/protondrive/auth.py',

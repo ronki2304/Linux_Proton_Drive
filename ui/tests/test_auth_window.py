@@ -118,6 +118,7 @@ class TestAuthFlowOrdering:
             window._auth_server = None
             window._webview = None
             window._auth_start_url = None
+            window._completed = False
             window.url_label = MagicMock()
             window.webview_container = MagicMock()
             window.error_banner = MagicMock()
@@ -136,6 +137,7 @@ def _make_window():
     window._auth_server = MagicMock()
     window._webview = MagicMock()
     window._auth_start_url = "http://127.0.0.1:12345/auth-start"
+    window._completed = False
     window.url_label = MagicMock()
     window.webview_container = MagicMock()
     window.error_banner = MagicMock()

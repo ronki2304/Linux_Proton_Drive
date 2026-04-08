@@ -96,11 +96,9 @@ class TestPreAuthWindowIntegration:
 
     def test_window_module_has_show_pre_auth(self) -> None:
         """MainWindow must expose show_pre_auth for app navigation."""
-        import inspect
         # Read the source directly to verify method existence without import issues
         window_path = Path(__file__).parent.parent / "src" / "protondrive" / "window.py"
         source = window_path.read_text()
         assert "def show_pre_auth(" in source
         assert "def show_main(" in source
         assert "def show_auth_browser(" in source
-        assert "def on_session_ready(" in source

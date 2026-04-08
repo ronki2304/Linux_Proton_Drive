@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -13,22 +12,26 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-# Mock gi.repository.Secret before importing
-_gi_mock = MagicMock()
+# Mock gi before importing — SecretPortalStore imports gi.repository.Secret lazily
 _secret_mock = MagicMock()
 _glib_mock = MagicMock()
+_glib_mock.Error = type("GLibError", (Exception,), {})
 
-sys.modules.setdefault("gi", _gi_mock)
-sys.modules.setdefault("gi.repository", MagicMock())
-sys.modules.setdefault("gi.repository.Secret", _secret_mock)
-sys.modules.setdefault("gi.repository.GLib", _glib_mock)
+# Ensure mocks exist in sys.modules regardless of import order
+if "gi" not in sys.modules:
+    sys.modules["gi"] = MagicMock()
+if "gi.repository" not in sys.modules:
+    sys.modules["gi.repository"] = MagicMock()
 
-_gi_mock.repository.Secret = _secret_mock
-_gi_mock.repository.GLib = _glib_mock
-_gi_mock.require_version = MagicMock()
+# Wire our mocks into the gi.repository module (even if already set by other tests)
+sys.modules["gi.repository"].Secret = _secret_mock
+sys.modules["gi.repository"].GLib = _glib_mock
+sys.modules["gi.repository.Secret"] = _secret_mock
+sys.modules["gi.repository.GLib"] = _glib_mock
+sys.modules["gi"].require_version = MagicMock()
 
+from protondrive.errors import AuthError
 from protondrive.credential_store import (
-    AuthError,
     CredentialBackend,
     CredentialManager,
     EncryptedFileStore,
@@ -40,44 +43,41 @@ from protondrive.credential_store import (
 class TestSecretPortalStore:
     """Test libsecret backend with mocked Secret module."""
 
+    def setup_method(self) -> None:
+        _secret_mock.reset_mock()
+        _glib_mock.reset_mock(side_effect=True)
+        _glib_mock.Error = type("GLibError", (Exception,), {})
+        # Re-wire mocks — other test files may overwrite sys.modules["gi.repository"]
+        sys.modules["gi.repository"].Secret = _secret_mock
+        sys.modules["gi.repository"].GLib = _glib_mock
+        # Reset lazy schema so each test gets fresh state
+        SecretPortalStore._schema = None
+
     def test_store_token(self) -> None:
         store = SecretPortalStore()
-        with patch("protondrive.credential_store.Secret") as mock_secret:
-            store.store_token("test-token-123")
-            mock_secret.password_store_sync.assert_called_once()
+        store.store_token("test-token-123")
+        _secret_mock.password_store_sync.assert_called_once()
 
     def test_retrieve_token(self) -> None:
         store = SecretPortalStore()
-        with patch("protondrive.credential_store.Secret") as mock_secret:
-            mock_secret.password_lookup_sync.return_value = "found-token"
-            result = store.retrieve_token()
+        _secret_mock.password_lookup_sync.return_value = "found-token"
+        result = store.retrieve_token()
         assert result == "found-token"
 
     def test_delete_token(self) -> None:
         store = SecretPortalStore()
-        with patch("protondrive.credential_store.Secret") as mock_secret:
-            store.delete_token()
-            mock_secret.password_clear_sync.assert_called_once()
+        store.delete_token()
+        _secret_mock.password_clear_sync.assert_called_once()
 
     def test_is_available_success(self) -> None:
         store = SecretPortalStore()
-        with patch("protondrive.credential_store.Secret") as mock_secret:
-            mock_secret.password_lookup_sync.return_value = None
-            assert store.is_available()
+        _secret_mock.password_lookup_sync.return_value = None
+        assert store.is_available()
 
     def test_is_available_failure(self) -> None:
         store = SecretPortalStore()
-        # GLib.Error must be a real exception class for except to catch it
-        import protondrive.credential_store as cs
-        original_glib_error = getattr(cs.GLib, "Error", None)
-        cs.GLib.Error = type("GLibError", (Exception,), {})
-        try:
-            with patch("protondrive.credential_store.Secret") as mock_secret:
-                mock_secret.password_lookup_sync.side_effect = cs.GLib.Error("portal unavailable")
-                assert not store.is_available()
-        finally:
-            if original_glib_error is not None:
-                cs.GLib.Error = original_glib_error
+        _secret_mock.password_lookup_sync.side_effect = _glib_mock.Error("portal unavailable")
+        assert not store.is_available()
 
     def test_backend_name(self) -> None:
         store = SecretPortalStore()

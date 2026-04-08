@@ -6,23 +6,15 @@ import base64
 import hashlib
 import os
 import secrets
+import tempfile
 from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
-import gi
-
-gi.require_version("Secret", "1")
-from gi.repository import GLib, Secret
-
+from protondrive.errors import AuthError
 
 APP_ID = "io.github.ronki2304.ProtonDriveLinuxClient"
 PBKDF2_ITERATIONS = 600_000
-
-
-class AuthError(Exception):
-    """Credential storage/retrieval failures. Never includes the token value."""
 
 
 class CredentialBackend(Enum):
@@ -53,19 +45,32 @@ class CredentialStore(ABC):
 
 # --- libsecret backend ---
 
-_SCHEMA = Secret.Schema.new(
-    APP_ID,
-    Secret.SchemaFlags.NONE,
-    {
-        "app": Secret.SchemaAttributeType.STRING,
-        "type": Secret.SchemaAttributeType.STRING,
-    },
-)
 _ATTRIBUTES = {"app": "ProtonDriveLinuxClient", "type": "session-token"}
 
 
 class SecretPortalStore(CredentialStore):
     """Store credentials via libsecret Secret portal (GNOME Keyring)."""
+
+    _schema: object | None = None
+
+    @classmethod
+    def _get_schema(cls) -> object:
+        """Lazy-init the Secret schema to avoid import-time D-Bus calls."""
+        if cls._schema is None:
+            import gi
+
+            gi.require_version("Secret", "1")
+            from gi.repository import Secret
+
+            cls._schema = Secret.Schema.new(
+                APP_ID,
+                Secret.SchemaFlags.NONE,
+                {
+                    "app": Secret.SchemaAttributeType.STRING,
+                    "type": Secret.SchemaAttributeType.STRING,
+                },
+            )
+        return cls._schema
 
     @property
     def backend_name(self) -> CredentialBackend:
@@ -73,15 +78,22 @@ class SecretPortalStore(CredentialStore):
 
     def is_available(self) -> bool:
         try:
-            Secret.password_lookup_sync(_SCHEMA, _ATTRIBUTES, None)
+            import gi
+
+            gi.require_version("Secret", "1")
+            from gi.repository import GLib, Secret
+
+            Secret.password_lookup_sync(self._get_schema(), _ATTRIBUTES, None)
             return True
-        except GLib.Error:
+        except (GLib.Error, ImportError, ValueError):
             return False
 
     def store_token(self, token: str) -> None:
+        from gi.repository import GLib, Secret
+
         try:
             Secret.password_store_sync(
-                _SCHEMA,
+                self._get_schema(),
                 _ATTRIBUTES,
                 Secret.COLLECTION_DEFAULT,
                 "ProtonDrive session token",
@@ -92,14 +104,18 @@ class SecretPortalStore(CredentialStore):
             raise AuthError("Failed to store credential in keyring") from e
 
     def retrieve_token(self) -> str | None:
+        from gi.repository import GLib, Secret
+
         try:
-            return Secret.password_lookup_sync(_SCHEMA, _ATTRIBUTES, None)
+            return Secret.password_lookup_sync(self._get_schema(), _ATTRIBUTES, None)
         except GLib.Error as e:
             raise AuthError("Failed to retrieve credential from keyring") from e
 
     def delete_token(self) -> None:
+        from gi.repository import GLib, Secret
+
         try:
-            Secret.password_clear_sync(_SCHEMA, _ATTRIBUTES, None)
+            Secret.password_clear_sync(self._get_schema(), _ATTRIBUTES, None)
         except GLib.Error as e:
             raise AuthError("Failed to delete credential from keyring") from e
 
@@ -154,9 +170,11 @@ class EncryptedFileStore(CredentialStore):
 
     def is_available(self) -> bool:
         try:
+            from cryptography.fernet import Fernet  # noqa: F401
+
             self._dir.mkdir(parents=True, exist_ok=True)
             return os.access(self._dir, os.W_OK)
-        except OSError:
+        except (OSError, ImportError):
             return False
 
     def store_token(self, token: str) -> None:
@@ -200,13 +218,21 @@ class EncryptedFileStore(CredentialStore):
     @staticmethod
     def _write_secure(path: Path, data: bytes) -> None:
         """Write file with 0600 permissions set atomically."""
-        tmp_path = path.with_suffix(".tmp")
-        fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), prefix=".tmp-")
         try:
+            os.fchmod(fd, 0o600)
             os.write(fd, data)
-        finally:
             os.close(fd)
-        os.rename(str(tmp_path), str(path))
+            fd = -1
+            os.rename(tmp_path, str(path))
+        except BaseException:
+            if fd >= 0:
+                os.close(fd)
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
 
 # --- Credential Manager facade ---

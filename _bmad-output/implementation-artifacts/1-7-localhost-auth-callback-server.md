@@ -1,6 +1,6 @@
 # Story 1.7: Localhost Auth Callback Server
 
-Status: review
+Status: done
 
 ## Story
 
@@ -149,6 +149,15 @@ This story is self-contained: it implements and tests the HTTP server class only
 - [Source: _bmad-output/planning-artifacts/epics.md, lines 492-523]
 - [Source: _bmad-output/planning-artifacts/architecture.md, "Auth Flow Ordering" and "Auth architecture" sections]
 - [Source: _bmad-output/project-context.md, "Auth server lifecycle", "Auth flow ordering is load-bearing", NFR6/NFR8]
+
+### Review Findings
+
+- [x] [Review][Patch] AuthError doesn't inherit from AppError (duplicate class) — now imports from shared errors.py [auth.py:15]
+- [x] [Review][Patch] redirect_uri not URL-encoded in auth-start redirect — switched to urlencode [auth.py:38]
+- [x] [Review][Patch] Missing test: bind failure raises AuthError — added test [test_auth.py]
+- [x] [Review][Patch] Shared mutable mock state in test_auth.py — added setup_method reset [test_auth.py]
+- [x] [Review][Defer] No timeout on auth server — daemon thread dies with process, not spec'd
+- [x] [Review][Defer] time.sleep synchronization in tests — low flake risk
 
 ## Dev Agent Record
 

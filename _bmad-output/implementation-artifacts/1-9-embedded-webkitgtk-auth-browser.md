@@ -1,6 +1,6 @@
 # Story 1.9: Embedded WebKitGTK Auth Browser
 
-Status: done
+Status: done  <!-- review complete 2026-04-08 -->
 
 ## Story
 
@@ -137,6 +137,20 @@ meson test -C builddir
 # Widget tests require Xvfb — skip in CI with:
 CI_SKIP_WIDGET_TESTS=1 meson test -C builddir
 ```
+
+### Review Findings
+
+- [x] [Review][Patch] P1: `start_auth()` called twice leaks previous server and WebView — fixed, added `cleanup()` guard at top of `start_auth()`
+- [x] [Review][Patch] P1: `_on_token_received` fires after `cleanup()` via queued `GLib.idle_add` — fixed, added `_completed` guard flag
+- [x] [Review][Patch] P2: Double `shutdown()` — server self-shuts via thread then `stop()` called again, blocks GTK 5s — fixed, added `_stopped` idempotency flag
+- [x] [Review][Patch] P2: `stop()` on never-started server hangs on `shutdown()` — fixed, added `_serving` flag guard
+- [x] [Review][Patch] P2: `show_auth_browser` doesn't catch `AuthError` from server bind failure — fixed, try/except falls back to pre-auth
+- [x] [Review][Patch] P3: Retry button retries against dead server after token self-shutdown — fixed, `_completed` guard blocks retry
+- [x] [Review][Defer] W1: `_token_received` flag not thread-safe (concurrent `/callback` race) — deferred, single-request server makes concurrent hits near-impossible
+- [x] [Review][Defer] W2: No timeout on auth server — runs indefinitely if user abandons — deferred, daemon thread dies with process
+- [x] [Review][Defer] W3: `_on_load_changed` hides error banner on any load event including sub-resources — deferred, WebKitGTK main-frame only in practice
+- [x] [Review][Defer] W4: WebView network session not explicitly cleared after auth — deferred, `try_close()` + None triggers GC
+- [x] [Review][Defer] W5: `_on_auth_completed` calls `show_main()` before confirming token processed — deferred, sync call currently
 
 ## Dev Agent Record
 

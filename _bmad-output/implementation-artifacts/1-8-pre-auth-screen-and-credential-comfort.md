@@ -127,6 +127,17 @@ class PreAuthScreen(Adw.Bin):
 
 On app launch, `window.py` (or `main.py`) checks for a valid session token in libsecret. If none exists, `PreAuthScreen` is shown. If a valid token exists, the app skips directly to the main UI. This screen also appears after logout or token expiry if the re-auth modal is dismissed.
 
+### Review Findings
+
+- [x] [Review][Patch] `_on_sign_in_requested` must delegate to `app.start_auth_flow()` per Task 3.3 [window.py:117] — fixed
+- [x] [Review][Patch] Double-click on sign-in can re-enter `start_auth()`, stacking WebViews and auth servers [pre_auth.py:25] — fixed, button disabled after click
+- [x] [Review][Patch] Unused import `Callable` [pre_auth.py:5] — fixed
+- [x] [Review][Patch] Test asserts `on_session_ready` exists — out of story 1-8 scope [test_pre_auth.py:106] — removed
+- [x] [Review][Defer] `_on_auth_completed` transitions to main UI even if token storage fails [window.py:121] — deferred, story 1.9/1.10 scope
+- [x] [Review][Defer] `_on_token_expired` during active auth browser leaks auth resources [main.py:96] — deferred, cross-story lifecycle
+- [x] [Review][Defer] `do_activate` shows empty main UI before engine ready [main.py:54] — deferred, story 1.11 scope
+- [x] [Review][Defer] Test `sys.modules` pollution not scoped to fixtures [test_pre_auth.py] — deferred, pre-existing pattern
+
 ## Dev Agent Record
 
 ### Agent Model Used

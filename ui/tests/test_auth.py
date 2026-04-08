@@ -18,7 +18,6 @@ sys.modules.setdefault("gi", MagicMock())
 sys.modules.setdefault("gi.repository", MagicMock())
 sys.modules.setdefault("gi.repository.GLib", _glib_mock)
 
-import importlib
 import protondrive.auth as auth_module
 
 # Ensure GLib.idle_add is a callable mock
@@ -34,6 +33,10 @@ def _make_request(port: int, path: str) -> http.client.HTTPResponse:
 
 class TestAuthCallbackServer:
     """Test auth callback server behavior."""
+
+    def setup_method(self) -> None:
+        _glib_mock.reset_mock()
+        _glib_mock.idle_add.side_effect = None
 
     def test_binds_to_localhost_only(self) -> None:
         server = auth_module.AuthCallbackServer()
@@ -56,7 +59,7 @@ class TestAuthCallbackServer:
             location = resp.getheader("Location")
             assert location is not None
             assert "account.proton.me" in location
-            assert f"127.0.0.1:{port}/callback" in location
+            assert f"127.0.0.1%3A{port}%2Fcallback" in location
         finally:
             server.stop()
 
@@ -144,3 +147,11 @@ class TestAuthCallbackServer:
         captured = capsys.readouterr()
         assert secret_token not in captured.out
         assert secret_token not in captured.err
+
+    def test_bind_failure_raises_auth_error(self) -> None:
+        """AuthError raised when server cannot bind."""
+        from protondrive.errors import AuthError
+
+        with patch.object(auth_module.http.server.HTTPServer, "__init__", side_effect=OSError("Address in use")):
+            with pytest.raises(AuthError, match="Failed to bind"):
+                auth_module.AuthCallbackServer()

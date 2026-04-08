@@ -1,6 +1,6 @@
 # Story 1.5: Protocol Handshake & Engine Lifecycle
 
-Status: review
+Status: done
 
 ## Story
 
@@ -189,6 +189,21 @@ ui/tests/
 - [Source: _bmad-output/planning-artifacts/architecture.md § Error Propagation]
 - [Source: _bmad-output/planning-artifacts/architecture.md § UI Queues Commands Before ready]
 - [Source: _bmad-output/project-context.md § GTK4/Libadwaita rules, error handling, IPC rules]
+
+### Review Findings
+
+- [x] [Review][Patch] P1: `on_event("ready")` handler dead code — fixed, dispatch to handler after protocol validation
+- [x] [Review][Patch] P2: Engine crash before `_engine_ready=True` emits no error — fixed, removed `_engine_ready` gate
+- [x] [Review][Patch] P3: `start()` doesn't reset `_shutdown_initiated` — fixed, reset at top of `start()`
+- [x] [Review][Patch] P4: `do_activate()` calls `start()` unconditionally — fixed, added `is_running` property guard
+- [x] [Review][Patch] P5: `send_shutdown()` doesn't cancel `_retry_timer_id` — fixed, cancel retry timer in `send_shutdown()`
+- [x] [Review][Patch] P6: In-flight async reads emit spurious errors during shutdown — fixed, `_shutdown_initiated` guard added
+- [x] [Review][Defer] W1: `cleanup()` doesn't close connection explicitly [engine.py:438] — deferred, OS cleans up on exit
+- [x] [Review][Defer] W2: `_on_engine_error` is a no-op — no error display UI [main.py:120] — deferred, scoped to future story
+- [x] [Review][Defer] W3: Version mismatch and crash both `fatal=True` — indistinguishable [engine.py:301] — deferred, needs design decision
+- [x] [Review][Defer] W4: `_write_message` failure doesn't tear down stale connection [engine.py:347] — deferred, needs broader strategy
+- [x] [Review][Defer] W5: `send_command` queues dict by reference — mutation risk [engine.py:333] — deferred, internal callers create fresh dicts
+- [x] [Review][Defer] W6: `restart()` reentrancy risk if error callback triggers restart [engine.py:410] — deferred, theoretical until error display implemented
 
 ## Dev Agent Record
 

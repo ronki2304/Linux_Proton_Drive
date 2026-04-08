@@ -344,3 +344,89 @@ class TestSessionReadyEvent:
         assert len(received) == 2
         assert received[0]["display_name"] == "Initial"
         assert received[1]["display_name"] == "ReAuth"
+
+
+class TestReviewPatches:
+    """Tests for code review patch fixes."""
+
+    def test_ready_handler_dispatched_after_protocol_validation(self) -> None:
+        """P1: on_event('ready') handler fires after protocol validation."""
+        client, _ = _make_client_with_conn()
+        received: list[dict] = []
+        client.on_event("ready", lambda msg: received.append(msg))
+
+        client._on_engine_ready({"version": "0.1.0", "protocol_version": 1})
+
+        assert len(received) == 1
+        assert received[0]["type"] == "ready"
+        assert received[0]["payload"]["version"] == "0.1.0"
+
+    def test_ready_handler_not_called_on_mismatch(self) -> None:
+        """P1: on_event('ready') handler does NOT fire on protocol mismatch."""
+        client, _ = _make_client_with_conn()
+        received: list[dict] = []
+        client.on_event("ready", lambda msg: received.append(msg))
+        client.on_error(lambda msg, fatal, pair_id=None: None)
+
+        client._on_engine_ready({"version": "0.1.0", "protocol_version": 999})
+
+        assert len(received) == 0
+
+    def test_crash_before_ready_emits_fatal_error(self) -> None:
+        """P2: Engine crash before ready still emits fatal error."""
+        client = EngineClient()
+        errors: list[tuple[str, bool, str | None]] = []
+        client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
+        client._engine_ready = False
+        client._shutdown_initiated = False
+
+        with patch("protondrive.engine.GLib"):
+            client._on_engine_exit(pid=123, status=1)
+
+        assert len(errors) == 1
+        assert errors[0][1] is True  # fatal
+
+    def test_start_resets_shutdown_initiated(self) -> None:
+        """P3: start() resets _shutdown_initiated flag."""
+        client = EngineClient()
+        client._shutdown_initiated = True
+
+        with (
+            patch("protondrive.engine.get_engine_path", return_value=("/usr/bin/node", "/tmp/fake.js")),
+            patch("os.path.isfile", return_value=True),
+            patch("protondrive.engine.GLib") as mock_glib,
+        ):
+            mock_glib.spawn_async.return_value = (True, 999)
+            mock_glib.SpawnFlags.DO_NOT_REAP_CHILD = 0
+            mock_glib.SpawnFlags.SEARCH_PATH = 0
+            client.start()
+
+        assert not client._shutdown_initiated
+
+    def test_is_running_property(self) -> None:
+        """P4: is_running reflects engine process or retry state."""
+        client = EngineClient()
+        assert not client.is_running
+
+        client._engine_pid = 123
+        assert client.is_running
+
+        client._engine_pid = None
+        client._retry_timer_id = 42
+        assert client.is_running
+
+        client._retry_timer_id = None
+        assert not client.is_running
+
+    def test_send_shutdown_cancels_retry_timer(self) -> None:
+        """P5: send_shutdown cancels pending retry timer."""
+        client = EngineClient()
+        client._retry_timer_id = 42
+        client._engine_pid = 999
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.return_value = 10
+            client.send_shutdown()
+
+        mock_glib.source_remove.assert_called_once_with(42)
+        assert client._retry_timer_id is None
