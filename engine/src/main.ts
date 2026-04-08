@@ -1,4 +1,6 @@
-import pkg from "../package.json" with { type: "json" };
+// Version injected here to avoid importing ../package.json outside rootDir
+// (breaks tsc with declaration: true). Keep in sync with package.json.
+const ENGINE_VERSION = "0.1.0";
 
 import type { IpcCommand, IpcResponse } from "./ipc.js";
 import { IpcServer, resolveSocketPath } from "./ipc.js";
@@ -59,7 +61,7 @@ async function main(): Promise<void> {
     server.emitEvent({
       type: "ready",
       payload: {
-        version: pkg.version,
+        version: ENGINE_VERSION,
         protocol_version: PROTOCOL_VERSION,
       },
     });

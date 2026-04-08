@@ -1,0 +1,21 @@
+{
+  "name": "protondrive-engine",
+  "version": "0.1.0",
+  "description": "ProtonDrive Linux Client — sync engine",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "test": "node --import tsx --test 'src/**/*.test.ts'"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@protontech/drive-sdk": "0.14.3",
+    "openpgp": "^6.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

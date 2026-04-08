@@ -45,7 +45,7 @@ development_status:
   # Epic 1: App Foundation & Authentication
   epic-1: in-progress
   1-1-ui-project-scaffolding: done
-  1-2-engine-project-scaffolding: review
+  1-2-engine-project-scaffolding: done
   1-3-ipc-protocol-and-socket-server: review
   1-4-engine-spawn-and-socket-connection: review
   1-5-protocol-handshake-and-engine-lifecycle: review

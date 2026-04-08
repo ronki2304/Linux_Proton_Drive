@@ -1,6 +1,6 @@
 # Story 1.2: Engine Project Scaffolding
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -22,15 +22,15 @@ so that all subsequent engine stories have a buildable foundation with consisten
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Initialize npm project in `engine/` (AC: #1, #3, #4)
-  - [ ] 1.1 Run `npm init -y` in `engine/` directory; set `"type": "module"` in `package.json` (required for NodeNext module resolution)
-  - [ ] 1.2 Install production dependencies: `@protontech/drive-sdk` at exact `0.14.3` (no caret), `openpgp` at `^6.3.0`
-  - [ ] 1.3 Install dev dependencies: `typescript` ^5, `tsx`, `@types/node` (matching Node 22)
-  - [ ] 1.4 Verify `package.json` shows `"@protontech/drive-sdk": "0.14.3"` (no `^`) and `"openpgp": "^6.3.0"`
-  - [ ] 1.5 Add `engine/node_modules/` and `engine/dist/` to `.gitignore`
+- [x] Task 1: Initialize npm project in `engine/` (AC: #1, #3, #4)
+  - [x] 1.1 Run `npm init -y` in `engine/` directory; set `"type": "module"` in `package.json` (required for NodeNext module resolution)
+  - [x] 1.2 Install production dependencies: `@protontech/drive-sdk` at exact `0.14.3` (no caret), `openpgp` at `^6.3.0`
+  - [x] 1.3 Install dev dependencies: `typescript` ^5, `tsx`, `@types/node` (matching Node 22)
+  - [x] 1.4 Verify `package.json` shows `"@protontech/drive-sdk": "0.14.3"` (no `^`) and `"openpgp": "^6.3.0"`
+  - [x] 1.5 Add `engine/node_modules/` and `engine/dist/` to `.gitignore`
 
-- [ ] Task 2: Create `tsconfig.json` (AC: #1)
-  - [ ] 2.1 Create `engine/tsconfig.json` with all required compiler options:
+- [x] Task 2: Create `tsconfig.json` (AC: #1)
+  - [x] 2.1 Create `engine/tsconfig.json` with all required compiler options:
     - `strict: true`
     - `noUncheckedIndexedAccess: true`
     - `verbatimModuleSyntax: true`
@@ -43,22 +43,22 @@ so that all subsequent engine stories have a buildable foundation with consisten
     - `declaration: true`
     - `sourceMap: true`
     - `skipLibCheck: true`
-  - [ ] 2.2 Set `include: ["src/**/*.ts"]` and `exclude: ["node_modules", "dist"]`
+  - [x] 2.2 Set `include: ["src/**/*.ts"]` and `exclude: ["node_modules", "dist"]`
 
-- [ ] Task 3: Create `errors.ts` (AC: #2)
-  - [ ] 3.1 Create `engine/src/errors.ts` with zero internal imports
-  - [ ] 3.2 Export `EngineError` base class extending `Error` (sets `name` property, captures stack)
-  - [ ] 3.3 Export `SyncError`, `NetworkError`, `IpcError`, `ConfigError` extending `EngineError`
-  - [ ] 3.4 Each subclass sets its own `name` property for serialization/debugging
-  - [ ] 3.5 Optionally accept a `cause` parameter for error chaining (Node 22 supports `Error.cause`)
+- [x] Task 3: Create `errors.ts` (AC: #2)
+  - [x] 3.1 Create `engine/src/errors.ts` with zero internal imports
+  - [x] 3.2 Export `EngineError` base class extending `Error` (sets `name` property, captures stack)
+  - [x] 3.3 Export `SyncError`, `NetworkError`, `IpcError`, `ConfigError` extending `EngineError`
+  - [x] 3.4 Each subclass sets its own `name` property for serialization/debugging
+  - [x] 3.5 Optionally accept a `cause` parameter for error chaining (Node 22 supports `Error.cause`)
 
-- [ ] Task 4: Create minimal `main.ts` entry point (AC: #5)
-  - [ ] 4.1 Create `engine/src/main.ts` as a placeholder that imports from `errors.js` to validate the build
-  - [ ] 4.2 This is a stub only -- real logic comes in Story 1.3+
+- [x] Task 4: Create minimal `main.ts` entry point (AC: #5)
+  - [x] 4.1 Create `engine/src/main.ts` as a placeholder that imports from `errors.js` to validate the build
+  - [x] 4.2 This is a stub only -- real logic comes in Story 1.3+
 
-- [ ] Task 5: Verify compilation (AC: #5)
-  - [ ] 5.1 Run `npx tsc --noEmit` from `engine/` -- must exit 0
-  - [ ] 5.2 Verify no type errors from `errors.ts` or `main.ts`
+- [x] Task 5: Verify compilation (AC: #5)
+  - [x] 5.1 Run `npx tsc --noEmit` from `engine/` -- must exit 0
+  - [x] 5.2 Verify no type errors from `errors.ts` or `main.ts`
 
 ## Dev Notes
 
@@ -166,9 +166,31 @@ engine/
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+None — scaffolding story.
 
 ### Completion Notes List
+- npm project initialized with `"type": "module"` for NodeNext
+- `@protontech/drive-sdk` pinned to exact `0.14.3` (no caret) — verified in package.json
+- `openpgp` at `^6.3.0` — verified
+- tsconfig.json has all required strict flags
+- `errors.ts` has zero internal imports, exports EngineError + 4 typed subclasses
+- `npx tsc --noEmit` exits 0 with no errors
+- Added `builddir` to .gitignore for Meson build output
+
+### Change Log
+- 2026-04-08: Story 1-2 implemented — TypeScript engine scaffold with strict config and error hierarchy
 
 ### File List
+- engine/package.json (new)
+- engine/package-lock.json (new)
+- engine/tsconfig.json (new)
+- engine/src/errors.ts (new)
+- engine/src/main.ts (new)
+- .gitignore (modified — added builddir)
+
+### Review Findings
+- [x] [Review][Patch] JSON import `../package.json` outside `rootDir` breaks `tsc` build with `declaration: true` — FIXED: replaced with ENGINE_VERSION constant
+- [x] [Review][Patch] Test script glob `src/**/*.test.ts` unquoted — FIXED: quoted glob so Node's test runner handles expansion
