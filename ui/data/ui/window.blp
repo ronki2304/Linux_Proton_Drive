@@ -1,0 +1,43 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveMainWindow: Adw.ApplicationWindow {
+  title: "ProtonDrive";
+
+  content: Adw.ToastOverlay toast_overlay {
+    child: Adw.NavigationSplitView nav_split_view {
+    min-sidebar-width: 220;
+    max-sidebar-width: 220;
+
+    sidebar: Adw.NavigationPage {
+      title: "Sync Pairs";
+
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar {}
+
+        content: Adw.StatusPage {
+          icon-name: "folder-remote-symbolic";
+          title: "No Sync Pairs";
+          description: "Add your first sync pair to get started.";
+        };
+      };
+    };
+
+    content: Adw.NavigationPage {
+      title: "Details";
+
+      child: Adw.ToolbarView {
+        [top]
+        Adw.HeaderBar {}
+
+        content: Adw.StatusPage {
+          icon-name: "document-open-symbolic";
+          title: "Welcome";
+          description: "Select or add a sync pair from the sidebar.";
+        };
+      };
+    };
+    };
+  };
+}

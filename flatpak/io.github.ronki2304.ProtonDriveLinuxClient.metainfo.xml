@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.ronki2304.ProtonDriveLinuxClient</id>
+  <name>ProtonDrive Linux Client</name>
+  <summary>Unofficial open-source sync client for ProtonDrive on Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <description>
+    <p>
+      An unofficial, open-source desktop sync client for ProtonDrive,
+      built with GTK4 and Libadwaita for the GNOME desktop.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.ronki2304.ProtonDriveLinuxClient.desktop</launchable>
+  <url type="homepage">https://github.com/ronki2304/ProtonDriveLinuxClient</url>
+  <content_rating type="oars-1.1" />
+</component>

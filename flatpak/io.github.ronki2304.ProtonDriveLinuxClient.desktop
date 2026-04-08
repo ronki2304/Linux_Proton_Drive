@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=ProtonDrive Linux Client
+Comment=Unofficial open-source sync client for ProtonDrive on Linux
+Exec=protondrive
+Icon=io.github.ronki2304.ProtonDriveLinuxClient
+Terminal=false
+Type=Application
+Categories=Network;FileTransfer;
+StartupNotify=true

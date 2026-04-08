@@ -1,6 +1,6 @@
 # Story 1.1: UI Project Scaffolding
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -24,31 +24,31 @@ so that all subsequent UI stories have a buildable foundation to work from.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Generate GNOME Builder template and restructure (AC: #1, #4)
-  - [ ] 1.1 Use GNOME Builder Python/GTK4/Libadwaita template or create equivalent Meson project manually
-  - [ ] 1.2 Set up directory structure: `ui/src/protondrive/`, `ui/data/ui/`, `ui/data/icons/`
-  - [ ] 1.3 Create `__init__.py`, `main.py`, `window.py` in `ui/src/protondrive/`
-  - [ ] 1.4 Create `window.blp` in `ui/data/ui/`
-  - [ ] 1.5 Configure `meson.build` with GResource compilation, Blueprint compilation, GSettings schema install
-  - [ ] 1.6 Verify `meson setup builddir && meson compile -C builddir` succeeds
+- [x] Task 1: Generate GNOME Builder template and restructure (AC: #1, #4)
+  - [x] 1.1 Use GNOME Builder Python/GTK4/Libadwaita template or create equivalent Meson project manually
+  - [x] 1.2 Set up directory structure: `ui/src/protondrive/`, `ui/data/ui/`, `ui/data/icons/`
+  - [x] 1.3 Create `__init__.py`, `main.py`, `window.py` in `ui/src/protondrive/`
+  - [x] 1.4 Create `window.blp` in `ui/data/ui/`
+  - [x] 1.5 Configure `meson.build` with GResource compilation, Blueprint compilation, GSettings schema install
+  - [x] 1.6 Verify `meson setup builddir && meson compile -C builddir` succeeds
 
-- [ ] Task 2: Set App ID consistently across all files (AC: #2)
-  - [ ] 2.1 GSettings schema: `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.gschema.xml`
-  - [ ] 2.2 GResource paths: `/io/github/ronki2304/ProtonDriveLinuxClient/`
-  - [ ] 2.3 Desktop file: `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.desktop`
-  - [ ] 2.4 AppStream metainfo stub: `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml`
-  - [ ] 2.5 Flatpak manifest stub: `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
-  - [ ] 2.6 App icon SVGs named `io.github.ronki2304.ProtonDriveLinuxClient.svg` and `.symbolic.svg`
+- [x] Task 2: Set App ID consistently across all files (AC: #2)
+  - [x] 2.1 GSettings schema: `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.gschema.xml`
+  - [x] 2.2 GResource paths: `/io/github/ronki2304/ProtonDriveLinuxClient/`
+  - [x] 2.3 Desktop file: `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.desktop`
+  - [x] 2.4 AppStream metainfo stub: `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml`
+  - [x] 2.5 Flatpak manifest stub: `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
+  - [x] 2.6 App icon SVGs named `io.github.ronki2304.ProtonDriveLinuxClient.svg` and `.symbolic.svg`
 
-- [ ] Task 3: Configure main window shell (AC: #3)
-  - [ ] 3.1 In `main.py`: Create `Adw.Application` entry point, enforce dark theme via `AdwStyleManager.set_color_scheme(ADW_COLOR_SCHEME_FORCE_DARK)`, set teal accent `#0D9488` via `AdwAccentColor` API
-  - [ ] 3.2 In `window.blp`: Define `AdwApplicationWindow` with `AdwNavigationSplitView` layout, sidebar placeholder (~220px), detail panel placeholder
-  - [ ] 3.3 In `window.py`: Wire `@Gtk.Template` to `window.blp`, set minimum size 360x480px, default size 780x520px
-  - [ ] 3.4 Initialize single `Gio.Settings` instance in Application class
+- [x] Task 3: Configure main window shell (AC: #3)
+  - [x] 3.1 In `main.py`: Create `Adw.Application` entry point, enforce dark theme via `AdwStyleManager.set_color_scheme(ADW_COLOR_SCHEME_FORCE_DARK)`, set teal accent `#0D9488` via `AdwAccentColor` API
+  - [x] 3.2 In `window.blp`: Define `AdwApplicationWindow` with `AdwNavigationSplitView` layout, sidebar placeholder (~220px), detail panel placeholder
+  - [x] 3.3 In `window.py`: Wire `@Gtk.Template` to `window.blp`, set minimum size 360x480px, default size 780x520px
+  - [x] 3.4 Initialize single `Gio.Settings` instance in Application class
 
-- [ ] Task 4: Create placeholder icon SVGs (AC: #2, #4)
-  - [ ] 4.1 Create `io.github.ronki2304.ProtonDriveLinuxClient.svg` (regular app icon)
-  - [ ] 4.2 Create `io.github.ronki2304.ProtonDriveLinuxClient-symbolic.svg` (symbolic icon)
+- [x] Task 4: Create placeholder icon SVGs (AC: #2, #4)
+  - [x] 4.1 Create `io.github.ronki2304.ProtonDriveLinuxClient.svg` (regular app icon)
+  - [x] 4.2 Create `io.github.ronki2304.ProtonDriveLinuxClient-symbolic.svg` (symbolic icon)
 
 ## Dev Notes
 
@@ -220,9 +220,44 @@ UI test infrastructure (`conftest.py`, Xvfb setup) is established in later stori
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+None — scaffolding story, no runtime debugging needed.
 
 ### Completion Notes List
+- Created full Meson project with Blueprint compilation, GResource bundling, GSettings schema
+- App ID `io.github.ronki2304.ProtonDriveLinuxClient` verified consistent across all 9 file references
+- `Adw.AccentColor.TEAL` confirmed available in Libadwaita 1.8 (GNOME runtime 50)
+- `meson setup builddir && meson compile -C builddir` succeeds cleanly
+- Blueprint compiles `window.blp` → `window.ui` with correct `ProtonDriveMainWindow` template class
+- GResource uses `alias` attribute to map flat build output to `ui/window.ui` resource path
+- No automated tests for this scaffolding story per Dev Notes
+
+### Change Log
+- 2026-04-08: Story 1-1 implemented — full UI project scaffold with Meson build, Blueprint, Flatpak manifest stub
 
 ### File List
+- ui/meson.build (new)
+- ui/src/protondrive/__init__.py (new)
+- ui/src/protondrive/__main__.py (new)
+- ui/src/protondrive/main.py (new)
+- ui/src/protondrive/window.py (new)
+- ui/data/ui/window.blp (new)
+- ui/data/protondrive.gresource.xml (new)
+- ui/data/io.github.ronki2304.ProtonDriveLinuxClient.gschema.xml (new)
+- ui/data/icons/io.github.ronki2304.ProtonDriveLinuxClient.svg (new)
+- ui/data/icons/io.github.ronki2304.ProtonDriveLinuxClient-symbolic.svg (new)
+- flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml (new)
+- flatpak/io.github.ronki2304.ProtonDriveLinuxClient.desktop (new)
+- flatpak/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml (new)
+
+### Review Findings
+- [x] [Review][Decision] `show_main()` reparents template child `nav_split_view` into new ToastOverlay — FIXED: moved ToastOverlay into window.blp, template child in window.py
+- [x] [Review][Patch] No executable entry point — FIXED: added `__main__.py` with entry point
+- [x] [Review][Patch] `install_data` flattens `widgets/` subdirectory — FIXED: split into separate install_data calls with correct subdirectory
+- [x] [Review][Defer] `_on_engine_error` is `pass` — deferred, explicit TODO for Story 5.x
+- [x] [Review][Defer] `on_event("ready")` never dispatched to Application callback — deferred, engine.py bug in story 1-3/1-5
+- [x] [Review][Defer] `start_auth_flow()` dead code — deferred, unreachable method
+- [x] [Review][Defer] Logout/credential exception swallowing — deferred, credential store story scope
+- [x] [Review][Defer] `_on_auth_completed` shows main before engine confirms session — deferred, auth flow story scope

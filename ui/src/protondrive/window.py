@@ -19,6 +19,7 @@ class MainWindow(Adw.ApplicationWindow):
     __gtype_name__ = "ProtonDriveMainWindow"
 
     nav_split_view: Adw.NavigationSplitView = Gtk.Template.Child()
+    toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -29,7 +30,6 @@ class MainWindow(Adw.ApplicationWindow):
         self._auth_window: AuthWindow | None = None
         self._account_header_bar: AccountHeaderBar | None = None
         self._settings_page: SettingsPage | None = None
-        self._toast_overlay: Adw.ToastOverlay | None = None
         self._session_data: dict[str, Any] | None = None
 
     def show_pre_auth(self) -> None:
@@ -53,9 +53,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def show_main(self) -> None:
         """Switch to the main split-view layout."""
-        self._toast_overlay = Adw.ToastOverlay()
-        self._toast_overlay.set_child(self.nav_split_view)
-        self.set_content(self._toast_overlay)
+        self.set_content(self.toast_overlay)
         self._pre_auth_screen = None
         self._cleanup_auth_window()
 
@@ -114,8 +112,7 @@ class MainWindow(Adw.ApplicationWindow):
             f"Signed in as {name} \u2014 your password was never stored by this app"
         )
         toast.set_timeout(5)
-        if self._toast_overlay is not None:
-            self._toast_overlay.add_toast(toast)
+        self.toast_overlay.add_toast(toast)
 
     def _on_sign_in_requested(self, screen: PreAuthScreen) -> None:
         """Handle sign-in button click — start auth flow."""

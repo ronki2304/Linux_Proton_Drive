@@ -72,6 +72,7 @@ gnome.compile_schemas(
 # --- Python sources ---
 python_sources = [
   'src/protondrive/__init__.py',
+  'src/protondrive/__main__.py',
   'src/protondrive/main.py',
   'src/protondrive/window.py',
   'src/protondrive/engine.py',
@@ -79,6 +80,9 @@ python_sources = [
   'src/protondrive/auth.py',
   'src/protondrive/pre_auth.py',
   'src/protondrive/auth_window.py',
+]
+
+python_widget_sources = [
   'src/protondrive/widgets/__init__.py',
   'src/protondrive/widgets/account_header_bar.py',
   'src/protondrive/widgets/settings.py',
@@ -87,6 +91,11 @@ python_sources = [
 install_data(
   python_sources,
   install_dir: py_installation.get_install_dir() / 'protondrive',
+)
+
+install_data(
+  python_widget_sources,
+  install_dir: py_installation.get_install_dir() / 'protondrive' / 'widgets',
 )
 
 # --- Desktop file ---

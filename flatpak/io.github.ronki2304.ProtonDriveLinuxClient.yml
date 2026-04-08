@@ -1,0 +1,32 @@
+app-id: io.github.ronki2304.ProtonDriveLinuxClient
+runtime: org.gnome.Platform
+runtime-version: '50'
+sdk: org.gnome.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.node22
+command: protondrive
+
+build-options:
+  append-path: /usr/lib/sdk/node22/bin
+
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=fallback-x11
+  - --socket=wayland
+  - --device=dri
+
+modules:
+  # UI module — Python/GTK4/Libadwaita
+  - name: protondrive-ui
+    buildsystem: meson
+    sources:
+      - type: dir
+        path: ../ui
+
+  # Engine module — placeholder for TypeScript/Node sync engine
+  - name: protondrive-engine
+    buildsystem: simple
+    build-commands:
+      - echo "Engine module placeholder"
+    sources: []
