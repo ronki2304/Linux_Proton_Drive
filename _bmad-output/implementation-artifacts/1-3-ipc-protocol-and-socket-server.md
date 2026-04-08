@@ -1,6 +1,6 @@
 # Story 1.3: IPC Protocol & Socket Server
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -22,47 +22,38 @@ so that the UI process can establish a reliable communication channel with the s
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `engine/src/errors.ts` — typed error hierarchy (AC: all)
-  - [ ] 1.1 Define `EngineError` base class extending `Error`
-  - [ ] 1.2 Define subclasses: `IpcError`, `SyncError`, `NetworkError`, `ConfigError`
-  - [ ] 1.3 Zero internal imports — this file is imported by all other engine files
+- [x] Task 1: Create `engine/src/errors.ts` — typed error hierarchy (AC: all)
+  - [x] 1.1 Define `EngineError` base class extending `Error`
+  - [x] 1.2 Define subclasses: `IpcError`, `SyncError`, `NetworkError`, `ConfigError`
+  - [x] 1.3 Zero internal imports — this file is imported by all other engine files
 
-- [ ] Task 2: Create `engine/src/ipc.ts` — MessageReader + IPC server + protocol types (AC: #1, #2, #4, #5)
-  - [ ] 2.1 Define IPC message types/interfaces: `IpcCommand`, `IpcResponse`, `IpcPushEvent`
-  - [ ] 2.2 Implement `MessageReader` class with `feed(chunk: Buffer): ParsedMessage[]` method
-    - Accumulates chunks in internal buffer
-    - Reads 4-byte big-endian length prefix
-    - Extracts JSON payload when full message available
-    - Returns array of zero or more complete parsed messages per call
-  - [ ] 2.3 Implement `writeMessage(socket, message)` — serializes JSON, prepends 4-byte big-endian length prefix, writes to socket
-  - [ ] 2.4 Implement `IpcServer` class
-    - Creates `net.Server` bound to Unix socket path
-    - On connection: if `activeConnection !== null`, write `ALREADY_CONNECTED` error and `socket.destroy()` immediately
-    - Wires `data` event through `MessageReader.feed()`
-    - Routes parsed commands to a handler callback
-    - Tracks `activeConnection` reference (set on connect, cleared on close/error)
-  - [ ] 2.5 Implement `shutdown` command handler — closes active connection, closes server, process exits cleanly
-  - [ ] 2.6 Implement `emitReady()` — sends `ready` push event with `{version, protocol_version}` payload on new connection
-  - [ ] 2.7 Socket path resolution: `$XDG_RUNTIME_DIR/io.github.ronki2304.ProtonDriveLinuxClient/sync-engine.sock`
-  - [ ] 2.8 Delete stale socket file before binding (handle `EADDRINUSE`)
-  - [ ] 2.9 `mkdir -p` for socket directory in dev mode (Flatpak sandbox auto-creates it)
+- [x] Task 2: Create `engine/src/ipc.ts` — MessageReader + IPC server + protocol types (AC: #1, #2, #4, #5)
+  - [x] 2.1 Define IPC message types/interfaces: `IpcCommand`, `IpcResponse`, `IpcPushEvent`
+  - [x] 2.2 Implement `MessageReader` class with `feed(chunk: Buffer): ParsedMessage[]` method
+  - [x] 2.3 Implement `writeMessage(socket, message)` — serializes JSON, prepends 4-byte big-endian length prefix, writes to socket
+  - [x] 2.4 Implement `IpcServer` class with single connection enforcement
+  - [x] 2.5 Implement `shutdown` command handler — closes active connection, closes server
+  - [x] 2.6 Implement `emitReady()` via `onConnect` callback — sends `ready` push event on new connection
+  - [x] 2.7 Socket path resolution: `$XDG_RUNTIME_DIR/io.github.ronki2304.ProtonDriveLinuxClient/sync-engine.sock`
+  - [x] 2.8 Delete stale socket file before binding (handle `EADDRINUSE`)
+  - [x] 2.9 `mkdir -p` for socket directory in dev mode
 
-- [ ] Task 3: Create `engine/src/main.ts` — entry point (AC: #1)
-  - [ ] 3.1 Import and instantiate `IpcServer`
-  - [ ] 3.2 Start server, emit `ready` event on first connection
-  - [ ] 3.3 Read `version` from `package.json` (with `{ type: "json" }` import assertion)
-  - [ ] 3.4 Set `protocol_version` to `1`
+- [x] Task 3: Create `engine/src/main.ts` — entry point (AC: #1)
+  - [x] 3.1 Import and instantiate `IpcServer`
+  - [x] 3.2 Start server, emit `ready` event on first connection
+  - [x] 3.3 Read `version` from `package.json` (with `{ type: "json" }` import assertion)
+  - [x] 3.4 Set `protocol_version` to `1`
 
-- [ ] Task 4: Create `engine/src/ipc.test.ts` — comprehensive MessageReader and server tests (AC: #2, #3, #4, #5)
-  - [ ] 4.1 MessageReader: partial message — feed incomplete chunk, verify no messages returned; feed remainder, verify message returned
-  - [ ] 4.2 MessageReader: multiple messages in one chunk — feed buffer containing two complete messages, verify both returned
-  - [ ] 4.3 MessageReader: message split across chunks — split a message at arbitrary byte offset, feed in two calls, verify message returned on second call
-  - [ ] 4.4 MessageReader: zero-length payload — 4-byte header with length 0, verify handled gracefully (error or empty object)
-  - [ ] 4.5 MessageReader: oversized payload — length prefix exceeding max (e.g., >1MB), verify rejection with `IpcError`
-  - [ ] 4.6 Server: `ALREADY_CONNECTED` — connect two clients, verify second receives error and is disconnected
-  - [ ] 4.7 Server: `shutdown` command — send shutdown, verify server closes and process can exit
-  - [ ] 4.8 Server: `ready` event — verify first message after connection is `ready` with `version` and `protocol_version`
-  - [ ] 4.9 Response ID: send command with `id` field, verify response `id` has `_result` suffix
+- [x] Task 4: Create `engine/src/ipc.test.ts` — comprehensive MessageReader and server tests (AC: #2, #3, #4, #5)
+  - [x] 4.1 MessageReader: partial message — 0 messages on incomplete, 1 on remainder
+  - [x] 4.2 MessageReader: multiple messages in one chunk — 2 messages returned
+  - [x] 4.3 MessageReader: message split across chunks — split at byte 6, message returned on second feed
+  - [x] 4.4 MessageReader: zero-length payload — throws IpcError
+  - [x] 4.5 MessageReader: oversized payload — throws IpcError for 2MB
+  - [x] 4.6 Server: ALREADY_CONNECTED — second client receives error and is disconnected
+  - [x] 4.7 Server: shutdown command — server closes
+  - [x] 4.8 Server: ready event — first message has version and protocol_version
+  - [x] 4.9 Response ID: response echoes id with _result suffix
 
 ## Dev Notes
 
@@ -203,12 +194,45 @@ Engine must never write to stdout or stderr — `console.log()` corrupts IPC fra
 - [Source: _bmad-output/planning-artifacts/architecture.md, File structure, lines 481-501]
 - [Source: _bmad-output/project-context.md, full file]
 
+### Review Findings
+
+- [x] [Review][Patch] P1: `JSON.parse` failure in `feed()` throws raw `SyntaxError` (not `IpcError`), drops already-parsed messages in batch [ipc.ts:65] — fixed
+- [x] [Review][Patch] P2: Unhandled promise rejection in `void this.handleCommand()` — crashes process if handler rejects [ipc.ts:209] — fixed
+- [x] [Review][Patch] P3: Race condition — `activeConnection` may change between `await` and `writeMessage` in `handleCommand` [ipc.ts:218-221] — fixed
+- [x] [Review][Patch] P4: `onData` catch block silently swallows errors — violates "engine never swallows errors" constraint [ipc.ts:198-204] — fixed
+- [x] [Review][Patch] P5: No runtime validation that parsed JSON has `type`/`id` fields [ipc.ts:65-66] — fixed
+- [x] [Review][Patch] P6: `shutdown` command does not trigger `process.exit()` — AC 5 requires "exits cleanly" [main.ts:56-81] — fixed
+- [x] [Review][Patch] P7: Empty `after()` hook in tests — assertion failures leak sockets/servers [ipc.test.ts:130-132] — fixed
+- [x] [Review][Patch] P8: Missing test — malformed JSON payload (valid length header, invalid JSON body) [ipc.test.ts] — fixed
+- [x] [Review][Patch] P9: Missing test — command handler that throws/rejects [ipc.test.ts] — fixed
+- [x] [Review][Patch] P10: `main.ts` hardcodes `ENGINE_VERSION` instead of JSON import assertion from `package.json` [main.ts:2] — fixed
+- [x] [Review][Defer] W1: Unbounded buffer growth via slow-drip on local Unix socket [ipc.ts:37] — deferred, local socket only
+- [x] [Review][Defer] W2: `shutdown` bypasses `commandHandler` — no app-level cleanup hook [ipc.ts:198] — deferred, future stories
+- [x] [Review][Defer] W3: `writeMessage` ignores backpressure (`socket.write` return value) [ipc.ts:91] — deferred, MVP volumes
+- [x] [Review][Defer] W4: `encodeMessage` can produce frames exceeding `MAX_PAYLOAD_SIZE` [ipc.ts:79] — deferred, no large messages yet
+- [x] [Review][Defer] W5: `setTimeout`-based test synchronization is fragile [ipc.test.ts] — deferred, works for now
+- [x] [Review][Defer] W6: No test for client disconnect during async command processing [ipc.test.ts] — deferred, complex to test
+
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+None.
 
 ### Completion Notes List
+- `errors.ts` reused from Story 1-2 (already complete)
+- `ipc.ts`: MessageReader with 4-byte BE length prefix framing, IpcServer with single-connection enforcement, ALREADY_CONNECTED rejection, shutdown command, onConnect callback for ready event
+- `main.ts`: reads version from package.json via JSON import assertion, emits ready with protocol_version=1 on connection
+- All 9 tests pass: 5 MessageReader edge cases + 4 server behavior tests
+- Tests run from engine/ dir: `node --import tsx --test src/ipc.test.ts`
+
+### Change Log
+- 2026-04-08: Story 1-3 implemented — IPC protocol with MessageReader, Unix socket server, 9 passing tests
 
 ### File List
+- engine/src/ipc.ts (new)
+- engine/src/ipc.test.ts (new)
+- engine/src/main.ts (modified)
+- engine/src/errors.ts (unchanged — from Story 1-2)

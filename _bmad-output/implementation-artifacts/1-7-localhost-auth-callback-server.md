@@ -1,6 +1,6 @@
 # Story 1.7: Localhost Auth Callback Server
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -22,44 +22,23 @@ so that the embedded browser can complete authentication and pass the token to t
 
 ## Tasks / Subtasks
 
-- [ ] Task 1: Create `AuthCallbackServer` class in `ui/src/protondrive/auth.py` (AC: #1, #5)
-  - [ ] 1.1 Create `AuthCallbackServer` class using `http.server.HTTPServer` and `http.server.BaseHTTPRequestHandler`
-  - [ ] 1.2 Bind to `('127.0.0.1', 0)` -- port 0 tells the OS to assign an ephemeral port
-  - [ ] 1.3 Implement `get_port() -> int` method that returns `self.server.server_address[1]` after bind
-  - [ ] 1.4 Add `from __future__ import annotations` and type hints on all public methods
+- [x] Task 1: Create `AuthCallbackServer` class (AC: #1, #5)
+  - [x] 1.1-1.4 HTTPServer subclass, binds 127.0.0.1:0, get_port(), typed
 
-- [ ] Task 2: Implement `/auth-start` endpoint (AC: #4)
-  - [ ] 2.1 In request handler `do_GET`, match path `/auth-start`
-  - [ ] 2.2 Build redirect URL to `https://accounts.proton.me` with auth parameters
-  - [ ] 2.3 Include `redirect_uri=http://127.0.0.1:{port}/callback` in the redirect URL parameters
-  - [ ] 2.4 Respond with 302 redirect and `Location` header
+- [x] Task 2: Implement `/auth-start` endpoint (AC: #4)
+  - [x] 2.1-2.4 302 redirect to account.proton.me with callback URL
 
-- [ ] Task 3: Implement `/callback` endpoint (AC: #2, #3)
-  - [ ] 3.1 In request handler `do_GET`, match path `/callback`
-  - [ ] 3.2 Extract session token from query parameters
-  - [ ] 3.3 Store token in server instance for retrieval by callback
-  - [ ] 3.4 Respond with 200 and minimal HTML success page (e.g., "Authentication complete. You may close this tab.")
-  - [ ] 3.5 Signal the server to shut down after responding (one-shot behavior)
+- [x] Task 3: Implement `/callback` endpoint (AC: #2, #3)
+  - [x] 3.1-3.5 Token extraction, 200 response, one-shot shutdown
 
-- [ ] Task 4: Implement async lifecycle methods (AC: #1, #2, #3)
-  - [ ] 4.1 Implement `start_async(callback: Callable[[str], None]) -> None` -- starts `serve_forever()` on a `threading.Thread(daemon=True)`
-  - [ ] 4.2 Implement `stop() -> None` -- calls `self.server.shutdown()` then `self.server.server_close()`
-  - [ ] 4.3 After token is received in `/callback`, schedule callback invocation via `GLib.idle_add()` to marshal back to the GTK main thread
-  - [ ] 4.4 After callback invocation, trigger server shutdown automatically (no second request accepted)
+- [x] Task 4: Implement async lifecycle methods (AC: #1, #2, #3)
+  - [x] 4.1-4.4 start_async on daemon thread, GLib.idle_add for GTK thread safety, auto-shutdown
 
-- [ ] Task 5: Reject unexpected requests (AC: #3)
-  - [ ] 5.1 Return 404 for any path other than `/auth-start` and `/callback`
-  - [ ] 5.2 After token received, return 410 Gone or simply refuse connections
-  - [ ] 5.3 Suppress `http.server` default stderr logging (tokens could leak via query string in access logs)
+- [x] Task 5: Reject unexpected requests (AC: #3)
+  - [x] 5.1-5.3 404 for unknown paths, 410 after token, logging suppressed
 
-- [ ] Task 6: Write unit tests in `ui/tests/test_auth.py` (AC: #1-#5)
-  - [ ] 6.1 Test server binds to `127.0.0.1` only (inspect `server_address[0]`)
-  - [ ] 6.2 Test ephemeral port is non-zero after bind
-  - [ ] 6.3 Test `/auth-start` returns 302 with correct `Location` header containing callback URL
-  - [ ] 6.4 Test `/callback?token=...` triggers the token callback with correct value
-  - [ ] 6.5 Test server stops accepting connections after one callback
-  - [ ] 6.6 Test unknown paths return 404
-  - [ ] 6.7 Test token value is never written to stdout/stderr during test execution
+- [x] Task 6: Write unit tests (AC: #1-#5)
+  - [x] 6.1-6.7 All 8 tests pass: localhost binding, ephemeral port, 302 redirect, token capture, one-shot, 404, 400, no token leak
 
 ## Dev Notes
 
@@ -174,9 +153,24 @@ This story is self-contained: it implements and tests the HTTP server class only
 ## Dev Agent Record
 
 ### Agent Model Used
+Claude Opus 4.6 (1M context)
 
 ### Debug Log References
+None.
 
 ### Completion Notes List
+- AuthCallbackServer: HTTPServer subclass bound to 127.0.0.1:0 (ephemeral port)
+- /auth-start: 302 redirect to account.proton.me with callback URL
+- /callback: extracts token from query, responds 200, schedules GLib.idle_add callback, auto-shuts down
+- log_message() overridden to no-op — prevents token leak via access logs
+- One-shot: _token_received flag prevents second callback, server shuts down after first
+- 8 tests pass including token-not-in-stderr verification
+- 45 total UI tests pass (regression verified)
+
+### Change Log
+- 2026-04-08: Story 1-7 implemented — localhost auth callback server with one-shot lifecycle
 
 ### File List
+- ui/src/protondrive/auth.py (new)
+- ui/tests/test_auth.py (new)
+- ui/meson.build (modified — added auth.py)
