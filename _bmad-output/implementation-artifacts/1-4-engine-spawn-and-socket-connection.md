@@ -1,6 +1,6 @@
 # Story 1.4: Engine Spawn & Socket Connection
 
-Status: review
+Status: done
 
 ## Story
 
@@ -227,6 +227,25 @@ All payload fields use `snake_case` — even in TypeScript. The `ready` event pa
 - [Source: _bmad-output/planning-artifacts/architecture.md § UI Queues Commands Before ready]
 - [Source: _bmad-output/planning-artifacts/ux-design-specification.md § Error states, startup flow]
 - [Source: _bmad-output/project-context.md § GTK4 Gotchas, Python rules, IPC protocol]
+
+### Review Findings
+
+- [x] [Review][Patch] P1: `cleanup()` closes connection before shutdown message can be delivered — fixed
+- [x] [Review][Patch] P2: `restart()` does not kill old engine process — fixed
+- [x] [Review][Patch] P3: `_emit_error` ignores `pair_id` parameter — fixed, callback now 3-arg
+- [x] [Review][Patch] P4: `_write_message` does not catch `GLib.Error` on broken pipe — fixed
+- [x] [Review][Patch] P5: `_attempt_connection` uses wrong Gio API — fixed, passes addr directly
+- [x] [Review][Patch] P6: No max payload size check in `_on_length_received` — fixed, 16MB cap
+- [x] [Review][Patch] P7: `send_shutdown()` with no connection does not start kill timer — fixed
+- [x] [Review][Patch] P8: Error class hierarchy — fixed, now uses `AppError`/`IpcError`/`EngineNotFoundError(AppError)`
+- [x] [Review][Patch] P9: `restart()` during active retry loop — fixed, `_retry_timer_id` tracked and cancelled
+- [x] [Review][Patch] P10: `GLib.spawn_async` not wrapped in try/except — fixed
+- [x] [Review][Defer] W1: `read_bytes_async` short reads may cause framing desync [engine.py:213] — deferred, Gio DataInputStream buffers for Unix sockets
+- [x] [Review][Defer] W2: Malformed JSON messages silently dropped with no logging [engine.py:242] — deferred, acceptable for MVP
+- [x] [Review][Defer] W3: Synchronous `client.connect()` instead of `connect_async()` [engine.py:155] — deferred, Unix socket connect is near-instant
+- [x] [Review][Defer] W4: `EngineConnectionError` defined but never raised — removed during P8 error hierarchy fix
+- [x] [Review][Defer] W5: No tests for backoff timing, Gio read loop, or write framing verification — deferred, requires GLib integration testing
+- [x] [Review][Defer] W6: Module-level GI mocks in test_engine.py leak across test session — deferred, works for now
 
 ## Dev Agent Record
 

@@ -27,8 +27,10 @@ _gi_mock.repository.Gio = _gio_mock
 _gi_mock.repository.GLib = _glib_mock
 
 from protondrive.engine import (
+    AppError,
     EngineClient,
     EngineNotFoundError,
+    IpcError,
     SUPPORTED_PROTOCOL_VERSION,
     get_engine_path,
 )
@@ -115,8 +117,8 @@ class TestEngineClient:
 
     def test_spawn_failure_emits_error(self) -> None:
         client = EngineClient()
-        errors: list[tuple[str, bool]] = []
-        client.on_error(lambda msg, fatal: errors.append((msg, fatal)))
+        errors: list[tuple[str, bool, str | None]] = []
+        client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
 
         with (
             patch("protondrive.engine.get_engine_path", return_value=("/usr/bin/node", "/tmp/fake.js")),
@@ -134,8 +136,8 @@ class TestEngineClient:
 
     def test_engine_not_found_error(self) -> None:
         client = EngineClient()
-        errors: list[tuple[str, bool]] = []
-        client.on_error(lambda msg, fatal: errors.append((msg, fatal)))
+        errors: list[tuple[str, bool, str | None]] = []
+        client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
 
         with patch(
             "protondrive.engine.get_engine_path",
@@ -163,8 +165,8 @@ class TestProtocolHandshake:
 
     def test_mismatched_protocol_version_blocks_commands(self) -> None:
         client, mock_output = _make_client_with_conn()
-        errors: list[tuple[str, bool]] = []
-        client.on_error(lambda msg, fatal: errors.append((msg, fatal)))
+        errors: list[tuple[str, bool, str | None]] = []
+        client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
 
         client._on_engine_ready({"version": "0.1.0", "protocol_version": 999})
 
@@ -212,6 +214,7 @@ class TestShutdownLifecycle:
     def test_shutdown_sends_command_and_starts_timer(self) -> None:
         client, mock_output = _make_client_with_conn()
         client._engine_ready = True
+        client._engine_pid = 999
 
         with patch("protondrive.engine.GLib") as mock_glib:
             mock_glib.timeout_add_seconds.return_value = 42
@@ -224,8 +227,8 @@ class TestShutdownLifecycle:
     def test_expected_exit_no_error(self) -> None:
         """If shutdown was initiated, engine exit is expected — no error."""
         client = EngineClient()
-        errors: list[tuple[str, bool]] = []
-        client.on_error(lambda msg, fatal: errors.append((msg, fatal)))
+        errors: list[tuple[str, bool, str | None]] = []
+        client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
         client._shutdown_initiated = True
         client._engine_ready = True
 
@@ -237,8 +240,8 @@ class TestShutdownLifecycle:
     def test_unexpected_crash_shows_fatal_error(self) -> None:
         """If engine exits without shutdown, show fatal error banner."""
         client = EngineClient()
-        errors: list[tuple[str, bool]] = []
-        client.on_error(lambda msg, fatal: errors.append((msg, fatal)))
+        errors: list[tuple[str, bool, str | None]] = []
+        client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
         client._engine_ready = True
         client._shutdown_initiated = False
 
@@ -252,8 +255,8 @@ class TestShutdownLifecycle:
     def test_nonfatal_error_event_not_fatal(self) -> None:
         """Error push event with pair_id is non-fatal."""
         client = EngineClient()
-        errors: list[tuple[str, bool]] = []
-        client.on_error(lambda msg, fatal: errors.append((msg, fatal)))
+        errors: list[tuple[str, bool, str | None]] = []
+        client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
 
         client._dispatch_event({
             "type": "error",
@@ -262,12 +265,13 @@ class TestShutdownLifecycle:
 
         assert len(errors) == 1
         assert errors[0][1] is False  # non-fatal
+        assert errors[0][2] == "abc"  # pair_id forwarded
 
     def test_nonfatal_error_without_pair_id(self) -> None:
         """Error push event without pair_id is still non-fatal."""
         client = EngineClient()
-        errors: list[tuple[str, bool]] = []
-        client.on_error(lambda msg, fatal: errors.append((msg, fatal)))
+        errors: list[tuple[str, bool, str | None]] = []
+        client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
 
         client._dispatch_event({
             "type": "error",

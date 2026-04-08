@@ -17,18 +17,19 @@ TOTAL_TIMEOUT_MS = 10000
 INITIAL_RETRY_DELAY_MS = 100
 SUPPORTED_PROTOCOL_VERSION = 1
 SHUTDOWN_TIMEOUT_SECONDS = 5
+MAX_MESSAGE_SIZE = 16 * 1024 * 1024  # 16 MB
 
 
-class EngineError(Exception):
-    """Base error for engine communication failures."""
+class AppError(Exception):
+    """Base error for all application errors."""
 
 
-class EngineNotFoundError(EngineError):
+class IpcError(AppError):
+    """Error in engine IPC communication."""
+
+
+class EngineNotFoundError(AppError):
     """Engine binary or script not found."""
-
-
-class EngineConnectionError(EngineError):
-    """Failed to connect to engine IPC socket."""
 
 
 def get_engine_path() -> tuple[str, str]:
@@ -75,19 +76,20 @@ class EngineClient:
         self._retry_delay_ms: int = INITIAL_RETRY_DELAY_MS
         self._elapsed_ms: int = 0
         self._event_handlers: dict[str, Any] = {}
-        self._error_callback: Callable[[str, bool], None] | None = None
+        self._error_callback: Callable[[str, bool, str | None], None] | None = None
         self._session_ready_callback: Callable[[dict[str, Any]], None] | None = None
         self._token_expired_callback: Callable[[dict[str, Any]], None] | None = None
         self._protocol_version: int | None = None
         self._shutdown_initiated: bool = False
         self._kill_timer_id: int | None = None
+        self._retry_timer_id: int | None = None
 
     def on_event(self, event_type: str, handler: Any) -> None:
         """Register handler for a specific IPC event type."""
         self._event_handlers[event_type] = handler
 
-    def on_error(self, callback: Callable[[str, bool], None]) -> None:
-        """Register callback for errors. callback(message, is_fatal)."""
+    def on_error(self, callback: Callable[[str, bool, str | None], None]) -> None:
+        """Register callback for errors. callback(message, is_fatal, pair_id)."""
         self._error_callback = callback
 
     def on_session_ready(self, callback: Callable[[dict[str, Any]], None]) -> None:
@@ -119,14 +121,18 @@ class EngineClient:
             )
             return
 
-        success, pid = GLib.spawn_async(
-            working_directory=None,
-            argv=[node_path, engine_script],
-            envp=None,
-            flags=GLib.SpawnFlags.DO_NOT_REAP_CHILD
-            | GLib.SpawnFlags.SEARCH_PATH,
-            child_setup=None,
-        )
+        try:
+            success, pid = GLib.spawn_async(
+                working_directory=None,
+                argv=[node_path, engine_script],
+                envp=None,
+                flags=GLib.SpawnFlags.DO_NOT_REAP_CHILD
+                | GLib.SpawnFlags.SEARCH_PATH,
+                child_setup=None,
+            )
+        except GLib.Error as e:
+            self._emit_error(f"Sync engine failed to start: {e.message}")
+            return
 
         if not success:
             self._emit_error("Sync engine failed to start.")
@@ -139,7 +145,9 @@ class EngineClient:
 
         self._retry_delay_ms = INITIAL_RETRY_DELAY_MS
         self._elapsed_ms = 0
-        GLib.timeout_add(self._retry_delay_ms, self._attempt_connection)
+        self._retry_timer_id = GLib.timeout_add(
+            self._retry_delay_ms, self._attempt_connection
+        )
 
     def _attempt_connection(self) -> bool:
         """Try connecting to the engine socket. Returns False to stop GLib timer."""
@@ -152,14 +160,12 @@ class EngineClient:
         addr = Gio.UnixSocketAddress.new(socket_path)
 
         try:
-            connection = client.connect(
-                Gio.SocketAddressEnumerator.new_from_connectable(addr),
-                None,
-            )
+            connection = client.connect(addr, None)
         except GLib.Error:
             return self._schedule_retry()
 
         self._connection = connection
+        self._retry_timer_id = None
         self._setup_reader()
         return False  # Stop retry timer
 
@@ -171,7 +177,9 @@ class EngineClient:
             return False
 
         self._retry_delay_ms = min(self._retry_delay_ms * 2, MAX_RETRY_DELAY_MS)
-        GLib.timeout_add(self._retry_delay_ms, self._attempt_connection)
+        self._retry_timer_id = GLib.timeout_add(
+            self._retry_delay_ms, self._attempt_connection
+        )
         return False
 
     def _setup_reader(self) -> None:
@@ -210,6 +218,11 @@ class EngineClient:
             return
 
         payload_length = struct.unpack(">I", bytes(data[:4]))[0]
+        if payload_length == 0 or payload_length > MAX_MESSAGE_SIZE:
+            self._emit_error(
+                f"Invalid message size from engine: {payload_length} bytes."
+            )
+            return
         self._input_stream.read_bytes_async(
             payload_length,
             GLib.PRIORITY_DEFAULT,
@@ -329,13 +342,17 @@ class EngineClient:
         payload = json.dumps(msg).encode("utf-8")
         header = struct.pack(">I", len(payload))
         output_stream = self._connection.get_output_stream()
-        output_stream.write_bytes(GLib.Bytes.new(header + payload), None)
+        try:
+            output_stream.write_bytes(GLib.Bytes.new(header + payload), None)
+        except GLib.Error:
+            self._emit_error("Failed to send message to engine.")
 
     def send_shutdown(self) -> None:
         """Send shutdown command to engine and start kill timer."""
         self._shutdown_initiated = True
         if self._connection is not None:
             self._write_message({"type": "shutdown"})
+        if self._engine_pid is not None:
             self._kill_timer_id = GLib.timeout_add_seconds(
                 SHUTDOWN_TIMEOUT_SECONDS, self._kill_engine
             )
@@ -388,10 +405,23 @@ class EngineClient:
             pair_id: If set, error is pair-specific (non-fatal display).
         """
         if self._error_callback is not None:
-            self._error_callback(message, fatal)
+            self._error_callback(message, fatal, pair_id)
 
     def restart(self) -> None:
         """Restart the engine after a fatal error."""
+        # Cancel pending retry timer
+        if self._retry_timer_id is not None:
+            GLib.source_remove(self._retry_timer_id)
+            self._retry_timer_id = None
+
+        # Kill old engine process
+        if self._engine_pid is not None:
+            try:
+                os.kill(self._engine_pid, signal.SIGKILL)
+            except OSError:
+                pass
+            self._engine_pid = None
+
         self._engine_ready = False
         self._protocol_mismatch = False
         self._shutdown_initiated = False
@@ -402,14 +432,10 @@ class EngineClient:
             except GLib.Error:
                 pass
             self._connection = None
+        self._input_stream = None
         self.start()
 
     def cleanup(self) -> None:
         """Clean up resources on app shutdown."""
+        self._input_stream = None
         self.send_shutdown()
-        if self._connection is not None:
-            try:
-                self._connection.close(None)
-            except GLib.Error:
-                pass
-            self._connection = None

@@ -16,3 +16,12 @@
 - W4: `encodeMessage` can produce frames exceeding `MAX_PAYLOAD_SIZE` — no large messages in current scope
 - W5: `setTimeout`-based test synchronization is fragile for CI — works for now
 - W6: No test for client disconnect during async command processing — complex to test, low priority
+
+## Deferred from: code review of 1-4-engine-spawn-and-socket-connection (2026-04-08)
+
+- W1: `read_bytes_async` short reads may cause framing desync — Gio DataInputStream buffers for Unix sockets, low risk
+- W2: Malformed JSON messages silently dropped with no logging — acceptable for MVP, add structured logging later
+- W3: Synchronous `client.connect()` instead of `connect_async()` — Unix socket connect is near-instant on localhost
+- W4: `EngineConnectionError` defined but never raised — dead code, may be used by future stories
+- W5: No tests for backoff timing, Gio read loop, or write framing verification — requires GLib integration testing
+- W6: Module-level GI mocks in test_engine.py leak across test session — works for now, revisit when test suite grows

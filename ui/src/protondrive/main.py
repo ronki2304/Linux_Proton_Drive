@@ -117,7 +117,7 @@ class Application(Adw.Application):
         if self._window is not None:
             self._window.show_pre_auth()
 
-    def _on_engine_error(self, message: str, fatal: bool) -> None:
+    def _on_engine_error(self, message: str, fatal: bool, pair_id: str | None = None) -> None:
         """Handle engine errors."""
         pass  # TODO: Story 5.x error display
 
