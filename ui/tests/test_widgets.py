@@ -3,70 +3,14 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# GI mocks installed by ui/tests/conftest.py at import time.
+import protondrive.widgets.account_header_bar as _mod
 
-
-def _setup_mocks():
-    gi_mock = MagicMock()
-    gtk_mock = MagicMock()
-    adw_mock = MagicMock()
-
-    def template_decorator(**kwargs):
-        def wrapper(cls):
-            return cls
-        return wrapper
-
-    gtk_mock.Template = template_decorator
-    gtk_mock.Template.Child = MagicMock(return_value=MagicMock())
-    gtk_mock.AccessibleProperty = MagicMock()
-    gtk_mock.AccessibleProperty.LABEL = "LABEL"
-    gtk_mock.AccessibleRole = MagicMock()
-    gtk_mock.AccessibleRole.GROUP = "GROUP"
-
-    class FakeBox:
-        def __init__(self, **kwargs):
-            pass
-        def get_style_context(self):
-            return MagicMock()
-        def update_property(self, props, vals):
-            self._accessible_props = props
-            self._accessible_vals = vals
-        def set_accessible_role(self, role):
-            self._accessible_role = role
-        def connect(self, signal, handler):
-            pass
-
-    gtk_mock.Box = FakeBox
-    gtk_mock.Label = MagicMock
-    gtk_mock.LevelBar = MagicMock
-
-    modules = {
-        "gi": gi_mock,
-        "gi.repository": MagicMock(Gtk=gtk_mock, Adw=adw_mock),
-        "gi.repository.Gtk": gtk_mock,
-        "gi.repository.Adw": adw_mock,
-    }
-
-    for mod in list(sys.modules):
-        if "account_header_bar" in mod:
-            del sys.modules[mod]
-
-    saved = {}
-    for key, val in modules.items():
-        saved[key] = sys.modules.get(key)
-        sys.modules[key] = val
-
-    import protondrive.widgets.account_header_bar as mod
-    mod.Gtk = gtk_mock
-    return mod, gtk_mock
-
-
-_mod, _gtk = _setup_mocks()
+_gtk = sys.modules["gi.repository.Gtk"]
 
 
 def _make_bar():

@@ -10,25 +10,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-# Mock gi before importing — SecretPortalStore imports gi.repository.Secret lazily
-_secret_mock = MagicMock()
-_glib_mock = MagicMock()
-_glib_mock.Error = type("GLibError", (Exception,), {})
-
-# Ensure mocks exist in sys.modules regardless of import order
-if "gi" not in sys.modules:
-    sys.modules["gi"] = MagicMock()
-if "gi.repository" not in sys.modules:
-    sys.modules["gi.repository"] = MagicMock()
-
-# Wire our mocks into the gi.repository module (even if already set by other tests)
-sys.modules["gi.repository"].Secret = _secret_mock
-sys.modules["gi.repository"].GLib = _glib_mock
-sys.modules["gi.repository.Secret"] = _secret_mock
-sys.modules["gi.repository.GLib"] = _glib_mock
-sys.modules["gi"].require_version = MagicMock()
+# GI mocks installed by ui/tests/conftest.py at import time. Read the shared
+# Secret/GLib mocks for assertion access — do not reassign sys.modules entries.
+_secret_mock = sys.modules["gi.repository.Secret"]
+_glib_mock = sys.modules["gi.repository.GLib"]
 
 from protondrive.errors import AuthError
 from protondrive.credential_store import (
@@ -46,10 +31,10 @@ class TestSecretPortalStore:
     def setup_method(self) -> None:
         _secret_mock.reset_mock()
         _glib_mock.reset_mock(side_effect=True)
-        _glib_mock.Error = type("GLibError", (Exception,), {})
-        # Re-wire mocks — other test files may overwrite sys.modules["gi.repository"]
-        sys.modules["gi.repository"].Secret = _secret_mock
-        sys.modules["gi.repository"].GLib = _glib_mock
+        # NOTE: do NOT reassign ``_glib_mock.Error`` here. conftest.py
+        # installs a stable real exception class at import time, and
+        # reassigning it per test creates a new class identity that breaks
+        # ``except GLib.Error`` references captured by other test modules.
         # Reset lazy schema so each test gets fresh state
         SecretPortalStore._schema = None
 

@@ -4,81 +4,14 @@ from __future__ import annotations
 
 import inspect
 import sys
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# GI mocks installed by ui/tests/conftest.py at import time.
+import protondrive.auth_window as _mod
 
-
-def _setup_mocks():
-    """Set up GI mocks and import auth_window module."""
-    gi_mock = MagicMock()
-    gobject_mock = MagicMock()
-    gtk_mock = MagicMock()
-    adw_mock = MagicMock()
-    webkit_mock = MagicMock()
-    glib_mock = MagicMock()
-    auth_mock = MagicMock()
-
-    def template_decorator(**kwargs):
-        def wrapper(cls):
-            return cls
-        return wrapper
-
-    gtk_mock.Template = template_decorator
-    gtk_mock.Template.Child = MagicMock(return_value=MagicMock())
-    gtk_mock.Label = MagicMock
-    gtk_mock.Box = MagicMock
-
-    class FakeBin:
-        def __init__(self, **kwargs):
-            pass
-        def emit(self, signal_name, *args):
-            pass
-
-    adw_mock.Bin = FakeBin
-    adw_mock.Banner = MagicMock
-
-    webkit_mock.WebView = MagicMock
-    webkit_mock.LoadEvent = MagicMock()
-    webkit_mock.LoadEvent.COMMITTED = "COMMITTED"
-    webkit_mock.LoadEvent.FINISHED = "FINISHED"
-    webkit_mock.LoadEvent.STARTED = "STARTED"
-
-    modules = {
-        "gi": gi_mock,
-        "gi.repository": MagicMock(
-            Adw=adw_mock, Gtk=gtk_mock, GObject=gobject_mock,
-            WebKit=webkit_mock, GLib=glib_mock,
-        ),
-        "gi.repository.Adw": adw_mock,
-        "gi.repository.Gtk": gtk_mock,
-        "gi.repository.GObject": gobject_mock,
-        "gi.repository.WebKit": webkit_mock,
-        "gi.repository.GLib": glib_mock,
-        "protondrive.auth": auth_mock,
-    }
-
-    # Clean any previous imports of the module under test (not this test file)
-    for mod in list(sys.modules):
-        if mod == "protondrive.auth_window":
-            del sys.modules[mod]
-
-    saved = {}
-    for key, val in modules.items():
-        saved[key] = sys.modules.get(key)
-        sys.modules[key] = val
-
-    import protondrive.auth_window as mod
-    mod.WebKit = webkit_mock
-    mod.AuthCallbackServer = auth_mock.AuthCallbackServer
-
-    return mod, webkit_mock, auth_mock
-
-
-_mod, _webkit, _auth = _setup_mocks()
+_webkit = sys.modules["gi.repository.WebKit"]
 
 
 class TestAuthWindowMetadata:
@@ -226,3 +159,117 @@ class TestWebKitImport:
     def test_no_lambda_in_init(self) -> None:
         source = inspect.getsource(_mod.AuthWindow.__init__)
         assert "lambda" not in source
+
+
+class TestStory20CredentialErrorFlow:
+    """AC7 — credential storage failure surfaces an actionable banner."""
+
+    def test_show_credential_error_reveals_banner(self) -> None:
+        w = _make_window()
+        w._completed = True  # _on_token_received already ran
+        w.show_credential_error()
+        w.error_banner.set_revealed.assert_called_with(True)
+
+    def test_show_credential_error_sets_actionable_title(self) -> None:
+        w = _make_window()
+        w.show_credential_error()
+        w.error_banner.set_title.assert_called_once()
+        title = w.error_banner.set_title.call_args[0][0]
+        assert "credentials" in title.lower()
+
+    def test_show_credential_error_re_arms_completed_flag(self) -> None:
+        w = _make_window()
+        w._completed = True
+        w.show_credential_error()
+        assert w._completed is False
+
+    def test_retry_after_credential_error_restarts_auth_flow(self) -> None:
+        """When the WebView was torn down, retry must restart the whole flow."""
+        w = _make_window()
+        w._webview = None  # torn down by _on_token_received
+        w._auth_start_url = None
+        w._completed = False
+        w.start_auth = MagicMock()
+        w._on_retry_clicked(MagicMock())
+        w.start_auth.assert_called_once()
+
+    def test_retry_with_live_webview_reloads_uri(self) -> None:
+        """Existing behaviour preserved when WebView is still alive."""
+        w = _make_window()
+        w._completed = False
+        w._on_retry_clicked(MagicMock())
+        w._webview.load_uri.assert_called_once_with(
+            "http://127.0.0.1:12345/auth-start"
+        )
+
+
+class TestStory20WebviewSessionClearing:
+    """AC8 — WebKit network session must be cleared before close."""
+
+    def test_token_received_clears_website_data_before_try_close(self) -> None:
+        w = _make_window()
+        wv = w._webview
+        # Build a fresh data_manager mock to assert against.
+        data_manager = MagicMock()
+        wv.get_network_session.return_value.get_website_data_manager.return_value = (
+            data_manager
+        )
+
+        # Track relative call order via side_effects so we can assert that
+        # data was cleared BEFORE the WebView was closed.
+        call_order: list[str] = []
+        data_manager.clear.side_effect = lambda *a, **k: call_order.append("clear")
+        wv.try_close.side_effect = lambda: call_order.append("try_close")
+
+        w._on_token_received("tok")
+
+        data_manager.clear.assert_called_once()
+        wv.try_close.assert_called_once()
+        assert call_order == ["clear", "try_close"], (
+            f"clear must be called BEFORE try_close, got {call_order}"
+        )
+
+    def test_cleanup_clears_website_data(self) -> None:
+        w = _make_window()
+        data_manager = MagicMock()
+        w._webview.get_network_session.return_value.get_website_data_manager.return_value = (
+            data_manager
+        )
+
+        w.cleanup()
+
+        data_manager.clear.assert_called_once()
+
+    def test_cleanup_and_token_received_use_same_helper(self) -> None:
+        """DRY: both paths route through _teardown_webview."""
+        import inspect
+
+        token_src = inspect.getsource(_mod.AuthWindow._on_token_received)
+        cleanup_src = inspect.getsource(_mod.AuthWindow.cleanup)
+        assert "_teardown_webview" in token_src
+        assert "_teardown_webview" in cleanup_src
+
+    def test_clear_session_falls_back_to_webview_data_manager(self) -> None:
+        """If get_network_session raises AttributeError, use the WebView API."""
+        webview = MagicMock(spec=["get_website_data_manager", "try_close"])
+        # spec= restricts attrs — get_network_session does NOT exist.
+        data_manager = MagicMock()
+        webview.get_website_data_manager.return_value = data_manager
+
+        _mod.AuthWindow._clear_webview_session(webview)
+
+        data_manager.clear.assert_called_once()
+
+    def test_clear_session_swallows_glib_error_silently(self) -> None:
+        """Failures during clear must not bubble up — teardown must always finish."""
+        from gi.repository import GLib as _GLib
+
+        webview = MagicMock()
+        data_manager = MagicMock()
+        data_manager.clear.side_effect = _GLib.Error("flush failed")
+        webview.get_network_session.return_value.get_website_data_manager.return_value = (
+            data_manager
+        )
+
+        # Should not raise.
+        _mod.AuthWindow._clear_webview_session(webview)

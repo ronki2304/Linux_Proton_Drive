@@ -9,67 +9,28 @@ from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# GI mocks installed by ui/tests/conftest.py at import time.
+import protondrive.widgets.settings as _mod
+
+_gtk = sys.modules["gi.repository.Gtk"]
+_adw = sys.modules["gi.repository.Adw"]
 
 
-def _setup_mocks():
-    gi_mock = MagicMock()
-    gtk_mock = MagicMock()
-    adw_mock = MagicMock()
-    gdk_mock = MagicMock()
+@pytest.fixture(autouse=True)
+def _stub_alert_dialog():
+    """Replace ``Adw.AlertDialog`` for the duration of each test in this file.
 
-    def template_decorator(**kwargs):
-        def wrapper(cls):
-            return cls
-        return wrapper
-
-    gtk_mock.Template = template_decorator
-    gtk_mock.Template.Child = MagicMock(return_value=MagicMock())
-    gtk_mock.License = MagicMock()
-    gtk_mock.License.MIT_X11 = "MIT_X11"
-    gtk_mock.show_uri = MagicMock()
-
-    class FakeBin:
-        def __init__(self, **kwargs):
-            pass
-        def get_root(self):
-            return MagicMock()
-
-    adw_mock.Bin = FakeBin
-    adw_mock.ActionRow = MagicMock
-    adw_mock.AlertDialog = MagicMock(return_value=MagicMock())
-    adw_mock.ResponseAppearance = MagicMock()
-    adw_mock.ResponseAppearance.DESTRUCTIVE = "DESTRUCTIVE"
-    adw_mock.ResponseAppearance.SUGGESTED = "SUGGESTED"
-
-    gdk_mock.CURRENT_TIME = 0
-
-    modules = {
-        "gi": gi_mock,
-        "gi.repository": MagicMock(Gtk=gtk_mock, Adw=adw_mock, Gdk=gdk_mock),
-        "gi.repository.Gtk": gtk_mock,
-        "gi.repository.Adw": adw_mock,
-        "gi.repository.Gdk": gdk_mock,
-    }
-
-    for mod in list(sys.modules):
-        if "protondrive.widgets.settings" in mod:
-            del sys.modules[mod]
-
-    saved = {}
-    for key, val in modules.items():
-        saved[key] = sys.modules.get(key)
-        sys.modules[key] = val
-
-    import protondrive.widgets.settings as mod
-    mod.Gtk = gtk_mock
-    mod.Adw = adw_mock
-    mod.Gdk = gdk_mock
-
-    return mod, gtk_mock, adw_mock
-
-
-_mod, _gtk, _adw = _setup_mocks()
+    AlertDialog must return a fresh per-call MagicMock so dialog method
+    assertions (add_response, set_response_appearance, etc.) target a single
+    instance. Scoping this to a fixture (instead of a module-level mutation)
+    keeps the patch from leaking into other test modules that import Adw.
+    """
+    original = _adw.AlertDialog
+    _adw.AlertDialog = MagicMock(return_value=MagicMock())
+    try:
+        yield
+    finally:
+        _adw.AlertDialog = original
 
 
 def _make_settings():

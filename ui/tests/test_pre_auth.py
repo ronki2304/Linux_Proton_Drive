@@ -2,60 +2,13 @@
 
 from __future__ import annotations
 
-import importlib
 import inspect
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-# Build mock GI that preserves decorated classes
-_gobject_mock = MagicMock()
-_gtk_mock = MagicMock()
-_adw_mock = MagicMock()
-
-
-def _template_decorator(**kwargs):
-    """Return the class unmodified, like @Gtk.Template does at import time."""
-    def wrapper(cls):
-        return cls
-    return wrapper
-
-
-_gtk_mock.Template = _template_decorator
-_gtk_mock.Template.Child = MagicMock(return_value=MagicMock())
-_gtk_mock.Button = type("Button", (), {})
-
-# Adw.Bin base class
-class _FakeBin:
-    def __init__(self, **kwargs):
-        pass
-
-    def emit(self, signal_name):
-        pass
-
-_adw_mock.Bin = _FakeBin
-
-_gi_mock = MagicMock()
-_gi_mock.require_version = MagicMock()
-
-sys.modules["gi"] = _gi_mock
-sys.modules["gi.repository"] = MagicMock(
-    Adw=_adw_mock, Gtk=_gtk_mock, GObject=_gobject_mock
-)
-sys.modules["gi.repository.Adw"] = _adw_mock
-sys.modules["gi.repository.Gtk"] = _gtk_mock
-sys.modules["gi.repository.GObject"] = _gobject_mock
-
-# Force reimport
-if "protondrive.pre_auth" in sys.modules:
-    del sys.modules["protondrive.pre_auth"]
-if "protondrive.window" in sys.modules:
-    del sys.modules["protondrive.window"]
-
+# GI mocks installed by ui/tests/conftest.py at import time.
 import protondrive.pre_auth as pre_auth_module
 
 

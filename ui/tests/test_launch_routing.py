@@ -2,26 +2,12 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-# Reuse the GI mocks from test_engine if they exist, otherwise set up
-if "gi" not in sys.modules or not hasattr(sys.modules["gi"], "_is_test_mock"):
-    _gi_mock = MagicMock()
-    _gi_mock._is_test_mock = True
-    _gio_mock = MagicMock()
-    _glib_mock = MagicMock()
-
-    sys.modules["gi"] = _gi_mock
-    sys.modules["gi.repository"] = MagicMock()
-    sys.modules["gi.repository.Gio"] = _gio_mock
-    sys.modules["gi.repository.GLib"] = _glib_mock
-
+# GI mocks installed by ui/tests/conftest.py at import time.
 from protondrive.engine import EngineClient
 
 
