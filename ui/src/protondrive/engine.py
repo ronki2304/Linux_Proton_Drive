@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import signal
@@ -73,6 +74,9 @@ class EngineClient:
         self._shutdown_initiated: bool = False
         self._kill_timer_id: int | None = None
         self._retry_timer_id: int | None = None
+        # Reentrancy guard: an error callback raised from inside restart()
+        # (via _emit_error → user callback → restart) must not double-spawn.
+        self._restart_in_progress: bool = False
 
     @property
     def is_running(self) -> bool:
@@ -311,11 +315,24 @@ class EngineClient:
             handler({"type": "ready", "payload": payload})
 
     def _flush_pending_commands(self) -> None:
-        """Send all queued commands."""
+        """Send all queued commands.
+
+        If a write fails mid-flush, ``_write_message`` tears down the
+        connection. The remaining unsent commands are re-queued so a future
+        ``_on_engine_ready`` flush will deliver them — silently dropping them
+        would lose user-visible work (e.g. a token_refresh waiting on the
+        first reconnect).
+        """
         pending = self._pending_commands
         self._pending_commands = []
-        for cmd in pending:
+        for index, cmd in enumerate(pending):
             self._write_message(cmd)
+            if self._connection is None:
+                # The failed command at ``index`` was already attempted; the
+                # error callback decides whether to retry it. Re-queue the
+                # rest so they survive the next reconnect.
+                self._pending_commands.extend(pending[index + 1 :])
+                return
 
     def send_token_refresh(self, token: str) -> None:
         """Send token_refresh command to engine.
@@ -334,7 +351,9 @@ class EngineClient:
             cmd["id"] = str(uuid.uuid4())
 
         if not self._engine_ready:
-            self._pending_commands.append(cmd)
+            # Deep-copy queued commands so caller mutations cannot corrupt
+            # the message that will eventually be flushed to the engine.
+            self._pending_commands.append(copy.deepcopy(cmd))
         else:
             self._write_message(cmd)
 
@@ -349,6 +368,17 @@ class EngineClient:
         try:
             output_stream.write_bytes(GLib.Bytes.new(header + payload), None)
         except GLib.Error:
+            # Tear down stale connection BEFORE notifying the error callback —
+            # the callback may call restart(), which expects clean state. Any
+            # subsequent send_command() will then re-queue rather than write
+            # to a dead socket.
+            try:
+                self._connection.close(None)
+            except GLib.Error:
+                pass
+            self._connection = None
+            self._input_stream = None
+            self._engine_ready = False
             self._emit_error("Failed to send message to engine.")
 
     def send_shutdown(self) -> None:
@@ -414,24 +444,57 @@ class EngineClient:
             self._error_callback(message, fatal, pair_id)
 
     def restart(self) -> None:
-        """Restart the engine after a fatal error."""
-        # Cancel pending retry timer
-        if self._retry_timer_id is not None:
-            GLib.source_remove(self._retry_timer_id)
-            self._retry_timer_id = None
+        """Restart the engine after a fatal error.
 
-        # Kill old engine process
-        if self._engine_pid is not None:
-            try:
-                os.kill(self._engine_pid, signal.SIGKILL)
-            except OSError:
-                pass
-            self._engine_pid = None
+        Reentrant calls (e.g. an error callback that calls restart() while
+        restart() itself is unwinding) are no-ops — a single restart sequence
+        runs to completion.
+        """
+        if self._restart_in_progress:
+            return
+        self._restart_in_progress = True
+        try:
+            # Cancel pending retry timer
+            if self._retry_timer_id is not None:
+                GLib.source_remove(self._retry_timer_id)
+                self._retry_timer_id = None
 
-        self._engine_ready = False
-        self._protocol_mismatch = False
-        self._shutdown_initiated = False
-        self._pending_commands.clear()
+            # Cancel any pending shutdown kill timer — otherwise it fires
+            # SHUTDOWN_TIMEOUT_SECONDS later and SIGKILLs whichever PID is
+            # currently in ``self._engine_pid``, which by then is the NEW
+            # engine spawned by ``self.start()`` below.
+            if self._kill_timer_id is not None:
+                GLib.source_remove(self._kill_timer_id)
+                self._kill_timer_id = None
+
+            # Kill old engine process
+            if self._engine_pid is not None:
+                try:
+                    os.kill(self._engine_pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                self._engine_pid = None
+
+            self._engine_ready = False
+            self._protocol_mismatch = False
+            self._shutdown_initiated = False
+            self._pending_commands.clear()
+            if self._connection is not None:
+                try:
+                    self._connection.close(None)
+                except GLib.Error:
+                    pass
+                self._connection = None
+            self._input_stream = None
+            self.start()
+        finally:
+            self._restart_in_progress = False
+
+    def cleanup(self) -> None:
+        """Clean up resources on app shutdown."""
+        self.send_shutdown()
+        # Explicitly close the underlying connection so Gio releases the
+        # socket fd promptly even if the engine ignores the shutdown command.
         if self._connection is not None:
             try:
                 self._connection.close(None)
@@ -439,9 +502,3 @@ class EngineClient:
                 pass
             self._connection = None
         self._input_stream = None
-        self.start()
-
-    def cleanup(self) -> None:
-        """Clean up resources on app shutdown."""
-        self._input_stream = None
-        self.send_shutdown()
