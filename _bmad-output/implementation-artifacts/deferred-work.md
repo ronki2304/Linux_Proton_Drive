@@ -115,3 +115,13 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - W3: `EngineClient.restart()` reentrancy guard silently drops legitimate second restart request [engine.py:440-470] — matches AC3 explicit spec ("second call is a no-op"). Revisit after Story 2.5 stresses the restart path under real sync failures.
 - W4: Unbounded `writeQueue` under sync_progress storms [engine/src/ipc.ts:236-251] — AC1 met literally ("buffer rather than drop"), but unbounded queueing trades dropped messages for OOM. Defer to Story 2.5: pick cap (length / bytes / coalesce sync_progress) with real load data instead of guessing.
 - W5: `AuthWindow.show_credential_error` hardcodes "keyring" message [auth_window.py:115-117] — misleading for non-libsecret AuthErrors (encrypted-file backend, etc.). Plumbing the actual `str(exc)` would require changing `Application.on_auth_completed` return type from `bool` to `str | None` and rewriting 9 tests. Defer until encrypted-file backend tests are added in a future story, or accept the generic message as adequate.
+
+## Deferred from: code review of 2-1-sqlite-state-database-and-schema (2026-04-09)
+
+- sync_state table has no CRUD methods [state-db.ts] — not in story scope; will be added when sync engine story (2-5) requires it
+- Prepared statements not cached as class fields [state-db.ts] — performance optimization; not a correctness issue at this stage
+- change_type stored as unconstrained TEXT [state-db.ts:65] — valid change type set not yet defined (depends on sync engine story 2-5); add CHECK constraint or TS union then
+- listPairs ordering by TEXT timestamp not UTC-enforced [state-db.ts:107] — caller convention; project uses ISO 8601 UTC throughout
+- dequeue() silently succeeds when id not found [state-db.ts:133] — design choice; run() returns changes count if callers need verification later
+- XDG_DATA_HOME not validated as absolute path [state-db.ts:86] — XDG spec requires absolute; low risk for desktop app with controlled environment
+- No filesystem test for mkdir-p / XDG fallback path [state-db.test.ts] — AC5 scopes tests to :memory:; integration tests can cover later

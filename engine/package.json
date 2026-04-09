@@ -11,9 +11,11 @@
   "license": "MIT",
   "dependencies": {
     "@protontech/drive-sdk": "0.14.3",
+    "better-sqlite3": "^11.10.0",
     "openpgp": "^6.3.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.5.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
