@@ -1,4 +1,4 @@
-import { describe, it, afterEach, beforeEach } from "node:test";
+import { describe, it, afterEach, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import path from "node:path";
@@ -264,6 +264,239 @@ describe("IpcServer", () => {
       (errResponse as IpcPushEvent).payload["error"],
       "handler failed",
     );
+
+    client.destroy();
+  });
+});
+
+// --- Backpressure tests ---
+
+interface FakeSocket {
+  write: ReturnType<typeof mock.fn>;
+  destroyed: boolean;
+  once: (event: string, cb: () => void) => void;
+  on: (event: string, cb: (...args: unknown[]) => void) => void;
+  triggerDrain: () => void;
+  triggerClose: () => void;
+}
+
+function makeFakeSocket(initialWriteResult: boolean): FakeSocket {
+  const drainListeners: Array<() => void> = [];
+  const closeListeners: Array<() => void> = [];
+  const writeFn = mock.fn(() => initialWriteResult);
+  return {
+    write: writeFn,
+    destroyed: false,
+    once(event: string, cb: () => void): void {
+      if (event === "drain") {
+        drainListeners.push(cb);
+      }
+    },
+    on(event: string, cb: (...args: unknown[]) => void): void {
+      if (event === "close") {
+        closeListeners.push(cb as () => void);
+      }
+      // 'data' and 'error' are not exercised by these tests.
+    },
+    triggerDrain(): void {
+      const cbs = drainListeners.splice(0);
+      for (const cb of cbs) cb();
+    },
+    triggerClose(): void {
+      const cbs = closeListeners.splice(0);
+      for (const cb of cbs) cb();
+    },
+  };
+}
+
+function decodeFrame(frame: Buffer): IpcMessage {
+  const reader = new MessageReader();
+  const messages = reader.feed(frame);
+  return messages[0] as IpcMessage;
+}
+
+describe("IpcServer backpressure", () => {
+  it("queues messages when socket.write returns false and flushes FIFO on drain", () => {
+    const fakeSocket = makeFakeSocket(false);
+    const server = new IpcServer(
+      "/tmp/unused-backpressure-test.sock",
+      async () => null,
+    );
+    // Inject the fake socket as the active connection without going through net.
+    (server as unknown as { activeConnection: FakeSocket }).activeConnection =
+      fakeSocket;
+
+    // First write hits a saturated buffer → write() returns false, draining=true.
+    server.emitEvent({ type: "evt1", payload: { n: 1 } });
+    assert.equal(fakeSocket.write.mock.callCount(), 1);
+
+    // Subsequent writes are queued — no more socket.write calls.
+    server.emitEvent({ type: "evt2", payload: { n: 2 } });
+    server.emitEvent({ type: "evt3", payload: { n: 3 } });
+    assert.equal(
+      fakeSocket.write.mock.callCount(),
+      1,
+      "queued messages must not call socket.write while draining",
+    );
+
+    // Switch to writeable mode and trigger drain.
+    fakeSocket.write.mock.mockImplementation(() => true);
+    fakeSocket.triggerDrain();
+
+    // Queue should have flushed in FIFO order.
+    assert.equal(fakeSocket.write.mock.callCount(), 3);
+    const callArgs = fakeSocket.write.mock.calls.map(
+      (c) => c.arguments[0] as Buffer,
+    );
+    const decoded = callArgs.map((buf) => decodeFrame(buf) as IpcPushEvent);
+    assert.equal(decoded[0]?.type, "evt1");
+    assert.equal(decoded[1]?.type, "evt2");
+    assert.equal(decoded[2]?.type, "evt3");
+    assert.equal(decoded[0]?.payload["n"], 1);
+    assert.equal(decoded[1]?.payload["n"], 2);
+    assert.equal(decoded[2]?.payload["n"], 3);
+  });
+
+  it("re-pauses when drain flush is itself saturated", () => {
+    const fakeSocket = makeFakeSocket(false);
+    const server = new IpcServer(
+      "/tmp/unused-backpressure-test-2.sock",
+      async () => null,
+    );
+    (server as unknown as { activeConnection: FakeSocket }).activeConnection =
+      fakeSocket;
+
+    // Saturate then queue two more.
+    server.emitEvent({ type: "a", payload: {} });
+    server.emitEvent({ type: "b", payload: {} });
+    server.emitEvent({ type: "c", payload: {} });
+    server.emitEvent({ type: "d", payload: {} });
+    assert.equal(fakeSocket.write.mock.callCount(), 1);
+
+    // Drain fires: flush "b" (success) then "c" (saturate) — must re-register
+    // drain. "d" stays queued. Note: when socket.write() returns false the
+    // bytes ARE still buffered for delivery; we just stop pushing more.
+    let flushedCount = 0;
+    fakeSocket.write.mock.mockImplementation(() => {
+      flushedCount += 1;
+      return flushedCount <= 1;
+    });
+    fakeSocket.triggerDrain();
+    // 1 (initial) + 2 (b ok, c re-pauses) = 3
+    assert.equal(fakeSocket.write.mock.callCount(), 3);
+
+    // Second drain: write succeeds, "d" flushes.
+    fakeSocket.write.mock.mockImplementation(() => true);
+    fakeSocket.triggerDrain();
+    assert.equal(fakeSocket.write.mock.callCount(), 4);
+
+    const decoded = fakeSocket.write.mock.calls.map(
+      (call) => decodeFrame(call.arguments[0] as Buffer) as IpcPushEvent,
+    );
+    assert.deepEqual(
+      decoded.map((m) => m.type),
+      ["a", "b", "c", "d"],
+    );
+  });
+
+  it("clears the write queue when the connection closes", () => {
+    const fakeSocket = makeFakeSocket(false);
+    const server = new IpcServer(
+      "/tmp/unused-backpressure-test-3.sock",
+      async () => null,
+    );
+    // Route through the real onConnection so the production close handler
+    // is wired up — bypassing it would mean the test fakes its own cleanup
+    // and never exercises the queue/drain reset on `'close'`.
+    (
+      server as unknown as { onConnection: (s: FakeSocket) => void }
+    ).onConnection(fakeSocket);
+
+    // Saturate and queue.
+    server.emitEvent({ type: "evt1", payload: {} });
+    server.emitEvent({ type: "evt2", payload: {} });
+    assert.equal(
+      (server as unknown as { writeQueue: Buffer[] }).writeQueue.length,
+      1,
+      "second event should be queued while draining",
+    );
+    assert.equal(
+      (server as unknown as { draining: boolean }).draining,
+      true,
+    );
+
+    // Fire the real close handler — production code must reset state.
+    fakeSocket.triggerClose();
+
+    assert.equal(
+      (server as unknown as { activeConnection: FakeSocket | null })
+        .activeConnection,
+      null,
+      "close handler must clear activeConnection",
+    );
+    assert.equal(
+      (server as unknown as { writeQueue: Buffer[] }).writeQueue.length,
+      0,
+      "close handler must clear writeQueue",
+    );
+    assert.equal(
+      (server as unknown as { draining: boolean }).draining,
+      false,
+      "close handler must clear draining flag",
+    );
+
+    // After drop, emitEvent should be a silent no-op (no new write attempt).
+    server.emitEvent({ type: "evt3", payload: {} });
+    assert.equal(fakeSocket.write.mock.callCount(), 1);
+  });
+});
+
+// --- Malformed JSON debug logging integration ---
+
+describe("IpcServer debug logging on malformed JSON", () => {
+  let socketPath: string;
+  let server: IpcServer;
+  let cacheDir: string;
+  const originalDebug = process.env["PROTONDRIVE_DEBUG"];
+  const originalCacheHome = process.env["XDG_CACHE_HOME"];
+
+  beforeEach(() => {
+    socketPath = createTempSocketPath();
+    cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), "ipc-debug-log-"));
+    process.env["XDG_CACHE_HOME"] = cacheDir;
+    process.env["PROTONDRIVE_DEBUG"] = "1";
+  });
+
+  afterEach(() => {
+    if (server) server.close();
+    if (originalDebug === undefined) delete process.env["PROTONDRIVE_DEBUG"];
+    else process.env["PROTONDRIVE_DEBUG"] = originalDebug;
+    if (originalCacheHome === undefined) delete process.env["XDG_CACHE_HOME"];
+    else process.env["XDG_CACHE_HOME"] = originalCacheHome;
+    fs.rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  it("writes a debug-log entry when malformed JSON arrives", async () => {
+    server = new IpcServer(socketPath, async () => null);
+    await server.start();
+
+    const client = await connectToSocket(socketPath);
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Send a frame with a valid header length but invalid JSON body.
+    const badJson = Buffer.from("{this is not json");
+    const header = Buffer.alloc(4);
+    header.writeUInt32BE(badJson.length, 0);
+    client.write(Buffer.concat([header, badJson]));
+
+    // Allow the parse error to propagate and debug-log to flush (sync write).
+    await new Promise((r) => setTimeout(r, 100));
+
+    const logPath = path.join(cacheDir, "protondrive", "engine.log");
+    assert.equal(fs.existsSync(logPath), true, "debug log should exist");
+    const contents = fs.readFileSync(logPath, "utf8");
+    assert.match(contents, /IPC parse error/);
+    assert.match(contents, /Invalid JSON in IPC message/);
 
     client.destroy();
   });

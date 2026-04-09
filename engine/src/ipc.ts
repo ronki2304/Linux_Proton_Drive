@@ -3,6 +3,7 @@ import path from "node:path";
 import fs from "node:fs";
 
 import { IpcError, ConfigError } from "./errors.js";
+import { debugLog } from "./debug-log.js";
 
 // --- Protocol Types (snake_case wire format) ---
 
@@ -152,6 +153,11 @@ export class IpcServer {
   private connectionHandler: ConnectionHandler | null = null;
   private closeHandler: (() => void) | null = null;
   private socketPath: string;
+  // Per-connection backpressure state. Reset on close/error.
+  // FIFO order matters: sync_progress events arrive in temporal order and the
+  // UI's progress indicator would jitter if drain re-flushed out-of-order.
+  private writeQueue: Buffer[] = [];
+  private draining: boolean = false;
 
   constructor(socketPath: string, commandHandler: CommandHandler) {
     this.socketPath = socketPath;
@@ -205,6 +211,8 @@ export class IpcServer {
       if (this.activeConnection === socket) {
         this.activeConnection = null;
         this.reader.reset();
+        this.writeQueue = [];
+        this.draining = false;
       }
     });
 
@@ -212,8 +220,52 @@ export class IpcServer {
       if (this.activeConnection === socket) {
         this.activeConnection = null;
         this.reader.reset();
+        this.writeQueue = [];
+        this.draining = false;
       }
     });
+  }
+
+  /** Write a message respecting socket backpressure.
+   *
+   * When ``socket.write(frame)`` returns ``false`` the kernel send buffer is
+   * full. Continuing to write would inflate Node's internal buffer without
+   * bound and eventually drop messages, so subsequent writes are queued and
+   * flushed in FIFO order on the socket's ``'drain'`` event.
+   */
+  private enqueueWrite(message: IpcMessage): void {
+    const socket = this.activeConnection;
+    if (!socket || socket.destroyed) {
+      return;
+    }
+    const frame = encodeMessage(message);
+    if (this.draining) {
+      this.writeQueue.push(frame);
+      return;
+    }
+    const ok = socket.write(frame);
+    if (!ok) {
+      this.draining = true;
+      socket.once("drain", () => this.flushQueue());
+    }
+  }
+
+  private flushQueue(): void {
+    const socket = this.activeConnection;
+    if (!socket || socket.destroyed) {
+      this.writeQueue = [];
+      this.draining = false;
+      return;
+    }
+    while (this.writeQueue.length > 0) {
+      const frame = this.writeQueue.shift()!;
+      const ok = socket.write(frame);
+      if (!ok) {
+        socket.once("drain", () => this.flushQueue());
+        return;
+      }
+    }
+    this.draining = false;
   }
 
   private onData(chunk: Buffer): void {
@@ -221,11 +273,12 @@ export class IpcServer {
     try {
       messages = this.reader.feed(chunk);
     } catch (err: unknown) {
+      const cause = err instanceof Error ? err : new Error(String(err));
+      debugLog("IPC parse error", cause);
       if (this.activeConnection) {
-        const detail = err instanceof Error ? err.message : String(err);
-        writeMessage(this.activeConnection, {
+        this.enqueueWrite({
           type: "error",
-          payload: { code: "PARSE_ERROR", message: detail },
+          payload: { code: "PARSE_ERROR", message: cause.message },
         });
       }
       return;
@@ -234,12 +287,13 @@ export class IpcServer {
     for (const msg of messages) {
       const command = msg as IpcCommand;
       this.handleCommand(command).catch((err: unknown) => {
+        const cause = err instanceof Error ? err : new Error(String(err));
+        debugLog(`IPC command handler error (type=${command.type})`, cause);
         if (this.activeConnection) {
-          const detail = err instanceof Error ? err.message : String(err);
-          writeMessage(this.activeConnection, {
+          this.enqueueWrite({
             type: `${command.type}_result`,
             id: command.id,
-            payload: { error: detail },
+            payload: { error: cause.message },
           });
         }
       });
@@ -254,15 +308,20 @@ export class IpcServer {
 
     const socket = this.activeConnection;
     const response = await this.commandHandler(command);
-    if (response && socket && !socket.destroyed) {
-      writeMessage(socket, response);
+    // Only write if the originating connection is still the active one — a
+    // close-and-reopen during the await would otherwise mis-route the response.
+    if (
+      response &&
+      socket &&
+      socket === this.activeConnection &&
+      !socket.destroyed
+    ) {
+      this.enqueueWrite(response);
     }
   }
 
   emitEvent(event: IpcPushEvent): void {
-    if (this.activeConnection) {
-      writeMessage(this.activeConnection, event);
-    }
+    this.enqueueWrite(event);
   }
 
   close(): void {
