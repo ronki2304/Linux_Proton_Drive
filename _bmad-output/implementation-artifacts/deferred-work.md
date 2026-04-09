@@ -107,3 +107,11 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - W3: `_on_load_changed` hides error banner on any load event including sub-resources — WebKitGTK main-frame only in practice
 - W4: WebView network session not explicitly cleared after auth — `try_close()` + None triggers GC
 - W5: `_on_auth_completed` calls `show_main()` before confirming token processed — sync call currently
+
+## Deferred from: code review of 2-0-tech-debt-cleanup (2026-04-09)
+
+- W1: AC10 — `meson test -C builddir` returns "No tests defined"; `ui/meson.build` has no `test()` declaration — pytest is the canonical UI runner. Defer to Story 2.10 (Flatpak build validation) which will wire the meson `test()` wrapper.
+- W2: `debugLog` parse-error path may theoretically leak frame contents via Node `SyntaxError` message [engine/src/ipc.ts:276] — Node JSON.parse errors do not currently include payload bytes but the format is not a contract. Ratchet later if Node changes message format.
+- W3: `EngineClient.restart()` reentrancy guard silently drops legitimate second restart request [engine.py:440-470] — matches AC3 explicit spec ("second call is a no-op"). Revisit after Story 2.5 stresses the restart path under real sync failures.
+- W4: Unbounded `writeQueue` under sync_progress storms [engine/src/ipc.ts:236-251] — AC1 met literally ("buffer rather than drop"), but unbounded queueing trades dropped messages for OOM. Defer to Story 2.5: pick cap (length / bytes / coalesce sync_progress) with real load data instead of guessing.
+- W5: `AuthWindow.show_credential_error` hardcodes "keyring" message [auth_window.py:115-117] — misleading for non-libsecret AuthErrors (encrypted-file backend, etc.). Plumbing the actual `str(exc)` would require changing `Application.on_auth_completed` return type from `bool` to `str | None` and rewriting 9 tests. Defer until encrypted-file backend tests are added in a future story, or accept the generic message as adequate.

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-08  # Epic 1 retrospective complete
+last_updated: 2026-04-09  # Story 2-0 tech debt cleanup reviewed and approved (Amelia)
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -60,7 +60,8 @@ development_status:
   epic-1-retrospective: done
 
   # Epic 2: First Sync Pair & File Sync
-  epic-2: backlog
+  epic-2: in-progress
+  2-0-tech-debt-cleanup: done
   2-1-sqlite-state-database-and-schema: backlog
   2-2-sdk-driveclient-wrapper: backlog
   2-3-remote-folder-picker-component: backlog
