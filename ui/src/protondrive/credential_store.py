@@ -180,19 +180,26 @@ class EncryptedFileStore(CredentialStore):
     def store_token(self, token: str) -> None:
         from cryptography.fernet import Fernet
 
-        self._dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
 
-        # Generate or read salt
-        if self._salt_path.exists():
-            salt = self._salt_path.read_bytes()
-        else:
-            salt = secrets.token_bytes(32)
-            self._write_secure(self._salt_path, salt)
+            # Generate or read salt
+            if self._salt_path.exists():
+                salt = self._salt_path.read_bytes()
+            else:
+                salt = secrets.token_bytes(32)
+                self._write_secure(self._salt_path, salt)
 
-        key = _derive_key(salt)
-        f = Fernet(key)
-        encrypted = f.encrypt(token.encode("utf-8"))
-        self._write_secure(self._token_path, encrypted)
+            key = _derive_key(salt)
+            f = Fernet(key)
+            encrypted = f.encrypt(token.encode("utf-8"))
+            self._write_secure(self._token_path, encrypted)
+        except OSError as e:
+            # Wrap filesystem failures (disk full, permission denied, etc.) so
+            # CredentialManager.store_token only ever raises AuthError —
+            # matching SecretPortalStore's contract and letting upstream
+            # callers catch a single exception type.
+            raise AuthError("Failed to store credential to encrypted file") from e
 
     def retrieve_token(self) -> str | None:
         from cryptography.fernet import Fernet, InvalidToken

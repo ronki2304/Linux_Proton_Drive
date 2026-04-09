@@ -73,15 +73,26 @@ class Application(Adw.Application):
         if self._window is not None:
             self._window.show_auth_browser()
 
-    def on_auth_completed(self, token: str) -> None:
-        """Called by window after auth browser receives token."""
+    def on_auth_completed(self, token: str) -> bool:
+        """Persist auth token and refresh the engine session.
+
+        Returns:
+            True on success — caller may transition to the main UI.
+            False if credential storage failed — caller MUST keep the auth
+            screen visible so the user can retry. ``wizard-auth-complete`` is
+            NOT set and ``send_token_refresh`` is NOT called on failure.
+        """
         if self._credential_manager is not None:
-            self._credential_manager.store_token(token)
+            try:
+                self._credential_manager.store_token(token)
+            except AuthError:
+                return False
 
         self.settings.set_boolean("wizard-auth-complete", True)
 
         if self._engine is not None:
             self._engine.send_token_refresh(token)
+        return True
 
     def _on_engine_ready(self, message: dict[str, Any]) -> None:
         """Engine connected and protocol validated — check for stored token."""

@@ -161,11 +161,20 @@ class MainWindow(Adw.ApplicationWindow):
             app.start_auth_flow()
 
     def _on_auth_completed(self, auth_window: AuthWindow, token: str) -> None:
-        """Handle auth completion — store token and transition to main UI."""
+        """Handle auth completion — store token and transition to main UI.
+
+        On credential-storage failure the auth screen stays visible with an
+        inline error so the user can retry. show_main() must NOT run unless
+        the application reports success.
+        """
         app = self.get_application()
-        if app is not None and hasattr(app, "on_auth_completed"):
-            app.on_auth_completed(token)
-        self.show_main()
+        if app is None or not hasattr(app, "on_auth_completed"):
+            return
+        success = app.on_auth_completed(token)
+        if success:
+            self.show_main()
+        elif self._auth_window is not None:
+            self._auth_window.show_credential_error()
 
     def _on_logout_confirmed(self) -> None:
         """Execute logout sequence via Application."""
