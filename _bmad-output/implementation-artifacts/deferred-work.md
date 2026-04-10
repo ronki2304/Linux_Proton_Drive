@@ -125,3 +125,13 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - dequeue() silently succeeds when id not found [state-db.ts:133] — design choice; run() returns changes count if callers need verification later
 - XDG_DATA_HOME not validated as absolute path [state-db.ts:86] — XDG spec requires absolute; low risk for desktop app with controlled environment
 - No filesystem test for mkdir-p / XDG fallback path [state-db.test.ts] — AC5 scopes tests to :memory:; integration tests can cover later
+
+## Deferred from: code review of 2-2-sdk-driveclient-wrapper (2026-04-10)
+
+- `NodeWithSameNameExistsValidationError` subclass metadata (`existingNodeUid`, `availableName`, `isUnfinishedUpload`) discarded by the generic `ValidationError` branch in `mapSdkError` [engine/src/sdk.ts:128-130] — Story 2.5 sync engine needs this for rename-on-conflict and resume-unfinished-upload flows. Either extend `mapSdkError` with a dedicated subclass branch + new typed engine error subclass, or expose a richer `cause` extraction helper.
+- `RateLimitedError` retry-after / backoff hint dropped on translation to `NetworkError("Rate limited")` [engine/src/sdk.ts:114-116] — spec explicitly assigns retry handling to Story 3.4. Pick up there with backoff scheduling that consults the original `cause` for the delay.
+- Empty / whitespace `node.name` accepted verbatim and emitted as `RemoteFolder` [engine/src/sdk.ts:217-221] — folder picker UI in Story 2.3 should handle visual fallback (placeholder name, dimmed row); not wrapper validation responsibility.
+- `iterateFolderChildren` throwing mid-stream discards partial results — current `for await ... folders.push` accumulates locally and the catch wipes them [engine/src/sdk.ts:206-224]. Intentional all-or-nothing semantics; degraded-mode partial-list browsing is out of MVP scope.
+- `FileDownloader.getClaimedSizeInBytes()` is exposed by the SDK but unused by `downloadFile` [engine/src/sdk.ts:276-294] — Story 2.5 may want it for progress UI and size sanity checks before writing.
+- Pre-existing `tsc --noEmit` failures: `state-db.ts:1` cannot find module `better-sqlite3`, `main.test.ts:97,144` TS2352 cast errors, `debug-log.ts:76` TS7022 implicit-any. Acknowledged in Dev Agent Record; zero new tsc errors introduced by Story 2.2. Recommend resolving before Story 2.5 starts (Story 2.5 will need state-db).
+- `state-db.test.ts` cannot run because `better-sqlite3` native module is not installed in this dev env (no C toolchain — `gcc`/`make` missing). Either install build tools or migrate to `bun:sqlite` per project CLAUDE.md guidance. Should be unblocked before Story 2.5.

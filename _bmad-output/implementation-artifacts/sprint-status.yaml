@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-09  # Story 2-1 SQLite state database reviewed and approved (Amelia)
+last_updated: 2026-04-10  # Story 2-2 review complete (Amelia) — patches applied, status done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -63,8 +63,9 @@ development_status:
   epic-2: in-progress
   2-0-tech-debt-cleanup: done
   2-1-sqlite-state-database-and-schema: done
-  2-2-sdk-driveclient-wrapper: backlog
+  2-2-sdk-driveclient-wrapper: done
   2-3-remote-folder-picker-component: backlog
+  2-2-5-sdk-live-wiring: backlog  # Sequenced after 2-3, before 2-4 (party-mode split 2026-04-10); blocked on Mary's SRP spike
   2-4-setup-wizard-and-first-pair-creation: backlog
   2-5-sync-engine-core-two-way-sync: backlog
   2-6-inotify-file-watcher-and-change-detection: backlog
