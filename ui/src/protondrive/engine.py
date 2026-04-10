@@ -5,6 +5,7 @@ import json
 import os
 import signal
 import struct
+import sys
 import uuid
 from pathlib import Path
 from typing import Any, Callable
@@ -21,6 +22,7 @@ INITIAL_RETRY_DELAY_MS = 100
 SUPPORTED_PROTOCOL_VERSION = 1
 SHUTDOWN_TIMEOUT_SECONDS = 5
 MAX_MESSAGE_SIZE = 16 * 1024 * 1024  # 16 MB
+DEFAULT_RESPONSE_TIMEOUT_SECONDS: float = 10.0
 
 
 def get_engine_path() -> tuple[str, str]:
@@ -77,6 +79,13 @@ class EngineClient:
         # Reentrancy guard: an error callback raised from inside restart()
         # (via _emit_error → user callback → restart) must not double-spawn.
         self._restart_in_progress: bool = False
+        # Request/response correlation: callers register a callback against a
+        # generated UUID via send_command_with_response; _dispatch_event matches
+        # incoming `_result` events back to the callback. The timeout dict
+        # tracks GLib source-ids so they can be cancelled when the response
+        # arrives (or cleared on restart/cleanup).
+        self._pending_responses: dict[str, Callable[[dict[str, Any]], None]] = {}
+        self._pending_response_timeouts: dict[str, int] = {}
 
     @property
     def is_running(self) -> bool:
@@ -266,6 +275,43 @@ class EngineClient:
         """Route an IPC message to the appropriate handler."""
         event_type = message.get("type", "")
 
+        # IPC convention: events ending in `_result` are RESERVED for command
+        # responses (request/response correlation). Push events MUST NOT use
+        # the `_result` suffix — they would be silently swallowed by this
+        # branch and never reach _event_handlers. If you need a new push
+        # event, name it without the `_result` suffix (see architecture.md
+        # IPC Protocol section for the canonical event list).
+        if event_type.endswith("_result"):
+            request_id = message.get("id")
+            if isinstance(request_id, str):
+                callback = self._pending_responses.pop(request_id, None)
+                if callback is not None:
+                    timeout_source = self._pending_response_timeouts.pop(
+                        request_id, None
+                    )
+                    if timeout_source is not None:
+                        try:
+                            GLib.source_remove(timeout_source)
+                        except Exception:
+                            pass  # source may already have fired
+                    # Coerce non-dict payloads to {} so callbacks can rely on
+                    # the dict contract; an exception inside the callback must
+                    # not propagate into Gio's async dispatcher and kill the
+                    # reader loop — log to stderr instead.
+                    payload = message.get("payload")
+                    if not isinstance(payload, dict):
+                        payload = {}
+                    try:
+                        callback(payload)
+                    except Exception as exc:
+                        print(
+                            f"EngineClient: response callback raised: {exc}",
+                            file=sys.stderr,
+                        )
+                    return
+            # Unrecognized id — silently ignore (race with timeout/cancellation).
+            return
+
         if event_type == "ready":
             self._on_engine_ready(message.get("payload", {}))
             return
@@ -356,6 +402,74 @@ class EngineClient:
             self._pending_commands.append(copy.deepcopy(cmd))
         else:
             self._write_message(cmd)
+
+    def send_command_with_response(
+        self,
+        cmd: dict[str, Any],
+        on_result: Callable[[dict[str, Any]], None],
+        timeout_seconds: float = DEFAULT_RESPONSE_TIMEOUT_SECONDS,
+    ) -> None:
+        """Send a command and invoke ``on_result`` with the response payload.
+
+        The callback fires exactly once with one of:
+        - the response ``payload`` dict on success
+        - ``{"error": "protocol_mismatch"}`` if the engine reported an
+          unsupported protocol version (fired immediately via the main loop)
+        - ``{"error": "timeout"}`` if no response arrives within
+          ``timeout_seconds``
+        - ``{"error": "engine_restarted"}`` if ``restart()`` or ``cleanup()``
+          tears down the connection before a response arrives
+
+        Generates a fresh UUID id (overwriting any caller-provided id) and
+        deep-copies ``cmd`` so caller mutations cannot corrupt the queued
+        command. Sub-second ``timeout_seconds`` is rejected — GLib's
+        seconds-precision timer would floor to 0 and fire immediately.
+        """
+        if timeout_seconds < 1:
+            raise ValueError(
+                f"timeout_seconds must be >= 1 (got {timeout_seconds})"
+            )
+
+        if self._protocol_mismatch:
+            # Fire synchronously via idle so the callback runs in the main
+            # loop rather than the caller's stack frame — avoids surprising
+            # reentrancy in caller signal handlers.
+            GLib.idle_add(on_result, {"error": "protocol_mismatch"})
+            return
+
+        cmd = copy.deepcopy(cmd)
+        cmd["id"] = str(uuid.uuid4())
+        request_id = cmd["id"]
+
+        self._pending_responses[request_id] = on_result
+        timeout_source = GLib.timeout_add_seconds(
+            int(timeout_seconds), self._on_response_timeout, request_id
+        )
+        self._pending_response_timeouts[request_id] = timeout_source
+
+        self.send_command(cmd)
+
+    def _on_response_timeout(self, request_id: str) -> bool:
+        """GLib timeout callback — invoke pending callback with timeout error.
+
+        Story 2.3 originally specified silent discard, but party-mode review
+        of the story (D1) found that combined with the picker's cache-state
+        gate it produced unbounded refetch growth under engine hang. The
+        callback now receives ``{"error": "timeout"}`` so callers (like
+        RemoteFolderPicker) can transition to a terminal state and stop
+        retrying.
+        """
+        callback = self._pending_responses.pop(request_id, None)
+        self._pending_response_timeouts.pop(request_id, None)
+        if callback is not None:
+            try:
+                callback({"error": "timeout"})
+            except Exception as exc:
+                print(
+                    f"EngineClient: response timeout callback raised: {exc}",
+                    file=sys.stderr,
+                )
+        return False  # one-shot
 
     def _write_message(self, msg: dict[str, Any]) -> None:
         """Serialize and write a framed IPC message."""
@@ -479,6 +593,7 @@ class EngineClient:
             self._protocol_mismatch = False
             self._shutdown_initiated = False
             self._pending_commands.clear()
+            self._clear_pending_responses()
             if self._connection is not None:
                 try:
                     self._connection.close(None)
@@ -493,6 +608,7 @@ class EngineClient:
     def cleanup(self) -> None:
         """Clean up resources on app shutdown."""
         self.send_shutdown()
+        self._clear_pending_responses()
         # Explicitly close the underlying connection so Gio releases the
         # socket fd promptly even if the engine ignores the shutdown command.
         if self._connection is not None:
@@ -502,3 +618,31 @@ class EngineClient:
                 pass
             self._connection = None
         self._input_stream = None
+
+    def _clear_pending_responses(self) -> None:
+        """Cancel pending response timeouts and notify callbacks of restart.
+
+        Used by both ``restart()`` and ``cleanup()``. Each pending callback is
+        invoked once with ``{"error": "engine_restarted"}`` so callers can
+        transition to a terminal state — without this, callers like
+        ``RemoteFolderPicker`` would be stuck waiting on a callback that will
+        never arrive (D1 from Story 2.3 review).
+        """
+        for source_id in self._pending_response_timeouts.values():
+            try:
+                GLib.source_remove(source_id)
+            except Exception:
+                pass  # source may already have fired
+        self._pending_response_timeouts.clear()
+        # Snapshot before clearing so callbacks invoked here can safely
+        # re-enter send_command_with_response without iterating a mutating dict.
+        callbacks = list(self._pending_responses.values())
+        self._pending_responses.clear()
+        for callback in callbacks:
+            try:
+                callback({"error": "engine_restarted"})
+            except Exception as exc:
+                print(
+                    f"EngineClient: restart callback raised: {exc}",
+                    file=sys.stderr,
+                )

@@ -6,5 +6,6 @@
     <file alias="ui/auth-window.ui" preprocess="xml-stripblanks">auth-window.ui</file>
     <file alias="ui/account-header-bar.ui" preprocess="xml-stripblanks">account-header-bar.ui</file>
     <file alias="ui/settings.ui" preprocess="xml-stripblanks">settings.ui</file>
+    <file alias="ui/remote-folder-picker.ui" preprocess="xml-stripblanks">remote-folder-picker.ui</file>
   </gresource>
 </gresources>

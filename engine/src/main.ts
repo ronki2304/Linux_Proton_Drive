@@ -1,3 +1,5 @@
+import { pathToFileURL } from "node:url";
+
 import pkg from "../package.json" with { type: "json" };
 import type { IpcCommand, IpcResponse } from "./ipc.js";
 import { IpcServer, resolveSocketPath } from "./ipc.js";
@@ -35,13 +37,23 @@ async function handleTokenRefresh(
   });
 }
 
-async function handleCommand(
+export async function handleCommand(
   command: IpcCommand,
 ): Promise<IpcResponse | null> {
   // token_refresh responds via push events, not _result
   if (command.type === "token_refresh") {
     await handleTokenRefresh(command);
     return null;
+  }
+
+  if (command.type === "list_remote_folders") {
+    // TODO(story-2.2.5): wire to createDriveClient(token).listRemoteFolders(parent_id ?? null)
+    // For now, return an empty list — the UI picker treats this as a valid state.
+    return {
+      type: "list_remote_folders_result",
+      id: command.id,
+      payload: { folders: [] },
+    };
   }
 
   return {
@@ -80,4 +92,12 @@ async function main(): Promise<void> {
   });
 }
 
-void main();
+// Only run main() when this file is executed directly, not when imported by
+// tests. Use pathToFileURL so paths with spaces, symlinks, or characters that
+// require URL encoding are compared correctly against import.meta.url.
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  void main();
+}

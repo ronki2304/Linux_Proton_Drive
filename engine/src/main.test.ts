@@ -12,6 +12,7 @@ import {
   encodeMessage,
   writeMessage,
 } from "./ipc.js";
+import { handleCommand } from "./main.js";
 
 function tmpSocketPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "main-test-"));
@@ -148,5 +149,51 @@ describe("token_refresh command", () => {
     client.destroy();
     server.close();
     fs.rmSync(path.dirname(socketPath), { recursive: true });
+  });
+});
+
+describe("list_remote_folders command", () => {
+  it("returns empty folders[] for parent_id=null", async () => {
+    const cmd: IpcCommand = {
+      type: "list_remote_folders",
+      id: "lrf-1",
+      payload: { parent_id: null },
+    };
+
+    const response = await handleCommand(cmd);
+
+    assert.ok(response, "handleCommand must return a response");
+    assert.equal(response.type, "list_remote_folders_result");
+    assert.equal(response.id, "lrf-1");
+    assert.deepEqual(response.payload, { folders: [] });
+  });
+
+  it("returns empty folders[] for non-null parent_id", async () => {
+    const cmd: IpcCommand = {
+      type: "list_remote_folders",
+      id: "lrf-2",
+      payload: { parent_id: "some-uid" },
+    };
+
+    const response = await handleCommand(cmd);
+
+    assert.ok(response, "handleCommand must return a response");
+    assert.equal(response.type, "list_remote_folders_result");
+    assert.equal(response.id, "lrf-2");
+    assert.deepEqual(response.payload, { folders: [] });
+  });
+
+  it("returns empty folders[] when payload is missing", async () => {
+    const cmd: IpcCommand = {
+      type: "list_remote_folders",
+      id: "lrf-3",
+    };
+
+    const response = await handleCommand(cmd);
+
+    assert.ok(response, "handleCommand must return a response");
+    assert.equal(response.type, "list_remote_folders_result");
+    assert.equal(response.id, "lrf-3");
+    assert.deepEqual(response.payload, { folders: [] });
   });
 });

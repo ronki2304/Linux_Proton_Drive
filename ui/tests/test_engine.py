@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import struct
+import uuid
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -612,3 +613,292 @@ class TestStory20TechDebt:
         assert client._connection is None
         assert len(client._pending_commands) == 1
         assert client._pending_commands[0]["type"] == "third"
+
+
+class TestSendCommandWithResponse:
+    """Story 2-3 AC6 — request/response correlation helper."""
+
+    def _make_client(self) -> EngineClient:
+        """Build an EngineClient that swallows send_command + GLib timer state."""
+        client = EngineClient()
+        # send_command would otherwise queue (engine not ready) — that's fine
+        # for these tests since we're verifying the helper's bookkeeping, not
+        # actual wire writes. The queue is asserted separately when needed.
+        return client
+
+    def test_generates_uuid_id(self) -> None:
+        client = self._make_client()
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.return_value = 1
+            client.send_command_with_response({"type": "list_remote_folders"}, lambda _: None)
+
+        # Exactly one entry registered, with a UUID4 string id.
+        assert len(client._pending_responses) == 1
+        request_id = next(iter(client._pending_responses))
+        # Round-trip: must parse as a UUID without raising.
+        parsed = uuid.UUID(request_id)
+        assert parsed.version == 4
+
+    def test_overwrites_caller_id(self) -> None:
+        client = self._make_client()
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.return_value = 1
+            client.send_command_with_response(
+                {"type": "list_remote_folders", "id": "caller-provided"},
+                lambda _: None,
+            )
+
+        request_id = next(iter(client._pending_responses))
+        assert request_id != "caller-provided"
+
+    def test_callback_fires_on_matching_result(self) -> None:
+        client = self._make_client()
+        received: list[dict] = []
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.return_value = 42
+            client.send_command_with_response(
+                {"type": "list_remote_folders"}, lambda payload: received.append(payload)
+            )
+            request_id = next(iter(client._pending_responses))
+
+            client._dispatch_event(
+                {
+                    "type": "list_remote_folders_result",
+                    "id": request_id,
+                    "payload": {"folders": [{"id": "1", "name": "Documents"}]},
+                }
+            )
+
+        assert len(received) == 1
+        assert received[0]["folders"][0]["name"] == "Documents"
+        # Callback popped after dispatch.
+        assert request_id not in client._pending_responses
+        assert request_id not in client._pending_response_timeouts
+
+    def test_callback_not_fired_for_unknown_id(self) -> None:
+        client = self._make_client()
+        received: list[dict] = []
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.return_value = 1
+            client.send_command_with_response(
+                {"type": "list_remote_folders"}, lambda payload: received.append(payload)
+            )
+            registered_id = next(iter(client._pending_responses))
+
+            client._dispatch_event(
+                {
+                    "type": "list_remote_folders_result",
+                    "id": "different-id",
+                    "payload": {"folders": []},
+                }
+            )
+
+        assert received == []
+        # Original callback still pending — not affected by mismatched id.
+        assert registered_id in client._pending_responses
+
+    def test_two_concurrent_requests(self) -> None:
+        client = self._make_client()
+        a_received: list[dict] = []
+        b_received: list[dict] = []
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            # Distinct timeout source ids per call so source_remove can match.
+            mock_glib.timeout_add_seconds.side_effect = [10, 11]
+            client.send_command_with_response(
+                {"type": "cmd_a"}, lambda payload: a_received.append(payload)
+            )
+            client.send_command_with_response(
+                {"type": "cmd_b"}, lambda payload: b_received.append(payload)
+            )
+
+            ids = list(client._pending_responses.keys())
+            assert len(ids) == 2
+            id_a, id_b = ids[0], ids[1]
+            # Lock the invariant that the helper generates a fresh id per
+            # request — would silently regress if anyone reused ids.
+            assert id_a != id_b
+
+            # Dispatch in reverse registration order — both must fire.
+            client._dispatch_event(
+                {"type": "cmd_b_result", "id": id_b, "payload": {"v": "b"}}
+            )
+            client._dispatch_event(
+                {"type": "cmd_a_result", "id": id_a, "payload": {"v": "a"}}
+            )
+
+        assert a_received == [{"v": "a"}]
+        assert b_received == [{"v": "b"}]
+        assert client._pending_responses == {}
+
+    def test_timeout_invokes_callback_with_error(self) -> None:
+        """D1 fix — timeout invokes callback with {'error': 'timeout'} so
+        callers can transition to a terminal state instead of leaking."""
+        client = self._make_client()
+        received: list[dict] = []
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.return_value = 42
+            client.send_command_with_response(
+                {"type": "list_remote_folders"}, lambda payload: received.append(payload)
+            )
+            request_id = next(iter(client._pending_responses))
+
+            result = client._on_response_timeout(request_id)
+
+        assert result is False  # one-shot — cancel the timer
+        assert request_id not in client._pending_responses
+        assert request_id not in client._pending_response_timeouts
+        assert received == [{"error": "timeout"}]
+
+    def test_restart_clears_pending(self) -> None:
+        client = self._make_client()
+        a_received: list[dict] = []
+        b_received: list[dict] = []
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.side_effect = [101, 102]
+            client.send_command_with_response(
+                {"type": "a"}, lambda payload: a_received.append(payload)
+            )
+            client.send_command_with_response(
+                {"type": "b"}, lambda payload: b_received.append(payload)
+            )
+            assert len(client._pending_responses) == 2
+
+            with patch.object(client, "start"):
+                client.restart()
+
+            # Both timeout sources removed.
+            removed_ids = [c.args[0] for c in mock_glib.source_remove.call_args_list]
+            assert 101 in removed_ids
+            assert 102 in removed_ids
+
+        assert client._pending_responses == {}
+        assert client._pending_response_timeouts == {}
+        # D1 fix — callbacks notified of restart so they can clean up.
+        assert a_received == [{"error": "engine_restarted"}]
+        assert b_received == [{"error": "engine_restarted"}]
+
+    def test_cleanup_clears_pending(self) -> None:
+        client, _ = _make_client_with_conn()
+        client._engine_pid = 999
+        a_received: list[dict] = []
+        b_received: list[dict] = []
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.side_effect = [201, 202, 999]
+            # 201/202 are for the two pending responses; 999 is for send_shutdown's
+            # kill timer (called inside cleanup()).
+            client.send_command_with_response(
+                {"type": "a"}, lambda payload: a_received.append(payload)
+            )
+            client.send_command_with_response(
+                {"type": "b"}, lambda payload: b_received.append(payload)
+            )
+            assert len(client._pending_responses) == 2
+
+            client.cleanup()
+
+            removed_ids = [c.args[0] for c in mock_glib.source_remove.call_args_list]
+            assert 201 in removed_ids
+            assert 202 in removed_ids
+
+        assert client._pending_responses == {}
+        assert client._pending_response_timeouts == {}
+        # D1 fix — callbacks notified of restart so they can clean up.
+        assert a_received == [{"error": "engine_restarted"}]
+        assert b_received == [{"error": "engine_restarted"}]
+
+    def test_protocol_mismatch_fires_callback_synchronously(self) -> None:
+        """D1 fix — protocol mismatch fires callback with error immediately
+        via GLib.idle_add instead of registering a 10-second timeout."""
+        client = self._make_client()
+        client._protocol_mismatch = True
+        received: list[dict] = []
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            client.send_command_with_response(
+                {"type": "list_remote_folders"}, lambda payload: received.append(payload)
+            )
+            # Verify idle_add was called with the protocol_mismatch error and
+            # invoke the scheduled callback to simulate the main loop running.
+            assert mock_glib.idle_add.call_count == 1
+            args = mock_glib.idle_add.call_args.args
+            scheduled_cb = args[0]
+            scheduled_payload = args[1]
+            assert scheduled_payload == {"error": "protocol_mismatch"}
+            scheduled_cb(scheduled_payload)
+            # No timeout was registered.
+            mock_glib.timeout_add_seconds.assert_not_called()
+
+        # No pending response — protocol mismatch returned early.
+        assert client._pending_responses == {}
+        assert client._pending_response_timeouts == {}
+        # No commands queued — protocol mismatch refused the underlying send.
+        assert client._pending_commands == []
+        assert received == [{"error": "protocol_mismatch"}]
+
+    def test_subsecond_timeout_rejected(self) -> None:
+        """timeout_seconds < 1 floors to 0 in GLib.timeout_add_seconds and
+        fires immediately, discarding the callback before any reply arrives."""
+        client = self._make_client()
+
+        with pytest.raises(ValueError, match="timeout_seconds must be >= 1"):
+            client.send_command_with_response(
+                {"type": "list_remote_folders"}, lambda _: None, timeout_seconds=0.5
+            )
+
+    def test_negative_timeout_rejected(self) -> None:
+        client = self._make_client()
+
+        with pytest.raises(ValueError, match="timeout_seconds must be >= 1"):
+            client.send_command_with_response(
+                {"type": "list_remote_folders"}, lambda _: None, timeout_seconds=-1
+            )
+
+    def test_callback_exception_does_not_kill_dispatch(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """A buggy callback must not propagate into Gio's async dispatcher
+        and tear down the read loop. Exception is logged to stderr instead."""
+        client = self._make_client()
+
+        def bad_callback(_payload: dict) -> None:
+            raise RuntimeError("kaboom")
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.return_value = 42
+            client.send_command_with_response({"type": "x"}, bad_callback)
+            request_id = next(iter(client._pending_responses))
+
+            # Must not raise.
+            client._dispatch_event(
+                {"type": "x_result", "id": request_id, "payload": {"v": 1}}
+            )
+
+        captured = capsys.readouterr()
+        assert "response callback raised" in captured.err
+        assert "kaboom" in captured.err
+
+    def test_dispatch_coerces_non_dict_payload_to_empty_dict(self) -> None:
+        """If a malformed engine response carries a non-dict payload (list,
+        None, str), the callback receives an empty dict instead of a non-dict
+        that would crash on .get attribute access."""
+        client = self._make_client()
+        received: list = []
+
+        with patch("protondrive.engine.GLib") as mock_glib:
+            mock_glib.timeout_add_seconds.return_value = 42
+            client.send_command_with_response(
+                {"type": "x"}, lambda payload: received.append(payload)
+            )
+            request_id = next(iter(client._pending_responses))
+
+            client._dispatch_event(
+                {"type": "x_result", "id": request_id, "payload": ["not", "a", "dict"]}
+            )
+
+        assert received == [{}]

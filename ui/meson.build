@@ -48,12 +48,19 @@ blueprints_settings = custom_target(
   command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
 )
 
+blueprints_remote_folder_picker = custom_target(
+  'blueprint-remote-folder-picker',
+  input: files('data/ui/remote-folder-picker.blp'),
+  output: 'remote-folder-picker.ui',
+  command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
+)
+
 # --- GResource bundle ---
 resource_conf = configuration_data()
 gresource = gnome.compile_resources(
   'protondrive-resources',
   'data/protondrive.gresource.xml',
-  dependencies: [blueprints_window, blueprints_pre_auth, blueprints_auth_window, blueprints_account_header_bar, blueprints_settings],
+  dependencies: [blueprints_window, blueprints_pre_auth, blueprints_auth_window, blueprints_account_header_bar, blueprints_settings, blueprints_remote_folder_picker],
   gresource_bundle: true,
   source_dir: [meson.current_build_dir(), 'data'],
   install: true,
@@ -87,6 +94,7 @@ python_widget_sources = [
   'src/protondrive/widgets/__init__.py',
   'src/protondrive/widgets/account_header_bar.py',
   'src/protondrive/widgets/settings.py',
+  'src/protondrive/widgets/remote_folder_picker.py',
 ]
 
 install_data(

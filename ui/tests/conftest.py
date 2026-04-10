@@ -100,6 +100,20 @@ def _build_gi_mocks() -> dict[str, MagicMock]:
     adw.ResponseAppearance.SUGGESTED = "SUGGESTED"
     gdk.CURRENT_TIME = 0
 
+    # Real X11 keysym values — stable ints, used by RemoteFolderPicker key
+    # controller. Without these, key-handler tests would silently compare
+    # MagicMock() == MagicMock() (always False) and pass without testing
+    # anything.
+    gdk.KEY_Escape = 65307
+    gdk.KEY_Tab = 65289
+    gdk.KEY_Return = 65293
+
+    # Used by RemoteFolderPicker._show_popover for set_position() call.
+    gtk.PositionType = MagicMock()
+    gtk.PositionType.BOTTOM = "BOTTOM"
+    gtk.SelectionMode = MagicMock()
+    gtk.SelectionMode.SINGLE = "SINGLE"
+
     repo.Gio = gio
     repo.GLib = glib
     repo.Gtk = gtk

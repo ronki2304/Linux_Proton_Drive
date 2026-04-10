@@ -135,3 +135,7 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - `FileDownloader.getClaimedSizeInBytes()` is exposed by the SDK but unused by `downloadFile` [engine/src/sdk.ts:276-294] — Story 2.5 may want it for progress UI and size sanity checks before writing.
 - Pre-existing `tsc --noEmit` failures: `state-db.ts:1` cannot find module `better-sqlite3`, `main.test.ts:97,144` TS2352 cast errors, `debug-log.ts:76` TS7022 implicit-any. Acknowledged in Dev Agent Record; zero new tsc errors introduced by Story 2.2. Recommend resolving before Story 2.5 starts (Story 2.5 will need state-db).
 - `state-db.test.ts` cannot run because `better-sqlite3` native module is not installed in this dev env (no C toolchain — `gcc`/`make` missing). Either install build tools or migrate to `bun:sqlite` per project CLAUDE.md guidance. Should be unblocked before Story 2.5.
+
+## Deferred from: code review of 2-3-remote-folder-picker-component (2026-04-10)
+
+- `handleCommand` fallback returns `${type}_result` for unknown commands [engine/src/main.ts:57-61] — pre-existing behavior from Story 1.3/1.5. With the new `_result` correlation semantics from Story 2.3, an unknown command type now returns a synthetic `_result` that fires the caller's `send_command_with_response` callback with `{error: "unknown_command"}` instead of an explicit error event. Not introduced by this story; reconsider when generic dispatch table is added (Story 2.5 may introduce one).

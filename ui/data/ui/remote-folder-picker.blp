@@ -1,0 +1,43 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveRemoteFolderPicker: Gtk.Box {
+  orientation: vertical;
+  spacing: 8;
+
+  Gtk.Label header_label {
+    label: "Remote folder";
+    halign: start;
+
+    styles [
+      "heading",
+    ]
+  }
+
+  Gtk.Entry path_entry {
+    placeholder-text: "/Documents";
+    hexpand: true;
+  }
+
+  Gtk.Label path_hint_label {
+    label: "";
+    halign: start;
+    visible: false;
+
+    styles [
+      "caption",
+      "dim-label",
+    ]
+  }
+
+  Gtk.Button browse_link {
+    label: "Browse folders…";
+    sensitive: false;
+    tooltip-text: "Tree browser coming in V1 — type the path manually or pick from suggestions";
+    halign: start;
+
+    styles [
+      "flat",
+    ]
+  }
+}
