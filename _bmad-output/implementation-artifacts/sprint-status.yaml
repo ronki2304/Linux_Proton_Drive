@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-10  # Story 2-3 → done — code review complete: 13 patches applied + D1 resolved via party-mode (timeout/restart/protocol-mismatch now fire callbacks with error payload); UI 208 tests + engine 5 main.test.ts all green
+last_updated: 2026-04-10  # Story 2-2-5 → done — smoke passed; token expiry limitation documented in deferred-work.md
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -65,7 +65,7 @@ development_status:
   2-1-sqlite-state-database-and-schema: done
   2-2-sdk-driveclient-wrapper: done
   2-3-remote-folder-picker-component: done
-  2-2-5-sdk-live-wiring: backlog  # Sequenced after 2-3, before 2-4 (party-mode split 2026-04-10); blocked on Mary's SRP spike
+  2-2-5-sdk-live-wiring: done  # All 11 tasks complete; smoke passed (session_ready fired, main window appeared); token expiry limitation documented
   2-4-setup-wizard-and-first-pair-creation: backlog
   2-5-sync-engine-core-two-way-sync: backlog
   2-6-inotify-file-watcher-and-change-detection: backlog

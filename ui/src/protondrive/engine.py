@@ -43,7 +43,8 @@ def get_engine_path() -> tuple[str, str]:
         Path(__file__).resolve().parent.parent.parent.parent
         / "engine"
         / "dist"
-        / "engine.js"
+        / "src"
+        / "main.js"
     )
     return (node, engine_script)
 
@@ -61,6 +62,7 @@ class EngineClient:
 
     def __init__(self) -> None:
         self._engine_pid: int | None = None
+        self._proc: Gio.Subprocess | None = None
         self._connection: Gio.SocketConnection | None = None
         self._input_stream: Gio.DataInputStream | None = None
         self._engine_ready: bool = False
@@ -131,25 +133,19 @@ class EngineClient:
             return
 
         try:
-            success, pid = GLib.spawn_async(
-                working_directory=None,
-                argv=[node_path, engine_script],
-                envp=None,
-                flags=GLib.SpawnFlags.DO_NOT_REAP_CHILD
-                | GLib.SpawnFlags.SEARCH_PATH,
-                child_setup=None,
-            )
+            launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.NONE)
+            proc = launcher.spawnv([node_path, engine_script])
         except GLib.Error as e:
             self._emit_error(f"Sync engine failed to start: {e.message}")
             return
 
-        if not success:
-            self._emit_error("Sync engine failed to start.")
-            return
+        self._engine_pid = int(proc.get_identifier() or 0)
+        self._proc = proc
 
-        self._engine_pid = pid
-        GLib.child_watch_add(
-            GLib.PRIORITY_DEFAULT, pid, self._on_engine_exit
+        self._retry_delay_ms = INITIAL_RETRY_DELAY_MS
+        self._elapsed_ms = 0
+        self._retry_timer_id = GLib.timeout_add(
+            self._retry_delay_ms, self._attempt_connection
         )
 
         self._retry_delay_ms = INITIAL_RETRY_DELAY_MS

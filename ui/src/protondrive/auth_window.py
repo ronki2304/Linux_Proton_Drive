@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from urllib.parse import urlparse
+import sys
+from urllib.parse import unquote, urlparse
 
 import gi
 
@@ -37,8 +38,13 @@ class AuthWindow(Adw.Bin):
         self._webview: WebKit.WebView | None = None
         self._auth_start_url: str | None = None
         self._completed: bool = False
+        self._cookie_poll_id: int | None = None
 
         self.error_banner.connect("button-clicked", self._on_retry_clicked)
+        # AdwBanner is a GtkOverlay child — GTK4 does not zero out its input
+        # region when revealed=False, so it intercepts all pointer events even
+        # while invisible.  Disable event targeting until the banner is shown.
+        self.error_banner.set_can_target(False)
 
     def start_auth(self) -> None:
         """Start the auth flow: bind server socket, then navigate WebView.
@@ -59,16 +65,36 @@ class AuthWindow(Adw.Bin):
     def _create_webview(self) -> None:
         """Create WebView programmatically (no Blueprint representation)."""
         self._webview = WebKit.WebView()
+
+        # On Wayland the DMA-BUF renderer creates a separate EGL surface whose
+        # input region isn't registered with the compositor, causing pointer
+        # events to be swallowed while keyboard events still arrive via the IME
+        # path.  Disabling hardware acceleration forces the WebView to paint as
+        # a plain GTK texture and receive all events through the normal GTK chain.
+        try:
+            settings = self._webview.get_settings()
+            settings.set_hardware_acceleration_policy(
+                WebKit.HardwareAccelerationPolicy.NEVER
+            )
+            print("[AUTH] HW accel disabled (NEVER)", file=sys.stderr)
+        except Exception as e:
+            print(f"[AUTH] HW accel policy failed: {e}", file=sys.stderr)
+
         self._webview.set_hexpand(True)
         self._webview.set_vexpand(True)
         self._webview.connect("load-changed", self._on_load_changed)
         self._webview.connect("load-failed", self._on_load_failed)
+        self._webview.connect("decide-policy", self._on_decide_policy)
         self.webview_container.append(self._webview)
+        # grab_focus() is a no-op before the widget is realized; fire it on the
+        # first map event instead so it runs after the widget tree is on-screen.
+        self._webview.connect("map", lambda w: w.grab_focus())
 
     def _on_load_changed(self, webview: WebKit.WebView, event: WebKit.LoadEvent) -> None:
         """Update URL label with current domain on navigation."""
         if event in (WebKit.LoadEvent.COMMITTED, WebKit.LoadEvent.FINISHED):
             uri = webview.get_uri()
+            print(f"[AUTH] load-changed event={event.value_nick} uri={uri}", file=sys.stderr)
             if uri:
                 parsed = urlparse(uri)
                 domain = parsed.hostname or ""
@@ -76,8 +102,78 @@ class AuthWindow(Adw.Bin):
                     domain = "Connecting..."
                 self.url_label.set_text(domain)
 
+                # Proton's login page is a SPA — no second load-changed fires
+                # after the user authenticates.  Poll the WebKit cookie store
+                # instead: AUTH-{UID} appears once the session is established.
+                if (
+                    event == WebKit.LoadEvent.FINISHED
+                    and parsed.hostname == "account.proton.me"
+                    and not self._completed
+                    and self._cookie_poll_id is None
+                ):
+                    self._cookie_poll_id = GLib.timeout_add_seconds(
+                        2, self._poll_for_auth_cookie
+                    )
+
             if self.error_banner.get_revealed():
                 self.error_banner.set_revealed(False)
+                self.error_banner.set_can_target(False)
+
+    def _poll_for_auth_cookie(self) -> bool:
+        """Poll the WebKit cookie store for the Proton AUTH-{UID} session cookie.
+
+        Proton's login page is a React SPA — it never triggers a second
+        load-changed event after the user signs in.  Instead we poll the
+        native CookieManager (which sees HttpOnly cookies too) every 2 s.
+        When the AUTH-{UID} cookie appears we extract the AccessToken and
+        hand it to _on_token_received exactly as the localhost callback would.
+        """
+        if self._completed or self._webview is None:
+            self._cookie_poll_id = None
+            return False
+
+        try:
+            network_session = self._webview.get_network_session()
+            cookie_manager = network_session.get_cookie_manager()
+        except Exception:
+            return True  # network session not ready yet — keep trying
+
+        def _on_cookies(manager: WebKit.CookieManager, result: object) -> None:
+            if self._completed:
+                return
+            try:
+                cookies = manager.get_all_cookies_finish(result)  # type: ignore[attr-defined]
+            except Exception as e:
+                print(f"[AUTH] cookie poll error: {e}", file=sys.stderr)
+                return
+            for cookie in cookies:
+                if cookie.get_name().startswith("AUTH-"):
+                    raw = cookie.get_value() or ""
+                    token = unquote(raw)
+                    if token:
+                        print("[AUTH] AUTH cookie found — completing auth", file=sys.stderr)
+                        GLib.idle_add(self._on_token_received, token)
+                    return
+
+        cookie_manager.get_all_cookies(None, _on_cookies)
+        return True  # keep polling until token found or auth completes
+
+    def _on_decide_policy(
+        self,
+        webview: WebKit.WebView,
+        decision: object,
+        decision_type: WebKit.PolicyDecisionType,
+    ) -> bool:
+        """Log all navigation decisions for auth flow debugging."""
+        if decision_type == WebKit.PolicyDecisionType.NAVIGATION_ACTION:
+            try:
+                action = decision.get_navigation_action()  # type: ignore[union-attr]
+                request = action.get_request()
+                uri = request.get_uri()
+                print(f"[AUTH] navigate → {uri}", file=sys.stderr)
+            except Exception:
+                pass
+        return False  # use default policy
 
     def _on_load_failed(
         self,
@@ -87,17 +183,13 @@ class AuthWindow(Adw.Bin):
         error: object,
     ) -> bool:
         """Show error banner with retry option on load failure."""
+        print(f"[AUTH] load-failed uri={uri}", file=sys.stderr)
+        self.error_banner.set_can_target(True)
         self.error_banner.set_revealed(True)
         return True  # Stop default error handler
 
     def _on_retry_clicked(self, banner: Adw.Banner) -> None:
-        """Retry auth by reloading the WebView, or restarting the flow.
-
-        After a credential-storage failure the WebView and auth server have
-        already been torn down by ``_on_token_received``. In that case the
-        retry button must restart the entire auth flow rather than reload a
-        dead WebView.
-        """
+        """Retry auth by reloading the WebView, or restarting the flow."""
         if self._completed:
             return
         if self._webview is not None and self._auth_start_url is not None:
@@ -106,22 +198,17 @@ class AuthWindow(Adw.Bin):
             self.start_auth()
 
     def show_credential_error(self) -> None:
-        """Display an inline credential-storage error and arm the retry path.
-
-        Called when ``Application.on_auth_completed`` could not persist the
-        token (e.g. libsecret unavailable). The auth window stays visible
-        with an actionable error banner so the user can retry the flow.
-        """
+        """Display an inline credential-storage error and arm the retry path."""
         self.error_banner.set_title(
             "Could not save credentials. Check your keyring and try again."
         )
+        self.error_banner.set_can_target(True)
         self.error_banner.set_revealed(True)
-        # Allow _on_retry_clicked to fire — _on_token_received already set
-        # _completed = True before tearing the WebView down.
         self._completed = False
 
     def _on_token_received(self, token: str) -> None:
         """Clean up WebView and auth server, emit auth-completed signal."""
+        print(f"[AUTH] token received (len={len(token)})", file=sys.stderr)
         if self._completed:
             return
         self._completed = True
@@ -135,12 +222,11 @@ class AuthWindow(Adw.Bin):
         self._teardown_webview()
 
     def _teardown_webview(self) -> None:
-        """Stop the auth server and tear down the WebView.
+        """Stop the auth server and tear down the WebView."""
+        if self._cookie_poll_id is not None:
+            GLib.source_remove(self._cookie_poll_id)
+            self._cookie_poll_id = None
 
-        Network session state (cookies, cache, credentials) is flushed
-        BEFORE ``try_close()`` so that the next setup-wizard auth attempt
-        cannot reuse the previous Proton session.
-        """
         if self._auth_server is not None:
             self._auth_server.stop()
             self._auth_server = None
@@ -153,17 +239,7 @@ class AuthWindow(Adw.Bin):
 
     @staticmethod
     def _clear_webview_session(webview: "WebKit.WebView") -> None:
-        """Flush cookies, cache, and credentials for ``webview``.
-
-        WebKit 6.0 (GNOME 50) exposes the website data manager via
-        ``NetworkSession``. Older bindings expose it directly on the WebView,
-        so we fall back if the modern API is unavailable. The clear call is
-        fire-and-forget — the WebView is destroyed immediately after, so the
-        underlying flush only needs to be initiated, not awaited.
-        """
-        # Resolve the type-set enum first; if even this fails (binding does
-        # not expose ``WebsiteDataTypes``) we have no way to call ``clear``,
-        # so bail out silently rather than aborting the entire teardown.
+        """Flush cookies, cache, and credentials for ``webview``."""
         try:
             all_types = WebKit.WebsiteDataTypes.ALL
         except AttributeError:

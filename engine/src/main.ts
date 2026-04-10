@@ -3,38 +3,43 @@ import { pathToFileURL } from "node:url";
 import pkg from "../package.json" with { type: "json" };
 import type { IpcCommand, IpcResponse } from "./ipc.js";
 import { IpcServer, resolveSocketPath } from "./ipc.js";
+import { createDriveClient } from "./sdk.js";
+import type { DriveClient } from "./sdk.js";
 
 const ENGINE_VERSION: string = pkg.version;
 const PROTOCOL_VERSION = 1;
 
 let server: IpcServer;
 
-async function handleTokenRefresh(
-  command: IpcCommand,
-): Promise<void> {
+// Module-level authenticated client. Null until first successful token_refresh.
+// Replaced on re-auth (second token_refresh); set to null on token_expired.
+// Engine is single-connection (enforced by ipc.ts) → single token → single client.
+let driveClient: DriveClient | null = null;
+
+// Test-only: inject a mock DriveClient without hitting real auth.
+// Underscore prefix signals test-only usage — never call from production code.
+export function _setDriveClientForTests(client: DriveClient | null): void {
+  driveClient = client;
+}
+
+async function handleTokenRefresh(command: IpcCommand): Promise<void> {
   const token = command.payload?.["token"] as string | undefined;
 
   if (!token) {
-    server.emitEvent({
-      type: "token_expired",
-      payload: { queued_changes: 0 },
-    });
+    server.emitEvent({ type: "token_expired", payload: { queued_changes: 0 } });
     return;
   }
 
-  // TODO: Story 1-13 will add DriveClient.validateSession(token)
-  // For now, emit session_ready with placeholder data.
-  // The real implementation will call sdk.ts DriveClient wrapper.
-  server.emitEvent({
-    type: "session_ready",
-    payload: {
-      display_name: "",
-      email: "",
-      storage_used: 0,
-      storage_total: 0,
-      plan: "",
-    },
-  });
+  try {
+    const client = createDriveClient(token);
+    const info = await client.validateSession();
+    driveClient = client;
+    server.emitEvent({ type: "session_ready", payload: info as unknown as Record<string, unknown> });
+  } catch {
+    // Any engine error → session invalid
+    driveClient = null;
+    server.emitEvent({ type: "token_expired", payload: { queued_changes: 0 } });
+  }
 }
 
 export async function handleCommand(
@@ -47,13 +52,29 @@ export async function handleCommand(
   }
 
   if (command.type === "list_remote_folders") {
-    // TODO(story-2.2.5): wire to createDriveClient(token).listRemoteFolders(parent_id ?? null)
-    // For now, return an empty list — the UI picker treats this as a valid state.
-    return {
-      type: "list_remote_folders_result",
-      id: command.id,
-      payload: { folders: [] },
-    };
+    if (!driveClient) {
+      return {
+        type: "list_remote_folders_result",
+        id: command.id,
+        payload: { error: "engine_not_ready" },
+      };
+    }
+    const parentId = (command.payload?.["parent_id"] ?? null) as string | null;
+    try {
+      const folders = await driveClient.listRemoteFolders(parentId);
+      return {
+        type: "list_remote_folders_result",
+        id: command.id,
+        payload: { folders },
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "unknown_error";
+      return {
+        type: "list_remote_folders_result",
+        id: command.id,
+        payload: { error: message },
+      };
+    }
   }
 
   return {

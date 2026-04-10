@@ -73,7 +73,7 @@ function formatCause(cause: unknown): string {
     while (current && !seen.has(current) && chain.length < MAX_CAUSE_CHAIN_DEPTH) {
       seen.add(current);
       chain.push(`${current.name}: ${current.message}`);
-      const next = (current as Error & { cause?: unknown }).cause;
+      const next: unknown = (current as Error & { cause?: unknown }).cause;
       current = next instanceof Error ? next : undefined;
     }
     return ` cause=${chain.join(" <- ")}`;

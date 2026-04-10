@@ -44,17 +44,29 @@ class MainWindow(Adw.ApplicationWindow):
 
     def show_auth_browser(self) -> None:
         """Display the embedded auth browser."""
-        if self._auth_window is None:
-            self._auth_window = AuthWindow()
-            self._auth_window.connect(
-                "auth-completed", self._on_auth_completed
-            )
-        self.set_content(self._auth_window)
+        import sys
+        print("[WIN] show_auth_browser called", file=sys.stderr)
         try:
-            self._auth_window.start_auth()
-        except AuthError:
-            self._cleanup_auth_window()
-            self.show_pre_auth()
+            if self._auth_window is None:
+                print("[WIN] creating AuthWindow", file=sys.stderr)
+                self._auth_window = AuthWindow()
+                self._auth_window.connect(
+                    "auth-completed", self._on_auth_completed
+                )
+                print("[WIN] AuthWindow created", file=sys.stderr)
+            self.set_content(self._auth_window)
+            print("[WIN] set_content done", file=sys.stderr)
+            try:
+                self._auth_window.start_auth()
+                print("[WIN] start_auth done", file=sys.stderr)
+            except AuthError as e:
+                print(f"[WIN] start_auth AuthError: {e}", file=sys.stderr)
+                self._cleanup_auth_window()
+                self.show_pre_auth()
+        except Exception as e:
+            import traceback
+            print(f"[WIN] show_auth_browser exception: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
 
     def show_main(self) -> None:
         """Switch to the main split-view layout."""
@@ -156,6 +168,8 @@ class MainWindow(Adw.ApplicationWindow):
 
     def _on_sign_in_requested(self, screen: PreAuthScreen) -> None:
         """Handle sign-in button click — start auth flow."""
+        import sys
+        print("[WIN] sign-in-requested received", file=sys.stderr)
         app = self.get_application()
         if app is not None and hasattr(app, "start_auth_flow"):
             app.start_auth_flow()

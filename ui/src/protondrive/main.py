@@ -46,7 +46,8 @@ class Application(Adw.Application):
 
         style_manager = Adw.StyleManager.get_default()
         style_manager.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
-        style_manager.set_accent_color(Adw.AccentColor.TEAL)
+        if hasattr(style_manager, "set_accent_color") and hasattr(Adw, "AccentColor"):
+            style_manager.set_accent_color(Adw.AccentColor.TEAL)
 
         try:
             self._credential_manager = CredentialManager()
@@ -63,6 +64,16 @@ class Application(Adw.Application):
         if not win:
             self._window = MainWindow(application=self)
             win = self._window
+            # New window: always start at pre-auth as the safe default.  If the
+            # engine is already live (window closed and re-opened without killing
+            # the process), _on_engine_ready won't fire again, so we re-probe
+            # session state here to route the window correctly.
+            self._window.show_pre_auth()
+            if self._engine is not None and self._engine.is_running:
+                token = self._get_stored_token()
+                if token is not None:
+                    self._engine.send_token_refresh(token)
+                    self._start_validation_timeout()
         win.present()
 
         if self._engine is not None and not self._engine.is_running:
@@ -82,20 +93,32 @@ class Application(Adw.Application):
             screen visible so the user can retry. ``wizard-auth-complete`` is
             NOT set and ``send_token_refresh`` is NOT called on failure.
         """
+        import sys
+        print("[DEBUG] on_auth_completed called", file=sys.stderr)
         if self._credential_manager is not None:
             try:
                 self._credential_manager.store_token(token)
-            except AuthError:
+                print("[DEBUG] token stored ok", file=sys.stderr)
+            except AuthError as e:
+                print(f"[DEBUG] store_token failed: {e}", file=sys.stderr)
                 return False
+        else:
+            print("[DEBUG] no credential_manager", file=sys.stderr)
 
-        self.settings.set_boolean("wizard-auth-complete", True)
+        try:
+            self.settings.set_boolean("wizard-auth-complete", True)
+            print("[DEBUG] settings ok", file=sys.stderr)
+        except Exception as e:
+            print(f"[DEBUG] settings error: {e}", file=sys.stderr)
 
         if self._engine is not None:
             self._engine.send_token_refresh(token)
+            print("[DEBUG] token_refresh sent", file=sys.stderr)
         return True
 
     def _on_engine_ready(self, message: dict[str, Any]) -> None:
         """Engine connected and protocol validated — check for stored token."""
+        print("[APP] engine ready", file=sys.stderr)
         token = self._get_stored_token()
 
         if token is not None:
