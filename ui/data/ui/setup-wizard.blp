@@ -1,0 +1,111 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveSetupWizard: Gtk.Box {
+  orientation: vertical;
+
+  Adw.HeaderBar header_bar {
+    [start]
+    Gtk.Button back_button {
+      label: "Back";
+      visible: true;
+    }
+
+    title-widget: Adw.WindowTitle {
+      title: "Set Up Sync";
+    };
+  }
+
+  Gtk.Stack wizard_stack {
+    vexpand: true;
+
+    Gtk.StackPage {
+      name: "folder_selection";
+
+      child: Gtk.Box {
+        orientation: vertical;
+        spacing: 16;
+        margin-top: 24;
+        margin-bottom: 24;
+        margin-start: 24;
+        margin-end: 24;
+
+        Gtk.Button choose_local_button {
+          label: "Choose local folder…";
+          halign: start;
+        }
+
+        Gtk.Label local_path_label {
+          label: "No folder selected";
+          halign: start;
+          wrap: true;
+
+          styles [
+            "dim-label",
+          ]
+        }
+
+        Gtk.Box remote_picker_box {
+          orientation: vertical;
+        }
+
+        Gtk.Label error_label {
+          label: "";
+          halign: start;
+          visible: false;
+          wrap: true;
+
+          styles [
+            "error",
+          ]
+        }
+
+        Gtk.Spinner spinner {
+          visible: false;
+          halign: end;
+        }
+
+        Gtk.Button create_pair_button {
+          label: "Create Pair";
+          sensitive: false;
+          halign: end;
+
+          styles [
+            "suggested-action",
+          ]
+        }
+      };
+    }
+
+    Gtk.StackPage {
+      name: "syncing_confirmation";
+
+      child: Adw.StatusPage syncing_page {
+        title: "You're Syncing!";
+        icon-name: "emblem-ok-symbolic";
+
+        child: Gtk.Box {
+          orientation: vertical;
+          spacing: 16;
+          halign: center;
+
+          Gtk.Label sync_summary_label {
+            label: "";
+            halign: center;
+            wrap: true;
+          }
+
+          Gtk.Button done_button {
+            label: "Go to main window";
+            halign: center;
+
+            styles [
+              "suggested-action",
+              "pill",
+            ]
+          }
+        };
+      };
+    }
+  }
+}

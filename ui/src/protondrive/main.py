@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 import sys
 from typing import Any
 
 import gi
+import yaml
 
 gi.require_version("Adw", "1")
 gi.require_version("Gtk", "4.0")
@@ -33,6 +35,7 @@ class Application(Adw.Application):
         self._credential_manager: CredentialManager | None = None
         self._window: MainWindow | None = None
         self._token_validation_timer_id: int | None = None
+        self._cached_session_data: dict[str, Any] | None = None
 
     @property
     def settings(self) -> Gio.Settings:
@@ -155,11 +158,47 @@ class Application(Adw.Application):
         return False
 
     def _on_session_ready(self, payload: dict[str, Any]) -> None:
-        """Token validated — show main window with account info."""
+        """Token validated — route to wizard or main window based on pair config."""
         self._cancel_validation_timeout()
-        if self._window is not None:
+        self._cached_session_data = payload
+        if self._window is None:
+            return
+        if self._has_configured_pairs():
             self._window.show_main()
             self._window.on_session_ready(payload)
+        else:
+            self._window.show_setup_wizard(self._engine)
+
+    def _has_configured_pairs(self) -> bool:
+        """Return True if config.yaml contains at least one sync pair."""
+        return len(self._read_config_pairs()) > 0
+
+    def _read_config_pairs(self) -> list[dict[str, Any]]:
+        """Read and parse $XDG_CONFIG_HOME/protondrive/config.yaml, return pairs list.
+
+        Returns [] on any failure (missing file, parse error, wrong schema).
+        """
+        try:
+            xdg_config = os.environ.get(
+                "XDG_CONFIG_HOME", os.path.expanduser("~/.config")
+            )
+            config_path = os.path.join(xdg_config, "protondrive", "config.yaml")
+            with open(config_path, "r") as f:
+                data = yaml.safe_load(f)
+            if not isinstance(data, dict):
+                return []
+            pairs = data.get("pairs", [])
+            if not isinstance(pairs, list):
+                return []
+            return pairs
+        except Exception:
+            return []
+
+    def _on_wizard_complete(self, pair_id: str) -> None:
+        """Called by window after wizard creates a pair — transition to main view."""
+        if self._window is not None:
+            self._window.show_main()
+            self._window.on_session_ready(self._cached_session_data or {})
 
     def _on_token_expired(self, payload: dict[str, Any]) -> None:
         """Token expired at launch — route to pre-auth silently (no error)."""

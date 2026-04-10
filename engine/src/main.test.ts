@@ -1,4 +1,4 @@
-import { describe, it, mock, afterEach } from "node:test";
+import { describe, it, mock, afterEach, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import fs from "node:fs";
@@ -12,8 +12,9 @@ import {
   encodeMessage,
   writeMessage,
 } from "./ipc.js";
-import { handleCommand, _setDriveClientForTests } from "./main.js";
+import { handleCommand, _setDriveClientForTests, _setStateDbForTests } from "./main.js";
 import type { DriveClient } from "./sdk.js";
+import { StateDb } from "./state-db.js";
 
 function tmpSocketPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "main-test-"));
@@ -254,5 +255,149 @@ describe("list_remote_folders command", () => {
     assert.equal(response.type, "list_remote_folders_result");
     assert.equal(response.id, "lrf-error");
     assert.deepEqual(response.payload, { error: "network timeout" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// add_pair tests
+// ---------------------------------------------------------------------------
+describe("add_pair command", () => {
+  let tmpDir: string;
+  let origXdg: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "add-pair-test-"));
+    origXdg = process.env["XDG_CONFIG_HOME"];
+    process.env["XDG_CONFIG_HOME"] = tmpDir;
+    _setStateDbForTests(new StateDb(":memory:"));
+  });
+
+  afterEach(() => {
+    _setDriveClientForTests(null);
+    _setStateDbForTests(undefined);
+    if (origXdg === undefined) {
+      delete process.env["XDG_CONFIG_HOME"];
+    } else {
+      process.env["XDG_CONFIG_HOME"] = origXdg;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("success: driveClient set, valid payload → add_pair_result with pair_id (UUID format)", async () => {
+    const mockClient = {
+      listRemoteFolders: mock.fn(async () => []),
+    } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+
+    const cmd: IpcCommand = {
+      type: "add_pair",
+      id: "ap-happy",
+      payload: { local_path: "/home/user/Docs", remote_path: "/Documents" },
+    };
+
+    const response = await handleCommand(cmd);
+
+    assert.ok(response);
+    assert.equal(response.type, "add_pair_result");
+    assert.equal(response.id, "ap-happy");
+    assert.ok("pair_id" in response.payload, "response must have pair_id");
+    const pairId = response.payload["pair_id"] as string;
+    // UUID v4 format
+    assert.match(pairId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+  });
+
+  it("missing local_path → invalid_payload", async () => {
+    const mockClient = {
+      listRemoteFolders: mock.fn(async () => []),
+    } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+
+    const cmd: IpcCommand = {
+      type: "add_pair",
+      id: "ap-no-local",
+      payload: { remote_path: "/Documents" },
+    };
+
+    const response = await handleCommand(cmd);
+    assert.ok(response);
+    assert.equal(response.type, "add_pair_result");
+    assert.deepEqual(response.payload, { error: "invalid_payload" });
+  });
+
+  it("missing remote_path → invalid_payload", async () => {
+    const mockClient = {
+      listRemoteFolders: mock.fn(async () => []),
+    } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+
+    const cmd: IpcCommand = {
+      type: "add_pair",
+      id: "ap-no-remote",
+      payload: { local_path: "/home/user/Docs" },
+    };
+
+    const response = await handleCommand(cmd);
+    assert.ok(response);
+    assert.equal(response.type, "add_pair_result");
+    assert.deepEqual(response.payload, { error: "invalid_payload" });
+  });
+
+  it("driveClient null → engine_not_ready", async () => {
+    // driveClient already null from module init / afterEach reset
+    const cmd: IpcCommand = {
+      type: "add_pair",
+      id: "ap-not-ready",
+      payload: { local_path: "/home/user/Docs", remote_path: "/Documents" },
+    };
+
+    const response = await handleCommand(cmd);
+    assert.ok(response);
+    assert.equal(response.type, "add_pair_result");
+    assert.deepEqual(response.payload, { error: "engine_not_ready" });
+  });
+
+  it("stateDb undefined (driveClient set) → engine_not_ready", async () => {
+    const mockClient = {
+      listRemoteFolders: mock.fn(async () => []),
+    } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    _setStateDbForTests(undefined);
+
+    const cmd: IpcCommand = {
+      type: "add_pair",
+      id: "ap-no-statedb",
+      payload: { local_path: "/home/user/Docs", remote_path: "/Documents" },
+    };
+
+    const response = await handleCommand(cmd);
+    assert.ok(response);
+    assert.equal(response.type, "add_pair_result");
+    assert.deepEqual(response.payload, { error: "engine_not_ready" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// get_status tests
+// ---------------------------------------------------------------------------
+describe("get_status command", () => {
+  beforeEach(() => {
+    _setStateDbForTests(new StateDb(":memory:"));
+  });
+
+  afterEach(() => {
+    _setStateDbForTests(undefined);
+  });
+
+  it("returns pairs:[] and online:true when no pairs exist", async () => {
+    const cmd: IpcCommand = {
+      type: "get_status",
+      id: "gs-empty",
+    };
+
+    const response = await handleCommand(cmd);
+    assert.ok(response);
+    assert.equal(response.type, "get_status_result");
+    assert.equal(response.id, "gs-empty");
+    assert.deepEqual(response.payload, { pairs: [], online: true });
   });
 });

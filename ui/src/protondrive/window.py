@@ -8,6 +8,7 @@ from protondrive.auth_window import AuthWindow
 from protondrive.errors import AuthError
 from protondrive.pre_auth import PreAuthScreen
 from protondrive.widgets.account_header_bar import AccountHeaderBar
+from protondrive.widgets.setup_wizard import SetupWizard
 from protondrive.widgets.settings import SettingsPage
 
 APP_ID = "io.github.ronki2304.ProtonDriveLinuxClient"
@@ -31,6 +32,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._auth_window: AuthWindow | None = None
         self._account_header_bar: AccountHeaderBar | None = None
         self._settings_page: SettingsPage | None = None
+        self._setup_wizard: SetupWizard | None = None
         self._session_data: dict[str, Any] | None = None
 
     def show_pre_auth(self) -> None:
@@ -72,7 +74,28 @@ class MainWindow(Adw.ApplicationWindow):
         """Switch to the main split-view layout."""
         self.set_content(self.toast_overlay)
         self._pre_auth_screen = None
+        self._setup_wizard = None
         self._cleanup_auth_window()
+
+    def show_setup_wizard(self, engine_client: Any) -> None:
+        """Display the setup wizard as the window content."""
+        self._setup_wizard = SetupWizard(
+            engine_client=engine_client,
+            on_pair_created=self._on_wizard_pair_created,
+            on_back=self._on_wizard_back,
+        )
+        self.set_content(self._setup_wizard)
+
+    def _on_wizard_pair_created(self, pair_id: str) -> None:
+        """Forward pair creation event to Application."""
+        app = self.get_application()
+        if app is not None and hasattr(app, "_on_wizard_complete"):
+            app._on_wizard_complete(pair_id)
+
+    def _on_wizard_back(self) -> None:
+        """Navigate back to pre-auth screen."""
+        self._setup_wizard = None
+        self.show_pre_auth()
 
     def clear_session(self) -> None:
         """Clear cached session data on logout."""

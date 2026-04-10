@@ -5,6 +5,9 @@ import type { IpcCommand, IpcResponse } from "./ipc.js";
 import { IpcServer, resolveSocketPath } from "./ipc.js";
 import { createDriveClient } from "./sdk.js";
 import type { DriveClient } from "./sdk.js";
+import { StateDb } from "./state-db.js";
+import type { SyncPair } from "./state-db.js";
+import { writeConfigYaml } from "./config.js";
 
 const ENGINE_VERSION: string = pkg.version;
 const PROTOCOL_VERSION = 1;
@@ -16,10 +19,19 @@ let server: IpcServer;
 // Engine is single-connection (enforced by ipc.ts) → single token → single client.
 let driveClient: DriveClient | null = null;
 
+// Module-level state database. Undefined until main() initialises it.
+let stateDb: StateDb | undefined;
+
 // Test-only: inject a mock DriveClient without hitting real auth.
 // Underscore prefix signals test-only usage — never call from production code.
 export function _setDriveClientForTests(client: DriveClient | null): void {
   driveClient = client;
+}
+
+// Test-only: inject a StateDb instance for add_pair / get_status tests.
+// Underscore prefix signals test-only usage — never call from production code.
+export function _setStateDbForTests(db: StateDb | undefined): void {
+  stateDb = db;
 }
 
 async function handleTokenRefresh(command: IpcCommand): Promise<void> {
@@ -77,6 +89,103 @@ export async function handleCommand(
     }
   }
 
+  if (command.type === "add_pair") {
+    if (!driveClient || !stateDb) {
+      return {
+        type: "add_pair_result",
+        id: command.id,
+        payload: { error: "engine_not_ready" },
+      };
+    }
+
+    const localPath = command.payload?.["local_path"] as string | undefined;
+    const remotePath = command.payload?.["remote_path"] as string | undefined;
+
+    if (!localPath || !remotePath) {
+      return {
+        type: "add_pair_result",
+        id: command.id,
+        payload: { error: "invalid_payload" },
+      };
+    }
+
+    // Resolve remote_id: best-effort match of first path segment against root folders.
+    // Falls back to "" on any error — Story 2.5 resolves on first sync.
+    let remoteId = "";
+    try {
+      const rootFolders = await driveClient.listRemoteFolders(null);
+      const firstSegment = remotePath.replace(/^\//, "").split("/")[0] ?? "";
+      const match = rootFolders.find((f) => f.name === firstSegment);
+      if (match !== undefined) {
+        remoteId = match.id;
+      }
+    } catch {
+      // network / SDK error — fall back to ""
+      // TODO(story-2.5): resolve remote_id for unresolved/nested paths
+    }
+
+    const pairId = crypto.randomUUID();
+    const pair: SyncPair = {
+      pair_id: pairId,
+      local_path: localPath,
+      remote_path: remotePath,
+      remote_id: remoteId,
+      created_at: new Date().toISOString(),
+    };
+
+    try {
+      stateDb.insertPair(pair);
+    } catch {
+      return {
+        type: "add_pair_result",
+        id: command.id,
+        payload: { error: "db_write_failed" },
+      };
+    }
+
+    try {
+      writeConfigYaml(pairId, localPath, remotePath);
+    } catch {
+      // YAML write failed — attempt rollback of DB insert
+      try {
+        stateDb.deletePair(pairId);
+      } catch (rollbackErr) {
+        console.error(`add_pair: rollback deletePair failed: ${rollbackErr}`);
+      }
+      return {
+        type: "add_pair_result",
+        id: command.id,
+        payload: { error: "config_write_failed" },
+      };
+    }
+
+    return {
+      type: "add_pair_result",
+      id: command.id,
+      payload: { pair_id: pairId },
+    };
+  }
+
+  if (command.type === "get_status") {
+    if (!stateDb) {
+      return {
+        type: "get_status_result",
+        id: command.id,
+        payload: { error: "engine_not_ready" },
+      };
+    }
+    const pairs = stateDb.listPairs().map((p) => ({
+      pair_id: p.pair_id,
+      local_path: p.local_path,
+      remote_path: p.remote_path,
+    }));
+    return {
+      type: "get_status_result",
+      id: command.id,
+      payload: { pairs, online: true },
+    };
+  }
+
   return {
     type: `${command.type}_result`,
     id: command.id,
@@ -85,6 +194,7 @@ export async function handleCommand(
 }
 
 async function main(): Promise<void> {
+  stateDb = new StateDb();
   const socketPath = resolveSocketPath();
   server = new IpcServer(socketPath, handleCommand);
 

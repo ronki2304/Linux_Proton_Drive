@@ -7,5 +7,6 @@
     <file alias="ui/account-header-bar.ui" preprocess="xml-stripblanks">account-header-bar.ui</file>
     <file alias="ui/settings.ui" preprocess="xml-stripblanks">settings.ui</file>
     <file alias="ui/remote-folder-picker.ui" preprocess="xml-stripblanks">remote-folder-picker.ui</file>
+    <file alias="ui/setup-wizard.ui" preprocess="xml-stripblanks">setup-wizard.ui</file>
   </gresource>
 </gresources>
