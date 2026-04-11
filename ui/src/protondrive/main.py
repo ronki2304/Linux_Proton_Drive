@@ -69,7 +69,7 @@ class Application(Adw.Application):
     def do_activate(self) -> None:
         win = self.props.active_window
         if not win:
-            self._window = MainWindow(application=self)
+            self._window = MainWindow(settings=self.settings, application=self)
             win = self._window
             # New window: always start at pre-auth as the safe default.  If the
             # engine is already live (window closed and re-opened without killing

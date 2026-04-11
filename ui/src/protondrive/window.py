@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from gi.repository import Adw, Gtk
+from gi.repository import Adw, Gio, Gtk
 
 from protondrive.auth_window import AuthWindow
 from protondrive.errors import AuthError
@@ -31,9 +31,15 @@ class MainWindow(Adw.ApplicationWindow):
     status_footer_bar: StatusFooterBar = Gtk.Template.Child()
     pair_detail_panel: PairDetailPanel = Gtk.Template.Child()
 
-    def __init__(self, **kwargs: object) -> None:
+    def __init__(self, settings: Gio.Settings, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self.set_default_size(780, 520)
+        self._settings = settings
+        w = settings.get_int("window-width")    # schema default: 780
+        h = settings.get_int("window-height")   # schema default: 520
+        self.set_default_size(w, h)
+        if settings.get_boolean("window-maximized"):
+            self.maximize()
+        self.connect("close-request", self._on_close_request)
         self.set_size_request(360, 480)
 
         self._pre_auth_screen: PreAuthScreen | None = None
@@ -46,6 +52,14 @@ class MainWindow(Adw.ApplicationWindow):
         self._pairs_data: dict[str, dict] = {}
         self._row_activated_connected: bool = False
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
+
+    def _on_close_request(self, window: Gtk.Window) -> bool:
+        """Save window geometry to GSettings before closing."""
+        self._settings.set_boolean("window-maximized", self.is_maximized())
+        if not self.is_maximized():
+            self._settings.set_int("window-width", self.get_width())
+            self._settings.set_int("window-height", self.get_height())
+        return False  # False = allow close; True would veto close entirely
 
     def show_pre_auth(self) -> None:
         """Display the pre-auth screen as the window content."""

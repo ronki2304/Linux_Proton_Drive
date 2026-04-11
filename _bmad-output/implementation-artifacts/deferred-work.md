@@ -185,3 +185,15 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - `populate_pairs` row-removal loop is O(n²) — `get_row_at_index(0)` + remove in `while True` loop; pre-existing pattern [window.py:220–224]
 - `_fmt_relative_time` has no days/weeks display — values over 3600s show "N hours ago" indefinitely; acceptable for MVP [pair_detail_panel.py:17–28]
 - `files_done > files_total` produces fraction > 1.0; GTK silently clamps but emits GLib warning — requires engine contract guarantee before adding assert [sync_progress_card.py:52]
+
+## Deferred from: code review of 2-9-window-state-persistence (2026-04-11)
+
+- No validation/clamping of restored geometry values — zero or negative integers are schema-legal and would be passed directly to `set_default_size`; impacts: `window.py` init
+- `close-request` signal does not persist geometry on process crash or session logout — idiomatic fix would be `g_settings_bind` or explicit `Gio.Settings.sync()`; `window.py`
+- `Gio.Settings.sync()` not called before process exit — narrow but real partial-write risk on abnormal termination; `window.py:_on_close_request`
+- Tiled/snapped window state saves tiled dimensions as restore size — GTK4 `is_maximized()` returns False for tiling; standard GTK4 limitation; `window.py:_on_close_request`
+- Unrealized window could save 0×0 if `close-request` fires pre-`present()` — GTK4 contract prevents under normal operation but no explicit guard; `window.py`
+- Re-open path (reuse of existing window object) skips maximized-state re-application — only relevant if GTK keeps window alive after hide; current flow creates fresh window; `main.py:do_activate`
+- No test for `get_width()`/`get_height()` returning 0 at close time — boundary not covered; `test_window_state_persistence.py`
+- No test for `Gio.Settings` write failure — `set_int`/`set_boolean` can silently fail or raise; `test_window_state_persistence.py`
+- `connect` not mocked in `TestGeometryRestore._make_window` — latent `AttributeError` if future tests call `__init__`; `test_window_state_persistence.py`

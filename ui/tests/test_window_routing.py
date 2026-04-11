@@ -22,6 +22,7 @@ def _make_window() -> MainWindow:
     win._sync_pair_rows = {}
     win._pairs_data = {}
     win._row_activated_connected = False
+    win._settings = MagicMock()
     return win
 
 
