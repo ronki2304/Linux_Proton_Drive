@@ -82,6 +82,7 @@ def _build_gi_mocks() -> dict[str, MagicMock]:
     adw.Application = _FakeWidget
     adw.ApplicationWindow = _FakeWidget
     gtk.Box = _FakeWidget
+    gtk.ListBoxRow = _FakeWidget
 
     # Enum-ish constants accessed at protondrive class-body or test-method time.
     webkit.LoadEvent = MagicMock()

@@ -16,11 +16,14 @@ template $ProtonDriveMainWindow: Adw.ApplicationWindow {
         [top]
         Adw.HeaderBar {}
 
-        content: Adw.StatusPage {
-          icon-name: "folder-remote-symbolic";
-          title: "No Sync Pairs";
-          description: "Add your first sync pair to get started.";
+        content: Gtk.ScrolledWindow {
+          child: Gtk.ListBox pairs_list {
+            selection-mode: single;
+          };
         };
+
+        [bottom]
+        $ProtonDriveStatusFooterBar status_footer_bar {}
       };
     };
 
@@ -31,11 +34,7 @@ template $ProtonDriveMainWindow: Adw.ApplicationWindow {
         [top]
         Adw.HeaderBar {}
 
-        content: Adw.StatusPage {
-          icon-name: "document-open-symbolic";
-          title: "Welcome";
-          description: "Select or add a sync pair from the sidebar.";
-        };
+        content: $ProtonDrivePairDetailPanel pair_detail_panel {};
       };
     };
     };

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from gi.repository import Adw, Gtk
@@ -10,6 +11,10 @@ from protondrive.pre_auth import PreAuthScreen
 from protondrive.widgets.account_header_bar import AccountHeaderBar
 from protondrive.widgets.setup_wizard import SetupWizard
 from protondrive.widgets.settings import SettingsPage
+from protondrive.widgets.pair_detail_panel import PairDetailPanel, _fmt_relative_time
+from protondrive.widgets.sync_progress_card import _fmt_bytes
+from protondrive.widgets.status_footer_bar import StatusFooterBar
+from protondrive.widgets.sync_pair_row import SyncPairRow
 
 APP_ID = "io.github.ronki2304.ProtonDriveLinuxClient"
 
@@ -22,6 +27,9 @@ class MainWindow(Adw.ApplicationWindow):
 
     nav_split_view: Adw.NavigationSplitView = Gtk.Template.Child()
     toast_overlay: Adw.ToastOverlay = Gtk.Template.Child()
+    pairs_list: Gtk.ListBox = Gtk.Template.Child()
+    status_footer_bar: StatusFooterBar = Gtk.Template.Child()
+    pair_detail_panel: PairDetailPanel = Gtk.Template.Child()
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -34,6 +42,10 @@ class MainWindow(Adw.ApplicationWindow):
         self._settings_page: SettingsPage | None = None
         self._setup_wizard: SetupWizard | None = None
         self._session_data: dict[str, Any] | None = None
+        self._sync_pair_rows: dict[str, SyncPairRow] = {}
+        self._pairs_data: dict[str, dict] = {}
+        self._row_activated_connected: bool = False
+        self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
 
     def show_pre_auth(self) -> None:
         """Display the pre-auth screen as the window content."""
@@ -100,6 +112,16 @@ class MainWindow(Adw.ApplicationWindow):
     def clear_session(self) -> None:
         """Clear cached session data on logout."""
         self._session_data = None
+        self._sync_pair_rows = {}
+        self._pairs_data = {}
+        self._row_activated_connected = False
+        self.pair_detail_panel.show_no_pairs()
+
+    def _on_setup_requested(self, widget: object) -> None:
+        """Handle setup-requested signal from PairDetailPanel."""
+        app = self.get_application()
+        if app is not None and hasattr(app, "_engine"):
+            self.show_setup_wizard(app._engine)
 
     def show_settings(self) -> None:
         """Open the settings page."""
@@ -188,6 +210,89 @@ class MainWindow(Adw.ApplicationWindow):
         )
         toast.set_timeout(5)
         self.toast_overlay.add_toast(toast)
+
+    def populate_pairs(self, pairs: list[dict[str, Any]]) -> None:
+        """Populate the sidebar list with one SyncPairRow per pair.
+
+        If pairs is empty, clears the list (empty state is the ScrolledWindow
+        with no rows; placeholder shown via CSS empty state or left blank).
+        """
+        # Remove all existing rows
+        while True:
+            row = self.pairs_list.get_row_at_index(0)
+            if row is None:
+                break
+            self.pairs_list.remove(row)
+        self._sync_pair_rows = {}
+        self._pairs_data = {}
+
+        for pair in pairs:
+            pair_id = pair.get("pair_id", "")
+            local_path = pair.get("local_path", "")
+            pair_name = os.path.basename(local_path.rstrip("/")) or local_path
+            row = SyncPairRow(pair_id, pair_name)
+            self.pairs_list.append(row)
+            self._sync_pair_rows[pair_id] = row
+
+        self._pairs_data = {p.get("pair_id", ""): dict(p) for p in pairs}
+
+        if not pairs:
+            self.pair_detail_panel.show_no_pairs()
+        else:
+            self.pair_detail_panel.show_select_prompt()
+
+        if not self._row_activated_connected:
+            self.pairs_list.connect("row-activated", self._on_row_activated)
+            self._row_activated_connected = True
+
+    def _on_row_activated(self, list_box: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
+        """Handle pair row selection — route to pair detail in content area."""
+        pair_id = row.pair_id
+        pair_data = self._pairs_data.get(pair_id, {})
+        self.pair_detail_panel.show_pair(pair_data)
+        self.nav_split_view.set_show_content(True)
+
+    def on_sync_progress(self, payload: dict[str, Any]) -> None:
+        """Update pair row and footer bar when sync is in progress."""
+        pair_id = payload.get("pair_id", "")
+        row = self._sync_pair_rows.get(pair_id)
+        if row is not None:
+            row.set_state("syncing")
+        pair_name = payload.get("pair_name", pair_id)
+        if not pair_name and row is not None:
+            pair_name = row.pair_name
+        files_done = payload.get("files_done", 0)
+        files_total = payload.get("files_total", 0)
+        self.status_footer_bar.set_syncing(pair_name, files_done, files_total)
+        if pair_id in self._pairs_data and files_total > 0:
+            self._pairs_data[pair_id]["file_count_text"] = f"{files_total} files"
+            self._pairs_data[pair_id]["total_size_text"] = _fmt_bytes(payload.get("bytes_total", 0))
+        self.pair_detail_panel.on_sync_progress(payload)
+
+    def on_sync_complete(self, payload: dict[str, Any]) -> None:
+        """Update pair row and footer bar when sync completes."""
+        pair_id = payload.get("pair_id", "")
+        row = self._sync_pair_rows.get(pair_id)
+        if row is not None:
+            row.set_state("synced")
+        if self._sync_pair_rows and all(r.state == "synced" for r in self._sync_pair_rows.values()):
+            self.status_footer_bar.update_all_synced()
+        self.pair_detail_panel.on_sync_complete(payload)
+        if pair_id in self._pairs_data:
+            self._pairs_data[pair_id]["last_synced_text"] = _fmt_relative_time(
+                payload.get("timestamp", "")
+            )
+
+    def on_watcher_status(self, status: str) -> None:
+        """React to watcher_status events forwarded by Application."""
+        if status == "initializing":
+            self.status_footer_bar.set_initialising()
+        elif status == "ready":
+            any_syncing = any(
+                r.state == "syncing" for r in self._sync_pair_rows.values()
+            )
+            if not any_syncing:
+                self.status_footer_bar.update_all_synced()
 
     def _on_sign_in_requested(self, screen: PreAuthScreen) -> None:
         """Handle sign-in button click — start auth flow."""

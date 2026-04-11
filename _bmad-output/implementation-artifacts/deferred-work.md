@@ -168,3 +168,20 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - Overlapping `local_path` between pairs — second pair's `watchFn` calls overwrite first pair's Map entries without `close()`, leaking FSWatcher handles; mitigated by Story 6-2 (nesting-and-overlap-validation) which prevents overlapping pairs from being created [engine/src/watcher.ts:43-51]
 - `_watcher_status` not reset on `token_expired` / logout — stale `"ready"` state persists across re-auth; Story 2.7 (StatusFooterBar) should reset this as part of its watcher lifecycle display logic [ui/src/protondrive/main.py:39, 137-139]
 - `stateDb!` / `syncEngine!` non-null assertion risk before `main()` completes — pre-existing gap in `handleTokenRefresh`; caught silently by outer `catch` block in practice [engine/src/main.ts:77]
+
+## Deferred from: code review of 2-7-syncpairrow-and-statusfooterbar-components (2026-04-11)
+
+- `StatusFooterBar` LIVE region (AC5): spec requires `GTK_ACCESSIBLE_STATE_LIVE` (polite) for dynamic footer announcements; current `update_property(LABEL)` is a static update, not a live-region; GTK4 Python bindings don't cleanly expose this API at current version — revisit before Epic 7 packaging [status_footer_bar.py]
+- `on_watcher_status("ready")` race — if `watcher_status: ready` and `sync_progress` arrive concurrently, footer could reset to "All synced" while sync is ongoing; unlikely in practice given engine event ordering [window.py:on_watcher_status]
+- GTK widget updates from potential non-main thread — if engine fires callbacks off-thread, `set_text`/`queue_draw`/`update_property` calls are undefined behaviour; pre-existing pattern — verify engine callback thread model in EngineClient [main.py, window.py]
+- `set_state` accepts arbitrary strings — invalid states like "error"/"paused" silently show green dot; internal API with controlled callers for now [sync_pair_row.py:set_state]
+- `StatusFooterBar` has no error/offline/paused state — footer shows stale state on engine disconnection; covered by Epic 5 error-state stories [status_footer_bar.py]
+- `populate_pairs` with empty `pair_id` — two pairs missing `pair_id` collide at key "" in `_sync_pair_rows`; engine always assigns UUIDs in practice [window.py:populate_pairs]
+- `_on_wizard_complete` passes `{}` when `_cached_session_data` is None — pre-existing from story 2-4; account header bar silently receives empty strings [main.py:_on_wizard_complete]
+
+## Deferred from: code review of 2-8-syncprogresscard-and-detail-panel (2026-04-11)
+
+- GLib timers (pulse + sync-complete) have no `do_dispose`/`do_unroot` cancel path — callbacks fire on dead widgets if window is closed mid-timer; GTK Python pattern limitation, pre-existing [sync_progress_card.py, pair_detail_panel.py]
+- `populate_pairs` row-removal loop is O(n²) — `get_row_at_index(0)` + remove in `while True` loop; pre-existing pattern [window.py:220–224]
+- `_fmt_relative_time` has no days/weeks display — values over 3600s show "N hours ago" indefinitely; acceptable for MVP [pair_detail_panel.py:17–28]
+- `files_done > files_total` produces fraction > 1.0; GTK silently clamps but emits GLib warning — requires engine contract guarantee before adding assert [sync_progress_card.py:52]

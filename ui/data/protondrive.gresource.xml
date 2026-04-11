@@ -8,5 +8,9 @@
     <file alias="ui/settings.ui" preprocess="xml-stripblanks">settings.ui</file>
     <file alias="ui/remote-folder-picker.ui" preprocess="xml-stripblanks">remote-folder-picker.ui</file>
     <file alias="ui/setup-wizard.ui" preprocess="xml-stripblanks">setup-wizard.ui</file>
+    <file alias="ui/sync-pair-row.ui" preprocess="xml-stripblanks">sync-pair-row.ui</file>
+    <file alias="ui/status-footer-bar.ui" preprocess="xml-stripblanks">status-footer-bar.ui</file>
+    <file alias="ui/sync-progress-card.ui" preprocess="xml-stripblanks">sync-progress-card.ui</file>
+    <file alias="ui/pair-detail-panel.ui" preprocess="xml-stripblanks">pair-detail-panel.ui</file>
   </gresource>
 </gresources>

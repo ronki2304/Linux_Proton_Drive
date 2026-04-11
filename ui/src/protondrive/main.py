@@ -60,6 +60,8 @@ class Application(Adw.Application):
         self._engine = EngineClient()
         self._engine.on_event("ready", self._on_engine_ready)
         self._engine.on_event("watcher_status", self._on_watcher_status)
+        self._engine.on_event("sync_progress", self._on_sync_progress)
+        self._engine.on_event("sync_complete", self._on_sync_complete)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -139,6 +141,18 @@ class Application(Adw.Application):
         if not isinstance(payload, dict):
             return
         self._watcher_status = payload.get("status", "unknown")
+        if self._window is not None:
+            self._window.on_watcher_status(self._watcher_status)
+
+    def _on_sync_progress(self, message: dict[str, Any]) -> None:
+        payload = message.get("payload", {})
+        if self._window is not None:
+            self._window.on_sync_progress(payload)
+
+    def _on_sync_complete(self, message: dict[str, Any]) -> None:
+        payload = message.get("payload", {})
+        if self._window is not None:
+            self._window.on_sync_complete(payload)
 
     def _start_validation_timeout(self) -> None:
         """Start timeout for token validation response (NFR1)."""
@@ -174,6 +188,10 @@ class Application(Adw.Application):
         if self._has_configured_pairs():
             self._window.show_main()
             self._window.on_session_ready(payload)
+            if self._engine is not None:
+                self._engine.send_command_with_response(
+                    {"type": "get_status"}, self._on_get_status_result
+                )
         else:
             self._window.show_setup_wizard(self._engine)
 
@@ -202,15 +220,30 @@ class Application(Adw.Application):
         except Exception:
             return []
 
+    def _on_get_status_result(self, payload: dict[str, Any]) -> None:
+        """Handle get_status response — populate pair rows in sidebar."""
+        if payload.get("error"):
+            import sys
+            print(f"[APP] get_status failed: {payload['error']}", file=sys.stderr)
+            return
+        pairs = payload.get("pairs", [])
+        if self._window is not None:
+            self._window.populate_pairs(pairs)
+
     def _on_wizard_complete(self, pair_id: str) -> None:
         """Called by window after wizard creates a pair — transition to main view."""
         if self._window is not None:
             self._window.show_main()
             self._window.on_session_ready(self._cached_session_data or {})
+            if self._engine is not None:
+                self._engine.send_command_with_response(
+                    {"type": "get_status"}, self._on_get_status_result
+                )
 
     def _on_token_expired(self, payload: dict[str, Any]) -> None:
         """Token expired at launch — route to pre-auth silently (no error)."""
         self._cancel_validation_timeout()
+        self._watcher_status = "unknown"
 
         if self._credential_manager is not None:
             try:
@@ -225,6 +258,8 @@ class Application(Adw.Application):
 
     def logout(self) -> None:
         """Execute logout: clear credentials, shutdown engine, show pre-auth."""
+        self._watcher_status = "unknown"
+
         if self._credential_manager is not None:
             try:
                 self._credential_manager.delete_token()

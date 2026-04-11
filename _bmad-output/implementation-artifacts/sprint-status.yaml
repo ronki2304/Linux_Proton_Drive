@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-11  # Story 2-6 → done
+last_updated: 2026-04-11  # Story 2-8 → done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -69,8 +69,8 @@ development_status:
   2-4-setup-wizard-and-first-pair-creation: done
   2-5-sync-engine-core-two-way-sync: done
   2-6-inotify-file-watcher-and-change-detection: done
-  2-7-syncpairrow-and-statusfooterbar-components: backlog
-  2-8-syncprogresscard-and-detail-panel: backlog
+  2-7-syncpairrow-and-statusfooterbar-components: done
+  2-8-syncprogresscard-and-detail-panel: done
   2-9-window-state-persistence: backlog
   2-10-flatpak-build-validation: backlog
   epic-2-retrospective: optional

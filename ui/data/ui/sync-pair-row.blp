@@ -1,0 +1,36 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveSyncPairRow: Gtk.ListBoxRow {
+  child: Gtk.Box {
+    orientation: horizontal;
+    margin-start: 12;
+    margin-end: 12;
+    margin-top: 8;
+    margin-bottom: 8;
+    spacing: 8;
+
+    Gtk.DrawingArea status_dot {
+      width-request: 8;
+      height-request: 8;
+      valign: center;
+    }
+
+    Gtk.Box {
+      orientation: vertical;
+      valign: center;
+      hexpand: true;
+
+      Gtk.Label pair_name_label {
+        halign: start;
+        xalign: 0;
+      }
+
+      Gtk.Label status_label {
+        halign: start;
+        xalign: 0;
+        styles ["caption", "dim-label"]
+      }
+    }
+  };
+}

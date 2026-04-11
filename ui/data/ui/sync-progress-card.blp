@@ -1,0 +1,30 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveSyncProgressCard: Gtk.Box {
+  orientation: vertical;
+  spacing: 8;
+  margin-start: 16;
+  margin-end: 16;
+  margin-top: 8;
+  margin-bottom: 8;
+
+  Gtk.ProgressBar progress_bar {
+    show-text: false;
+  }
+
+  Gtk.Label count_label {
+    halign: start;
+    styles ["caption", "dim-label"]
+  }
+
+  Gtk.Label bytes_label {
+    halign: start;
+    styles ["caption", "dim-label"]
+  }
+
+  Gtk.Label eta_label {
+    halign: start;
+    styles ["caption", "dim-label"]
+  }
+}

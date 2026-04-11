@@ -62,12 +62,40 @@ blueprints_setup_wizard = custom_target(
   command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
 )
 
+blueprints_sync_pair_row = custom_target(
+  'blueprint-sync-pair-row',
+  input: files('data/ui/sync-pair-row.blp'),
+  output: 'sync-pair-row.ui',
+  command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
+)
+
+blueprints_status_footer_bar = custom_target(
+  'blueprint-status-footer-bar',
+  input: files('data/ui/status-footer-bar.blp'),
+  output: 'status-footer-bar.ui',
+  command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
+)
+
+blueprints_sync_progress_card = custom_target(
+  'blueprint-sync-progress-card',
+  input: files('data/ui/sync-progress-card.blp'),
+  output: 'sync-progress-card.ui',
+  command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
+)
+
+blueprints_pair_detail_panel = custom_target(
+  'blueprint-pair-detail-panel',
+  input: files('data/ui/pair-detail-panel.blp'),
+  output: 'pair-detail-panel.ui',
+  command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
+)
+
 # --- GResource bundle ---
 resource_conf = configuration_data()
 gresource = gnome.compile_resources(
   'protondrive-resources',
   'data/protondrive.gresource.xml',
-  dependencies: [blueprints_window, blueprints_pre_auth, blueprints_auth_window, blueprints_account_header_bar, blueprints_settings, blueprints_remote_folder_picker, blueprints_setup_wizard],
+  dependencies: [blueprints_window, blueprints_pre_auth, blueprints_auth_window, blueprints_account_header_bar, blueprints_settings, blueprints_remote_folder_picker, blueprints_setup_wizard, blueprints_sync_pair_row, blueprints_status_footer_bar, blueprints_sync_progress_card, blueprints_pair_detail_panel],
   gresource_bundle: true,
   source_dir: [meson.current_build_dir(), 'data'],
   install: true,
@@ -103,6 +131,10 @@ python_widget_sources = [
   'src/protondrive/widgets/settings.py',
   'src/protondrive/widgets/remote_folder_picker.py',
   'src/protondrive/widgets/setup_wizard.py',
+  'src/protondrive/widgets/sync_pair_row.py',
+  'src/protondrive/widgets/status_footer_bar.py',
+  'src/protondrive/widgets/sync_progress_card.py',
+  'src/protondrive/widgets/pair_detail_panel.py',
 ]
 
 install_data(

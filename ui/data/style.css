@@ -1,0 +1,8 @@
+.sync-dot-syncing {
+  animation: sync-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes sync-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}

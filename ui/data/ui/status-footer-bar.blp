@@ -1,0 +1,22 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveStatusFooterBar: Gtk.Box {
+  orientation: horizontal;
+  spacing: 8;
+  margin-start: 12;
+  margin-end: 12;
+  height-request: 36;
+  valign: end;
+
+  Gtk.DrawingArea footer_dot {
+    width-request: 8;
+    height-request: 8;
+    valign: center;
+  }
+
+  Gtk.Label footer_label {
+    valign: center;
+    styles ["caption"]
+  }
+}
