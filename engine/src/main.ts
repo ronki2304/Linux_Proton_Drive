@@ -8,6 +8,8 @@ import type { DriveClient } from "./sdk.js";
 import { StateDb } from "./state-db.js";
 import type { SyncPair } from "./state-db.js";
 import { writeConfigYaml } from "./config.js";
+import { SyncEngine } from "./sync-engine.js";
+import { FileWatcher } from "./watcher.js";
 
 const ENGINE_VERSION: string = pkg.version;
 const PROTOCOL_VERSION = 1;
@@ -22,6 +24,12 @@ let driveClient: DriveClient | null = null;
 // Module-level state database. Undefined until main() initialises it.
 let stateDb: StateDb | undefined;
 
+// Module-level sync engine. Undefined until main() initialises it.
+let syncEngine: SyncEngine | undefined;
+
+// Module-level file watcher. Undefined until first successful token_refresh.
+let fileWatcher: FileWatcher | undefined;
+
 // Test-only: inject a mock DriveClient without hitting real auth.
 // Underscore prefix signals test-only usage — never call from production code.
 export function _setDriveClientForTests(client: DriveClient | null): void {
@@ -34,10 +42,26 @@ export function _setStateDbForTests(db: StateDb | undefined): void {
   stateDb = db;
 }
 
+// Test-only: inject a SyncEngine instance for integration tests.
+// Underscore prefix signals test-only usage — never call from production code.
+export function _setSyncEngineForTests(engine: SyncEngine | undefined): void {
+  syncEngine = engine;
+}
+
+// Test-only: inject a FileWatcher instance for tests.
+// Underscore prefix signals test-only usage — never call from production code.
+export function _setFileWatcherForTests(fw: FileWatcher | undefined): void {
+  fileWatcher = fw;
+}
+
 async function handleTokenRefresh(command: IpcCommand): Promise<void> {
   const token = command.payload?.["token"] as string | undefined;
 
   if (!token) {
+    driveClient = null;
+    syncEngine?.setDriveClient(null);
+    fileWatcher?.stop();
+    fileWatcher = undefined;
     server.emitEvent({ type: "token_expired", payload: { queued_changes: 0 } });
     return;
   }
@@ -46,10 +70,22 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
     const client = createDriveClient(token);
     const info = await client.validateSession();
     driveClient = client;
+    syncEngine?.setDriveClient(client);
+    void syncEngine?.startSyncAll();
+    fileWatcher?.stop();
+    fileWatcher = new FileWatcher(
+      stateDb!.listPairs(),
+      async (_pairId) => { await syncEngine!.startSyncAll(); },
+      (e) => server.emitEvent(e),
+    );
+    void fileWatcher.initialize();
     server.emitEvent({ type: "session_ready", payload: info as unknown as Record<string, unknown> });
   } catch {
     // Any engine error → session invalid
     driveClient = null;
+    syncEngine?.setDriveClient(null);
+    fileWatcher?.stop();
+    fileWatcher = undefined;
     server.emitEvent({ type: "token_expired", payload: { queued_changes: 0 } });
   }
 }
@@ -195,6 +231,7 @@ export async function handleCommand(
 
 async function main(): Promise<void> {
   stateDb = new StateDb();
+  syncEngine = new SyncEngine(stateDb, (e) => server.emitEvent(e));
   const socketPath = resolveSocketPath();
   server = new IpcServer(socketPath, handleCommand);
 

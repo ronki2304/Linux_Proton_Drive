@@ -36,6 +36,7 @@ class Application(Adw.Application):
         self._window: MainWindow | None = None
         self._token_validation_timer_id: int | None = None
         self._cached_session_data: dict[str, Any] | None = None
+        self._watcher_status: str = "unknown"
 
     @property
     def settings(self) -> Gio.Settings:
@@ -58,6 +59,7 @@ class Application(Adw.Application):
             self._credential_manager = None
         self._engine = EngineClient()
         self._engine.on_event("ready", self._on_engine_ready)
+        self._engine.on_event("watcher_status", self._on_watcher_status)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -131,6 +133,12 @@ class Application(Adw.Application):
         else:
             if self._window is not None:
                 self._window.show_pre_auth()
+
+    def _on_watcher_status(self, message: dict[str, Any]) -> None:
+        payload = message.get("payload", {})
+        if not isinstance(payload, dict):
+            return
+        self._watcher_status = payload.get("status", "unknown")
 
     def _start_validation_timeout(self) -> None:
         """Start timeout for token validation response (NFR1)."""

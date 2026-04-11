@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-10  # Story 2-4 → done
+last_updated: 2026-04-11  # Story 2-6 → done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -67,8 +67,8 @@ development_status:
   2-3-remote-folder-picker-component: done
   2-2-5-sdk-live-wiring: done  # All 11 tasks complete; smoke passed (session_ready fired, main window appeared); token expiry limitation documented
   2-4-setup-wizard-and-first-pair-creation: done
-  2-5-sync-engine-core-two-way-sync: backlog
-  2-6-inotify-file-watcher-and-change-detection: backlog
+  2-5-sync-engine-core-two-way-sync: done
+  2-6-inotify-file-watcher-and-change-detection: done
   2-7-syncpairrow-and-statusfooterbar-components: backlog
   2-8-syncprogresscard-and-detail-panel: backlog
   2-9-window-state-persistence: backlog

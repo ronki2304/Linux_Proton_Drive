@@ -149,3 +149,22 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - Proton AccessToken expires between launches — no RefreshToken flow [main.py, credential_store.py]: on relaunch `validateSession()` returns 401, `_on_token_expired` deletes the stored token, login screen is shown. Re-auth is instant (WebKitGTK server-side session persists) but requires user interaction. Fix: store the RefreshToken alongside the AccessToken, call `POST /auth/v4/refresh` silently on launch before falling back to the login screen. Pick up in a future story (candidate: new story between 2.2.5 and 2.4, or bundle with 5.x token-expiry epic).
 - `encryptMessage` `compress` parameter not forwarded [sdk.ts:619,642,661,675] — `OpenPGPCryptoProxy["encryptMessage"]` interface includes `compress?: boolean` but openpgp v6 removed compression as a direct `encrypt()` parameter. No mappable openpgp v6 field confirmed. Requires drive-sdk team clarification before implementing. Pick up when adding public link support or when SDK bumps to a version that documents the compression mapping.
 - `decryptMessage` redundant double-settle of signatures [sdk.ts:709] — `resolveVerificationStatus` internally calls `Promise.allSettled`; the method then calls it again for `verificationErrors`. Correct but wasteful. Pre-existing design choice; refactor when touching `decryptMessage` in a future story.
+
+## Deferred from: code review of 2-5-sync-engine-core-two-way-sync (2026-04-10)
+
+- Deletion propagation never implemented — remote→local and local→remote file deletions are silently skipped; tracked for Epic 4 or later [sync-engine.ts:316-319]
+- Upload remoteMtime assumes SDK stores body.modificationTime exactly as provided — if SDK normalizes timestamps (truncation, timezone), every uploaded file re-uploads on next cycle; documented design tradeoff in Dev Notes; validate against live API before shipping
+- walkRemoteTree unbounded recursion — no max-depth or cycle guard for circular folder references (e.g. Proton shared folders); add depth cap before enabling multi-user scenarios
+- upsertSyncState uses INSERT OR REPLACE which resets rowid — add CHECK or ON CONFLICT DO UPDATE SET if sync_state gains foreign-key dependents in Epic 4
+- walkLocalTree follows symlinks without restriction — symlink cycle causes infinite recursion; add `followSymlinks: false` or visited-set before supporting symlinked folder trees
+- resolveRemoteId uses case-sensitive name match — Proton Drive API folder name casing may differ from user config; evaluate case-insensitive fallback before shipping
+- processOne stat-after-rename susceptible to ENOENT race — external process removing destPath between rename and stat leaves file untracked, causing re-download on next cycle; acceptable for single-user desktop MVP
+- Cold-start insertPair UNIQUE exception not caught if concurrent startSyncAll races — mitigated by F1 re-entrancy patch; add explicit catch if re-entrancy guard is not implemented
+
+## Deferred from: code review of 2-6-inotify-file-watcher-and-change-detection (2026-04-11)
+
+- Stale pairs snapshot at FileWatcher construction time — pairs added via `add_pair` after `fileWatcher` is created are not watched until next re-auth cycle; pick up when implementing watcher lifecycle refresh (Story 6-2 / future) [engine/src/main.ts:77]
+- Silent non-ENOSPC failure paths — ENOENT/EACCES on `readdir` or non-ENOSPC `watchFn` errors only debugLog with no user-visible error event; pick up in Story 6-4 (local-folder-missing-detection-and-recovery) [engine/src/watcher.ts:37, 64-67]
+- Overlapping `local_path` between pairs — second pair's `watchFn` calls overwrite first pair's Map entries without `close()`, leaking FSWatcher handles; mitigated by Story 6-2 (nesting-and-overlap-validation) which prevents overlapping pairs from being created [engine/src/watcher.ts:43-51]
+- `_watcher_status` not reset on `token_expired` / logout — stale `"ready"` state persists across re-auth; Story 2.7 (StatusFooterBar) should reset this as part of its watcher lifecycle display logic [ui/src/protondrive/main.py:39, 137-139]
+- `stateDb!` / `syncEngine!` non-null assertion risk before `main()` completes — pre-existing gap in `handleTokenRefresh`; caught silently by outer `catch` block in practice [engine/src/main.ts:77]
