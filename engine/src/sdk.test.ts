@@ -119,11 +119,19 @@ describe("SDK boundary enforcement", () => {
 const NODE_TYPE_FOLDER = "folder";
 const NODE_TYPE_FILE = "file";
 
+interface FakeRevision {
+  claimedModificationTime?: Date;
+  claimedSize?: number;
+}
+
 interface FakeNodeEntity {
   uid: string;
   name: string;
   type: string;
   parentUid?: string;
+  modificationTime?: Date;
+  totalStorageSize?: number;
+  activeRevision?: FakeRevision;
 }
 
 type FakeMaybeNode =
@@ -137,6 +145,26 @@ function makeFakeNode(
   parentUid?: string,
 ): FakeMaybeNode {
   return { ok: true, value: { uid, name, type, parentUid } };
+}
+
+function makeFakeFileNode(
+  uid: string,
+  name: string,
+  modificationTime: Date,
+  size: number,
+  activeRevision?: FakeRevision,
+): FakeMaybeNode {
+  return {
+    ok: true,
+    value: {
+      uid,
+      name,
+      type: NODE_TYPE_FILE,
+      modificationTime,
+      totalStorageSize: size,
+      activeRevision,
+    },
+  };
 }
 
 function makeDegradedNode(): FakeMaybeNode {
@@ -779,6 +807,115 @@ describe("DriveClient SDK error mapping", () => {
       (captured as Error).message,
       "synthetic engine error from inside wrapper",
     );
+  });
+});
+
+// ===========================================================================
+// Story 2.5 — DriveClient.listRemoteFiles (AC9)
+// ===========================================================================
+
+describe("DriveClient.listRemoteFiles", () => {
+  it("returns RemoteFile entries for two file nodes with correct fields", async () => {
+    const mtime1 = new Date("2026-04-10T10:00:00.000Z");
+    const mtime2 = new Date("2026-04-10T11:00:00.000Z");
+    const iterFn = asyncGenOf([
+      makeFakeFileNode("uid-1", "notes.md", mtime1, 1024),
+      makeFakeFileNode("uid-2", "photo.jpg", mtime2, 2048, {
+        claimedModificationTime: new Date("2026-04-10T12:00:00.000Z"),
+        claimedSize: 3000,
+      }),
+    ]);
+    const sdk = makeFakeSdk({ iterateFolderChildren: iterFn });
+    const client = new DriveClient(sdk);
+
+    const result = await client.listRemoteFiles("parent-uid");
+
+    assert.equal(result.length, 2);
+    assert.deepEqual(result[0], {
+      id: "uid-1",
+      name: "notes.md",
+      parent_id: "parent-uid",
+      remote_mtime: mtime1.toISOString(),
+      size: 1024,
+    });
+    // Second node has activeRevision — claimedModificationTime and claimedSize take priority
+    assert.deepEqual(result[1], {
+      id: "uid-2",
+      name: "photo.jpg",
+      parent_id: "parent-uid",
+      remote_mtime: new Date("2026-04-10T12:00:00.000Z").toISOString(),
+      size: 3000,
+    });
+  });
+
+  it("skips DegradedNode entries (ok === false)", async () => {
+    const mtime = new Date("2026-04-10T10:00:00.000Z");
+    const iterFn = asyncGenOf([
+      makeFakeFileNode("uid-ok", "file.txt", mtime, 100),
+      makeDegradedNode(),
+      makeFakeFileNode("uid-ok2", "file2.txt", mtime, 200),
+    ]);
+    const sdk = makeFakeSdk({ iterateFolderChildren: iterFn });
+    const client = new DriveClient(sdk);
+
+    const result = await client.listRemoteFiles("parent-uid");
+
+    assert.equal(result.length, 2);
+    assert.deepEqual(result.map((r) => r.id), ["uid-ok", "uid-ok2"]);
+  });
+
+  it("skips non-File node types (server-side filter is a hint only)", async () => {
+    const mtime = new Date("2026-04-10T10:00:00.000Z");
+    const iterFn = asyncGenOf([
+      makeFakeFileNode("uid-file", "real.txt", mtime, 100),
+      makeFakeNode("uid-folder", "subfolder", NODE_TYPE_FOLDER, "parent-uid"),
+    ]);
+    const sdk = makeFakeSdk({ iterateFolderChildren: iterFn });
+    const client = new DriveClient(sdk);
+
+    const result = await client.listRemoteFiles("parent-uid");
+
+    assert.equal(result.length, 1);
+    assert.equal(result[0]!.id, "uid-file");
+  });
+
+  it("throws NetworkError on SDK ConnectionError", async () => {
+    async function* throwingGen(): AsyncGenerator<FakeMaybeNode> {
+      throw sdkErrorFactoriesForTests.connection("network failure");
+    }
+    const sdk = makeFakeSdk({ iterateFolderChildren: mock.fn(throwingGen) });
+    const client = new DriveClient(sdk);
+
+    await assert.rejects(
+      () => client.listRemoteFiles("parent-uid"),
+      (err: unknown) => err instanceof NetworkError,
+    );
+  });
+
+  it("throws SyncError on SDK IntegrityError", async () => {
+    async function* throwingGen(): AsyncGenerator<FakeMaybeNode> {
+      throw sdkErrorFactoriesForTests.integrity("decryption failed");
+    }
+    const sdk = makeFakeSdk({ iterateFolderChildren: mock.fn(throwingGen) });
+    const client = new DriveClient(sdk);
+
+    await assert.rejects(
+      () => client.listRemoteFiles("parent-uid"),
+      (err: unknown) => err instanceof SyncError,
+    );
+  });
+
+  it("passes { type: NodeType.File } filter hint to iterateFolderChildren", async () => {
+    const iterFn = asyncGenOf([]);
+    const sdk = makeFakeSdk({ iterateFolderChildren: iterFn });
+    const client = new DriveClient(sdk);
+
+    await client.listRemoteFiles("parent-uid");
+
+    assert.equal(iterFn.mock.callCount(), 1);
+    const filterArg = iterFn.mock.calls[0]!.arguments[1] as { type?: string } | undefined;
+    assert.ok(filterArg, "filter options must be passed as the second arg");
+    assert.equal(filterArg.type, NODE_TYPE_FILE);
   });
 });
 

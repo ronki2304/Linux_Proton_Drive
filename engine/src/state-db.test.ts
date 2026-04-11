@@ -4,7 +4,7 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateDb } from "./state-db.js";
-import type { SyncPair, ChangeQueueEntry } from "./state-db.js";
+import type { SyncPair, SyncState, ChangeQueueEntry } from "./state-db.js";
 
 // Each test gets a fresh :memory: DB for full isolation.
 let db: StateDb;
@@ -253,6 +253,85 @@ describe("StateDb — file-backed WAL", () => {
   it("confirms journal_mode = wal on a file-backed DB (AC2)", () => {
     fileDb = new StateDb(filePath);
     assert.equal(fileDb.pragma("journal_mode"), "wal");
+  });
+});
+
+describe("StateDb — sync_state CRUD and updatePairRemoteId", () => {
+  const PAIR: SyncPair = {
+    pair_id: "p1",
+    local_path: "/home/user/docs",
+    remote_path: "/My Drive/docs",
+    remote_id: "folder-abc",
+    created_at: "2026-04-10T10:00:00.000Z",
+  };
+
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    db.insertPair(PAIR);
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("upsert inserts a new sync_state record", () => {
+    const state: SyncState = {
+      pair_id: "p1",
+      relative_path: "docs/readme.md",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    };
+    db.upsertSyncState(state);
+    const fetched = db.getSyncState("p1", "docs/readme.md");
+    assert.deepEqual(fetched, state);
+  });
+
+  it("upsert replaces existing record for same primary key", () => {
+    const state: SyncState = {
+      pair_id: "p1",
+      relative_path: "file.txt",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    };
+    db.upsertSyncState(state);
+    const updated: SyncState = { ...state, local_mtime: "2026-04-10T12:00:00.000Z" };
+    db.upsertSyncState(updated);
+    const fetched = db.getSyncState("p1", "file.txt");
+    assert.equal(fetched?.local_mtime, "2026-04-10T12:00:00.000Z");
+  });
+
+  it("getSyncState returns undefined for unknown relative_path", () => {
+    assert.equal(db.getSyncState("p1", "nonexistent.txt"), undefined);
+  });
+
+  it("listSyncStates returns results ordered by relative_path ASC", () => {
+    db.upsertSyncState({ pair_id: "p1", relative_path: "z.txt", local_mtime: "2026-04-10T10:00:00.000Z", remote_mtime: "2026-04-10T10:00:00.000Z", content_hash: null });
+    db.upsertSyncState({ pair_id: "p1", relative_path: "a.txt", local_mtime: "2026-04-10T10:00:00.000Z", remote_mtime: "2026-04-10T10:00:00.000Z", content_hash: null });
+    db.upsertSyncState({ pair_id: "p1", relative_path: "m.txt", local_mtime: "2026-04-10T10:00:00.000Z", remote_mtime: "2026-04-10T10:00:00.000Z", content_hash: null });
+    const states = db.listSyncStates("p1");
+    assert.equal(states.length, 3);
+    assert.equal(states[0]!.relative_path, "a.txt");
+    assert.equal(states[1]!.relative_path, "m.txt");
+    assert.equal(states[2]!.relative_path, "z.txt");
+  });
+
+  it("deleteSyncState removes the record", () => {
+    db.upsertSyncState({ pair_id: "p1", relative_path: "del.txt", local_mtime: "2026-04-10T10:00:00.000Z", remote_mtime: "2026-04-10T10:00:00.000Z", content_hash: null });
+    assert.ok(db.getSyncState("p1", "del.txt") !== undefined);
+    db.deleteSyncState("p1", "del.txt");
+    assert.equal(db.getSyncState("p1", "del.txt"), undefined);
+  });
+
+  it("updatePairRemoteId updates the remote_id field", () => {
+    db.updatePairRemoteId("p1", "new-remote-uid");
+    const pair = db.getPair("p1");
+    assert.equal(pair?.remote_id, "new-remote-uid");
+  });
+
+  it("listSyncStates returns empty array for pair with no states", () => {
+    assert.deepEqual(db.listSyncStates("p1"), []);
   });
 });
 

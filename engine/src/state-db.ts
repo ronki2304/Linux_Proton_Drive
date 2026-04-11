@@ -159,6 +159,47 @@ export class StateDb {
       .run(pairId);
   }
 
+  // ── sync_state CRUD ──────────────────────────────────────────────────────
+
+  getSyncState(pairId: string, relativePath: string): SyncState | undefined {
+    return this.db
+      .prepare(
+        `SELECT * FROM sync_state WHERE pair_id = ? AND relative_path = ?`
+      )
+      .get(pairId, relativePath) as SyncState | undefined;
+  }
+
+  upsertSyncState(state: SyncState): void {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO sync_state (pair_id, relative_path, local_mtime, remote_mtime, content_hash)
+         VALUES (@pair_id, @relative_path, @local_mtime, @remote_mtime, @content_hash)`
+      )
+      .run(state);
+  }
+
+  listSyncStates(pairId: string): SyncState[] {
+    return this.db
+      .prepare(
+        `SELECT * FROM sync_state WHERE pair_id = ? ORDER BY relative_path ASC`
+      )
+      .all(pairId) as SyncState[];
+  }
+
+  deleteSyncState(pairId: string, relativePath: string): void {
+    this.db
+      .prepare(
+        `DELETE FROM sync_state WHERE pair_id = ? AND relative_path = ?`
+      )
+      .run(pairId, relativePath);
+  }
+
+  updatePairRemoteId(pairId: string, remoteId: string): void {
+    this.db
+      .prepare(`UPDATE sync_pair SET remote_id = ? WHERE pair_id = ?`)
+      .run(remoteId, pairId);
+  }
+
   // ── change_queue CRUD ─────────────────────────────────────────────────────
 
   enqueue(entry: Omit<ChangeQueueEntry, "id">): void {

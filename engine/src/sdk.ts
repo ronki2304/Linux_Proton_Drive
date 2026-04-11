@@ -96,6 +96,14 @@ export interface RemoteFolder {
   parent_id: string;
 }
 
+export interface RemoteFile {
+  id: string;
+  name: string;
+  parent_id: string;
+  remote_mtime: string; // ISO 8601
+  size: number;
+}
+
 export interface UploadBody {
   stream: ReadableStream<Uint8Array>;
   sizeBytes: number;
@@ -292,6 +300,42 @@ export class DriveClient {
       // breaks that contract this throw guarantees the method still rejects
       // instead of silently returning undefined.
       throw err;
+    }
+  }
+
+  /**
+   * List all files directly under the given folder UID.
+   *
+   * `DegradedNode` results (where `.ok === false`) are silently skipped and
+   * logged via `debugLog`. Non-file node types are also skipped (the type
+   * filter passed to `iterateFolderChildren` is advisory only).
+   */
+  async listRemoteFiles(parentId: string): Promise<RemoteFile[]> {
+    try {
+      const files: RemoteFile[] = [];
+      for await (const result of this.sdk.iterateFolderChildren(parentId, {
+        type: NodeType.File,
+      })) {
+        if (!result.ok) {
+          debugLog("DriveClient: degraded node skipped in file list");
+          continue;
+        }
+        const node = result.value;
+        if (node.type !== NodeType.File) continue;
+        files.push({
+          id: node.uid,
+          name: node.name,
+          parent_id: parentId,
+          remote_mtime: (
+            node.activeRevision?.claimedModificationTime ?? node.modificationTime
+          ).toISOString(),
+          size: node.activeRevision?.claimedSize ?? node.totalStorageSize ?? 0,
+        });
+      }
+      return files;
+    } catch (err) {
+      mapSdkError(err);
+      throw err; // defensive
     }
   }
 

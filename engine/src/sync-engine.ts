@@ -1,0 +1,484 @@
+import { readdir, stat, rename, unlink, mkdir } from "node:fs/promises";
+import { join, relative, dirname, basename } from "node:path";
+import { createReadStream, createWriteStream } from "node:fs";
+import { Readable, Writable } from "node:stream";
+import type { IpcPushEvent } from "./ipc.js";
+import type { DriveClient, RemoteFile } from "./sdk.js";
+import type { StateDb, SyncPair } from "./state-db.js";
+import { listConfigPairs, type ConfigPair } from "./config.js";
+import { SyncError } from "./errors.js";
+import { debugLog } from "./debug-log.js";
+
+// ── Internal types ───────────────────────────────────────────────────────────
+
+interface LocalFile {
+  relativePath: string;
+  mtime: string; // ISO 8601
+  size: number;
+}
+
+type WorkItem =
+  | {
+      kind: "upload";
+      relativePath: string;
+      remoteFolderId: string;
+      size: number;
+      localMtime: string;
+    }
+  | {
+      kind: "download";
+      relativePath: string;
+      nodeUid: string;
+      size: number;
+      remoteMtime: string;
+    };
+
+// ── Semaphore ────────────────────────────────────────────────────────────────
+
+class Semaphore {
+  private count: number;
+  private readonly queue: Array<() => void> = [];
+
+  constructor(limit: number) {
+    this.count = limit;
+  }
+
+  acquire(): Promise<() => void> {
+    return new Promise((resolve) => {
+      const tryAcquire = () => {
+        if (this.count > 0) {
+          this.count--;
+          resolve(() => {
+            this.count++;
+            const next = this.queue.shift();
+            if (next) next();
+          });
+        } else {
+          this.queue.push(tryAcquire);
+        }
+      };
+      tryAcquire();
+    });
+  }
+}
+
+// ── SyncEngine ───────────────────────────────────────────────────────────────
+
+export class SyncEngine {
+  private driveClient: DriveClient | null = null;
+  private isSyncing = false;
+
+  constructor(
+    private readonly stateDb: StateDb,
+    private readonly emitEvent: (event: IpcPushEvent) => void,
+    private readonly getConfigPairs: () => ConfigPair[] = listConfigPairs,
+  ) {}
+
+  setDriveClient(client: DriveClient | null): void {
+    this.driveClient = client;
+  }
+
+  async startSyncAll(): Promise<void> {
+    if (this.isSyncing) return; // re-entrancy guard (F1)
+    this.isSyncing = true;
+    try {
+      // Cold-start: restore pairs in config but missing from SQLite (AC5)
+      const configPairs = this.getConfigPairs();
+      const dbPairIds = new Set(this.stateDb.listPairs().map((p) => p.pair_id));
+      for (const cp of configPairs) {
+        if (!dbPairIds.has(cp.pair_id)) {
+          this.stateDb.insertPair({
+            pair_id: cp.pair_id,
+            local_path: cp.local_path,
+            remote_path: cp.remote_path,
+            remote_id: "",
+            created_at: cp.created_at ?? new Date().toISOString(),
+          });
+        }
+      }
+
+      // Sync all pairs sequentially; per-pair errors do not abort siblings
+      for (const pair of this.stateDb.listPairs()) {
+        try {
+          await this.syncPair(pair);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "unknown";
+          this.emitEvent({
+            type: "error",
+            payload: { code: "sync_cycle_error", message: msg, pair_id: pair.pair_id },
+          });
+        }
+      }
+    } finally {
+      this.isSyncing = false;
+    }
+  }
+
+  private async syncPair(pair: SyncPair): Promise<void> {
+    // Snapshot driveClient at cycle start — prevents null-dereference mid-flight
+    // if setDriveClient(null) is called during an active Promise.all. (F8)
+    const client = this.driveClient;
+    if (!client) return;
+
+    // Resolve remote_id if empty (AC6)
+    if (pair.remote_id === "") {
+      try {
+        const resolvedId = await this.resolveRemoteId(pair, client);
+        // Update the in-memory pair for this cycle
+        pair = { ...pair, remote_id: resolvedId };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        this.emitEvent({
+          type: "error",
+          payload: { code: "remote_path_not_found", message: msg, pair_id: pair.pair_id },
+        });
+        return;
+      }
+    }
+
+    const localFiles = await this.walkLocalTree(pair.local_path);
+    const { files: remoteFiles, folders: remoteFolders } = await this.walkRemoteTree(
+      pair.remote_id,
+      "",
+      client,
+    );
+    const syncStates = new Map(
+      this.stateDb.listSyncStates(pair.pair_id).map((s) => [s.relative_path, s]),
+    );
+
+    const workItems = this.computeWorkList(pair, localFiles, remoteFiles, remoteFolders, syncStates);
+
+    // Emit initial sync_progress (AC7)
+    const bytesTotal = workItems.reduce((a, w) => a + w.size, 0);
+    this.emitEvent({
+      type: "sync_progress",
+      payload: {
+        pair_id: pair.pair_id,
+        files_done: 0,
+        files_total: workItems.length,
+        bytes_done: 0,
+        bytes_total: bytesTotal,
+      },
+    });
+
+    await this.executeWorkList(pair, workItems, client);
+
+    // Emit sync_complete (AC7)
+    this.emitEvent({
+      type: "sync_complete",
+      payload: { pair_id: pair.pair_id, timestamp: new Date().toISOString() },
+    });
+  }
+
+  private async resolveRemoteId(pair: SyncPair, client: DriveClient): Promise<string> {
+    const segments = pair.remote_path.split("/").filter((s) => s.length > 0);
+    if (segments.length === 0) {
+      throw new SyncError(`Cannot resolve empty remote_path for pair ${pair.pair_id}`);
+    }
+
+    let parentId: string | null = null;
+    let resolvedId = "";
+
+    for (const segment of segments) {
+      const folders = await client.listRemoteFolders(parentId);
+      const match = folders.find((f) => f.name === segment);
+      if (!match) {
+        throw new SyncError(
+          `Remote path segment not found: "${segment}" in "${pair.remote_path}"`,
+        );
+      }
+      resolvedId = match.id;
+      parentId = match.id;
+    }
+
+    this.stateDb.updatePairRemoteId(pair.pair_id, resolvedId);
+    return resolvedId;
+  }
+
+  private async walkLocalTree(localPath: string): Promise<Map<string, LocalFile>> {
+    const fileMap = new Map<string, LocalFile>();
+    // Let readdir failures propagate — an inaccessible local path aborts the pair
+    // sync cycle via startSyncAll's catch, emitting sync_cycle_error. (F3)
+    const entries = await readdir(localPath, { withFileTypes: true, recursive: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      // entry.parentPath is Node.js 21.2+; fallback to entry.path for older versions
+      const dir = (entry as { parentPath?: string }).parentPath ?? (entry as { path?: string }).path ?? localPath;
+      const fullPath = join(dir, entry.name);
+      const relPath = relative(localPath, fullPath);
+      try {
+        const s = await stat(fullPath);
+        fileMap.set(relPath, {
+          relativePath: relPath,
+          mtime: s.mtime.toISOString(),
+          size: s.size,
+        });
+      } catch {
+        // File deleted between readdir and stat — skip it.
+        debugLog(`sync-engine: stat failed for ${fullPath} — skipping`);
+      }
+    }
+    return fileMap;
+  }
+
+  private async walkRemoteTree(
+    folderId: string,
+    prefix: string,
+    client: DriveClient,
+  ): Promise<{ files: Map<string, RemoteFile>; folders: Map<string, string> }> {
+    const fileMap = new Map<string, RemoteFile>();
+    const folderMap = new Map<string, string>();
+
+    const [files, subfolders] = await Promise.all([
+      client.listRemoteFiles(folderId),
+      client.listRemoteFolders(folderId),
+    ]);
+
+    for (const f of files) {
+      fileMap.set(prefix + f.name, f);
+    }
+
+    for (const sf of subfolders) {
+      const relDir = prefix + sf.name;
+      folderMap.set(relDir, sf.id);
+      const sub = await this.walkRemoteTree(sf.id, relDir + "/", client);
+      for (const [k, v] of sub.files) fileMap.set(k, v);
+      for (const [k, v] of sub.folders) folderMap.set(k, v);
+    }
+
+    return { files: fileMap, folders: folderMap };
+  }
+
+  private computeWorkList(
+    pair: SyncPair,
+    localFiles: Map<string, LocalFile>,
+    remoteFiles: Map<string, RemoteFile>,
+    remoteFolders: Map<string, string>,
+    syncStates: Map<string, { local_mtime: string; remote_mtime: string }>,
+  ): WorkItem[] {
+    const workItems: WorkItem[] = [];
+
+    // Process local files
+    for (const [relPath, local] of localFiles) {
+      const remote = remoteFiles.get(relPath);
+      const state = syncStates.get(relPath);
+
+      if (remote) {
+        // File exists both locally and remotely
+        if (!state) {
+          // Both exist but no sync state → conflict, skip (Epic 4)
+          debugLog(`sync-engine: skipping conflict (no sync_state) for ${relPath}`);
+          continue;
+        }
+        const localChanged = local.mtime !== state.local_mtime;
+        const remoteChanged = remote.remote_mtime !== state.remote_mtime;
+
+        if (localChanged && remoteChanged) {
+          // Both changed → conflict, skip (Epic 4)
+          debugLog(`sync-engine: skipping both-changed conflict for ${relPath}`);
+          continue;
+        }
+        if (localChanged) {
+          // Upload
+          const parentDir = dirname(relPath);
+          const remoteFolderId =
+            parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
+          if (!remoteFolderId) {
+            debugLog(`sync-engine: skipping upload ${relPath} — remote parent dir not found`);
+            continue;
+          }
+          workItems.push({
+            kind: "upload",
+            relativePath: relPath,
+            remoteFolderId,
+            size: local.size,
+            localMtime: local.mtime,
+          });
+        } else if (remoteChanged) {
+          // Download
+          workItems.push({
+            kind: "download",
+            relativePath: relPath,
+            nodeUid: remote.id,
+            size: remote.size,
+            remoteMtime: remote.remote_mtime,
+          });
+        }
+        // else: unchanged — skip
+      } else {
+        // Local-only: new file → upload
+        const parentDir = dirname(relPath);
+        const remoteFolderId =
+          parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
+        if (!remoteFolderId) {
+          debugLog(`sync-engine: skipping upload ${relPath} — remote parent dir not found`);
+          continue;
+        }
+        workItems.push({
+          kind: "upload",
+          relativePath: relPath,
+          remoteFolderId,
+          size: local.size,
+          localMtime: local.mtime,
+        });
+      }
+    }
+
+    // Process remote-only files (new remote → download)
+    for (const [relPath, remote] of remoteFiles) {
+      if (localFiles.has(relPath)) continue; // already handled above
+
+      const state = syncStates.get(relPath);
+      if (state) {
+        // Had sync state but local file is gone — don't re-download
+        // (deletion handling is out of scope for 2.5)
+        continue;
+      }
+
+      // New remote file
+      workItems.push({
+        kind: "download",
+        relativePath: relPath,
+        nodeUid: remote.id,
+        size: remote.size,
+        remoteMtime: remote.remote_mtime,
+      });
+    }
+
+    return workItems;
+  }
+
+  private async executeWorkList(pair: SyncPair, workItems: WorkItem[], client: DriveClient): Promise<void> {
+    const sem = new Semaphore(3);
+    let filesDone = 0;
+    let bytesDone = 0;
+    const bytesTotal = workItems.reduce((a, w) => a + w.size, 0);
+
+    await Promise.all(
+      workItems.map((item) =>
+        this.processOne(pair, item, sem, client, () => {
+          filesDone++;
+          bytesDone += item.size;
+          this.emitEvent({
+            type: "sync_progress",
+            payload: {
+              pair_id: pair.pair_id,
+              files_done: filesDone,
+              files_total: workItems.length,
+              bytes_done: bytesDone,
+              bytes_total: bytesTotal,
+            },
+          });
+        }),
+      ),
+    );
+  }
+
+  private async processOne(
+    pair: SyncPair,
+    item: WorkItem,
+    sem: Semaphore,
+    client: DriveClient,
+    onComplete: () => void,
+  ): Promise<void> {
+    const release = await sem.acquire();
+    try {
+      if (item.kind === "upload") {
+        await this.uploadOne(pair, item, client);
+      } else {
+        await this.downloadOne(pair, item, client);
+      }
+
+      // Determine post-transfer mtimes for state persistence
+      const destPath = join(pair.local_path, item.relativePath);
+      let localMtime: string;
+      let remoteMtime: string;
+
+      if (item.kind === "upload") {
+        // For uploads: remote_mtime = localMtime because the SDK stores
+        // body.modificationTime as activeRevision.claimedModificationTime.
+        // Using any other value would cause an infinite sync loop.
+        localMtime = item.localMtime;
+        remoteMtime = item.localMtime;
+      } else {
+        // For downloads: stat the file after rename
+        const s = await stat(destPath);
+        localMtime = s.mtime.toISOString();
+        remoteMtime = item.remoteMtime;
+      }
+
+      // 1. Write sync state first — durable before progress counter increments (AC3)
+      this.stateDb.upsertSyncState({
+        pair_id: pair.pair_id,
+        relative_path: item.relativePath,
+        local_mtime: localMtime,
+        remote_mtime: remoteMtime,
+        content_hash: null,
+      });
+
+      // 2. Then emit progress
+      onComplete();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      this.emitEvent({
+        type: "error",
+        payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+      });
+    } finally {
+      release();
+    }
+  }
+
+  private async uploadOne(pair: SyncPair, item: WorkItem & { kind: "upload" }, client: DriveClient): Promise<void> {
+    const localPath = join(pair.local_path, item.relativePath);
+    const stream = Readable.toWeb(createReadStream(localPath)) as ReadableStream<Uint8Array>;
+    await client.uploadFile(item.remoteFolderId, basename(item.relativePath), {
+      stream,
+      sizeBytes: item.size,
+      modificationTime: new Date(item.localMtime),
+      mediaType: "application/octet-stream",
+    });
+  }
+
+  private async downloadOne(
+    pair: SyncPair,
+    item: WorkItem & { kind: "download" },
+    client: DriveClient,
+  ): Promise<void> {
+    const destPath = join(pair.local_path, item.relativePath);
+    const tmpPath = `${destPath}.protondrive-tmp-${Date.now()}`;
+    await mkdir(dirname(destPath), { recursive: true });
+    const nodeWritable = createWriteStream(tmpPath);
+    const writableStream = Writable.toWeb(nodeWritable) as WritableStream<Uint8Array>;
+    try {
+      await client.downloadFile(item.nodeUid, writableStream);
+      // Await nodeWritable closure before rename — symmetric with failure path,
+      // ensures all data is flushed before the atomic rename. (F23)
+      await new Promise<void>((resolve) => {
+        if (nodeWritable.closed) {
+          resolve();
+        } else {
+          nodeWritable.once("close", resolve);
+        }
+      });
+      await rename(tmpPath, destPath);
+    } catch (err) {
+      // Close the underlying Node writable to release the file descriptor
+      // before attempting to remove the tmp file.
+      await new Promise<void>((resolve) => {
+        if (nodeWritable.closed) {
+          resolve();
+        } else {
+          nodeWritable.destroy();
+          nodeWritable.once("close", resolve);
+        }
+      });
+      try {
+        await unlink(tmpPath);
+      } catch {
+        /* already gone */
+      }
+      throw err;
+    }
+  }
+}
