@@ -36,6 +36,15 @@ class CredentialStore(ABC):
     def delete_token(self) -> None: ...
 
     @abstractmethod
+    def store_key_password(self, key_password: str) -> None: ...
+
+    @abstractmethod
+    def retrieve_key_password(self) -> str | None: ...
+
+    @abstractmethod
+    def delete_key_password(self) -> None: ...
+
+    @abstractmethod
     def is_available(self) -> bool: ...
 
     @property
@@ -46,6 +55,7 @@ class CredentialStore(ABC):
 # --- libsecret backend ---
 
 _ATTRIBUTES = {"app": "ProtonDriveLinuxClient", "type": "session-token"}
+_KEY_PASSWORD_ATTRIBUTES = {"app": "ProtonDriveLinuxClient", "type": "key-password"}
 
 
 class SecretPortalStore(CredentialStore):
@@ -119,6 +129,41 @@ class SecretPortalStore(CredentialStore):
         except GLib.Error as e:
             raise AuthError("Failed to delete credential from keyring") from e
 
+    def store_key_password(self, key_password: str) -> None:
+        from gi.repository import GLib, Secret
+
+        try:
+            Secret.password_store_sync(
+                self._get_schema(),
+                _KEY_PASSWORD_ATTRIBUTES,
+                Secret.COLLECTION_DEFAULT,
+                "ProtonDrive key password",
+                key_password,
+                None,
+            )
+        except GLib.Error as e:
+            raise AuthError("Failed to store key password in keyring") from e
+
+    def retrieve_key_password(self) -> str | None:
+        from gi.repository import GLib, Secret
+
+        try:
+            return Secret.password_lookup_sync(
+                self._get_schema(), _KEY_PASSWORD_ATTRIBUTES, None
+            )
+        except GLib.Error as e:
+            raise AuthError("Failed to retrieve key password from keyring") from e
+
+    def delete_key_password(self) -> None:
+        from gi.repository import GLib, Secret
+
+        try:
+            Secret.password_clear_sync(
+                self._get_schema(), _KEY_PASSWORD_ATTRIBUTES, None
+            )
+        except GLib.Error as e:
+            raise AuthError("Failed to delete key password from keyring") from e
+
 
 # --- Encrypted file backend ---
 
@@ -163,6 +208,7 @@ class EncryptedFileStore(CredentialStore):
         self._dir = _get_fallback_dir()
         self._token_path = self._dir / "session.enc"
         self._salt_path = self._dir / "salt.bin"
+        self._key_password_path = self._dir / "key-password.enc"
 
     @property
     def backend_name(self) -> CredentialBackend:
@@ -221,6 +267,46 @@ class EncryptedFileStore(CredentialStore):
             self._token_path.unlink(missing_ok=True)
         except OSError as e:
             raise AuthError("Failed to delete credential file") from e
+
+    def store_key_password(self, key_password: str) -> None:
+        from cryptography.fernet import Fernet
+
+        try:
+            self._dir.mkdir(parents=True, exist_ok=True)
+
+            if self._salt_path.exists():
+                salt = self._salt_path.read_bytes()
+            else:
+                salt = secrets.token_bytes(32)
+                self._write_secure(self._salt_path, salt)
+
+            key = _derive_key(salt)
+            f = Fernet(key)
+            encrypted = f.encrypt(key_password.encode("utf-8"))
+            self._write_secure(self._key_password_path, encrypted)
+        except OSError as e:
+            raise AuthError("Failed to store key password to encrypted file") from e
+
+    def retrieve_key_password(self) -> str | None:
+        from cryptography.fernet import Fernet, InvalidToken
+
+        if not self._key_password_path.exists() or not self._salt_path.exists():
+            return None
+
+        try:
+            salt = self._salt_path.read_bytes()
+            key = _derive_key(salt)
+            f = Fernet(key)
+            encrypted = self._key_password_path.read_bytes()
+            return f.decrypt(encrypted).decode("utf-8")
+        except (InvalidToken, OSError):
+            return None
+
+    def delete_key_password(self) -> None:
+        try:
+            self._key_password_path.unlink(missing_ok=True)
+        except OSError as e:
+            raise AuthError("Failed to delete key password file") from e
 
     @staticmethod
     def _write_secure(path: Path, data: bytes) -> None:
@@ -292,3 +378,18 @@ class CredentialManager:
         if self._active is None:
             raise AuthError("No credential backend available")
         self._active.delete_token()
+
+    def store_key_password(self, key_password: str) -> None:
+        if self._active is None:
+            raise AuthError("No credential backend available")
+        self._active.store_key_password(key_password)
+
+    def retrieve_key_password(self) -> str | None:
+        if self._active is None:
+            raise AuthError("No credential backend available")
+        return self._active.retrieve_key_password()
+
+    def delete_key_password(self) -> None:
+        if self._active is None:
+            raise AuthError("No credential backend available")
+        self._active.delete_key_password()

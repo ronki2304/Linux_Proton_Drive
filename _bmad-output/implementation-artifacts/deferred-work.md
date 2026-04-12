@@ -197,3 +197,8 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - No test for `get_width()`/`get_height()` returning 0 at close time — boundary not covered; `test_window_state_persistence.py`
 - No test for `Gio.Settings` write failure — `set_int`/`set_boolean` can silently fail or raise; `test_window_state_persistence.py`
 - `connect` not mocked in `TestGeometryRestore._make_window` — latent `AttributeError` if future tests call `__init__`; `test_window_state_persistence.py`
+
+## Deferred from: code review of 2-10-flatpak-build-validation (2026-04-11)
+
+- Double `GLib.timeout_add` in `engine.py` `start()` — two concurrent `_attempt_connection` callbacks fire, potentially double-counting `_elapsed_ms` and causing premature timeout or concurrent socket connections [ui/src/protondrive/engine.py:147-155]
+- Node binary path not validated before `spawnv` — `get_engine_path()` returns `(node_binary, engine_script)`; only `engine_script` is checked via `isfile`; a missing node binary produces a generic error with no root-cause hint [ui/src/protondrive/engine.py:28-34]

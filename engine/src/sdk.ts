@@ -65,6 +65,8 @@ import type {
 // no other engine file may ever import openpgp.
 import * as openpgp from "openpgp";
 
+import bcrypt from "bcryptjs";
+
 import { EngineError, NetworkError, SyncError } from "./errors.js";
 import { debugLog } from "./debug-log.js";
 
@@ -138,6 +140,7 @@ export type ProtonDriveClientLike = Pick<
   | "iterateFolderChildren"
   | "getFileUploader"
   | "getFileDownloader"
+  | "createFolder"
 >;
 
 // ---------------------------------------------------------------------------
@@ -233,6 +236,7 @@ export class DriveClient {
   constructor(
     private readonly sdk: ProtonDriveClientLike,
     private readonly account?: ProtonDriveAccount,
+    private readonly accountAdapter?: ProtonAccountAdapter,
   ) {}
 
   /**
@@ -299,6 +303,45 @@ export class DriveClient {
       // Defensive: mapSdkError is typed `never`, but if a future edit ever
       // breaks that contract this throw guarantees the method still rejects
       // instead of silently returning undefined.
+      throw err;
+    }
+  }
+
+  /**
+   * Create a folder under the given parent. If `parentId` is null, creates
+   * under My Files root. Returns the new folder's node UID.
+   *
+   * `NodeWithSameNameExistsValidationError` is treated as success — if the
+   * folder already exists (race or retry), we list to find its UID.
+   */
+  async createRemoteFolder(parentId: string | null, name: string): Promise<string> {
+    try {
+      let parent: string;
+      if (parentId === null) {
+        const root: MaybeNode = await this.sdk.getMyFilesRootFolder();
+        if (!root.ok) throw new SyncError("My Files root unavailable");
+        parent = (root.value as { uid: string }).uid;
+      } else {
+        parent = parentId;
+      }
+      const result: MaybeNode = await this.sdk.createFolder(parent, name);
+      if (!result.ok) throw new SyncError(`Failed to create remote folder "${name}"`);
+      return (result.value as { uid: string }).uid;
+    } catch (err) {
+      // If the folder already exists, find it by listing and return its id.
+      if (err instanceof NodeWithSameNameExistsValidationError) {
+        const folders = await this.listRemoteFolders(parentId);
+        const existing = folders.find((f) => f.name === name);
+        if (existing) return existing.id;
+        throw new SyncError(`Folder "${name}" exists but could not be found after conflict`);
+      }
+      const errMsg = err instanceof Error ? err.message : String(err);
+      const errType = err instanceof Error ? err.constructor.name : typeof err;
+      process.stderr.write(`[ENGINE] createRemoteFolder error type=${errType} msg=${errMsg}\n`);
+      if (err instanceof Error && err.cause) {
+        process.stderr.write(`[ENGINE] createRemoteFolder cause=${(err.cause as Error).message ?? err.cause}\n`);
+      }
+      mapSdkError(err);
       throw err;
     }
   }
@@ -425,6 +468,94 @@ export class DriveClient {
   }
 
   /**
+   * Derive the Proton keyPassword from a raw login password and unlock the
+   * user's private keys.
+   *
+   * Flow (AC1 → AC2 → AC3):
+   * 1. Fetch KeySalt from GET /core/v4/auth/info
+   * 2. Derive keyPassword: bcrypt(password, "$2y$10$" + encode(decode64(KeySalt)))
+   *    For SSO accounts (KeySalt === null), keyPassword = "" (no private keys)
+   * 3. Fetch armored keys from GET /core/v4/keys/user and decrypt each
+   *
+   * Returns the derived keyPassword so the caller can persist it to the keyring.
+   * Throws SyncError / NetworkError on failure.
+   *
+   * SECURITY: the raw password must not be stored, logged, or passed outside
+   * this method scope after derivation is complete (project-context.md NFR6).
+   */
+  /**
+   * Fetch the bcrypt salt for this session's account.
+   * Requires "locked" scope — only callable on intermediate (pre-2FA) tokens.
+   * Exposed so callers (e.g. main.ts) can cache the salt before the session
+   * is upgraded and "locked" scope is lost.
+   */
+  async fetchKeySalt(): Promise<string | null> {
+    if (!this.accountAdapter) {
+      throw new SyncError(
+        "account adapter not wired — use createDriveClient(token)",
+      );
+    }
+    return this.accountAdapter.fetchKeySalt();
+  }
+
+  /**
+   * Fetch per-key bcrypt salts from GET /core/v4/keys/salts.
+   *
+   * Requires a "locked-scope" token (immediately post-password, pre-2FA).
+   * Call this as early as possible after receiving a new token so the salts
+   * are cached before the scope is upgraded to "full" by 2FA.
+   */
+  async fetchKeySalts(): Promise<Array<{ ID: string; KeySalt: string | null }>> {
+    if (!this.accountAdapter) {
+      throw new SyncError("account adapter not wired — use createDriveClient(token)");
+    }
+    return this.accountAdapter.fetchKeySalts();
+  }
+
+  /**
+   * Derive keyPassword(s) from login password using per-key bcrypt salts, then
+   * decrypt keys. Each Proton user key has its own salt in GET /core/v4/keys/salts;
+   * using a single salt for all keys produces wrong keyPasswords for accounts with
+   * multiple keys or non-uniform salts.
+   *
+   * Returns the keyPassword for the primary user key — the caller stores this in
+   * the OS keyring for silent unlock on next launch (via applyKeyPassword).
+   */
+  async deriveAndUnlock(
+    password: string,
+    _preloadedSalt?: string | null,
+    preCapturedSalts?: Array<{ ID: string; KeySalt: string | null }>,
+  ): Promise<string> {
+    if (!this.accountAdapter) {
+      throw new SyncError(
+        "account adapter not wired — use createDriveClient(token)",
+      );
+    }
+    return this.accountAdapter.fetchAndDecryptAllKeys(password, preCapturedSalts);
+  }
+
+  /**
+   * Apply a pre-derived keyPassword (retrieved from the OS keyring on relaunch)
+   * directly — skips salt fetch and bcrypt derivation.
+   *
+   * Throws SyncError if the keyPassword fails to decrypt the keys (password
+   * changed, key rotation). The caller should emit `key_unlock_required` in
+   * that case so the user can re-enter their password.
+   */
+  async applyKeyPassword(keyPassword: string): Promise<void> {
+    if (!this.accountAdapter) {
+      throw new SyncError(
+        "account adapter not wired — use createDriveClient(token)",
+      );
+    }
+    if (keyPassword === "") {
+      // SSO account — no keys to decrypt
+      return;
+    }
+    await this.accountAdapter.fetchAndDecryptKeys(keyPassword);
+  }
+
+  /**
    * Validate the current session by fetching the primary address from Proton.
    *
    * Returns an `AccountInfo` struct with the account's email (and stub fields
@@ -438,19 +569,21 @@ export class DriveClient {
    * file for the silent-failure risk.
    */
   async validateSession(): Promise<AccountInfo> {
-    if (!this.account) {
+    if (!this.accountAdapter) {
       throw new SyncError(
         "account adapter not wired — use createDriveClient(token)",
       );
     }
     try {
-      const address = await this.account.getOwnPrimaryAddress();
+      // /core/v4/users works with "locked" scope tokens (does not require "full" scope).
+      // /core/v4/addresses requires "full" scope — only available after key unlock.
+      const userInfo = await this.accountAdapter.getUser();
       return {
-        display_name: address.email, // TODO(story-2.x): fetch display name from /core/v4/users
-        email: address.email,
-        storage_used: 0, // TODO(story-2.x): fetch from /core/v4/users
-        storage_total: 0, // TODO(story-2.x): fetch from /core/v4/users
-        plan: "", // TODO(story-2.x): fetch from /core/v4/organizations or /payments
+        display_name: userInfo.display_name,
+        email: userInfo.email,
+        storage_used: 0,
+        storage_total: 0,
+        plan: "",
       };
     } catch (err) {
       mapSdkError(err);
@@ -488,6 +621,50 @@ function toArrayBuffer(u: Uint8Array): Uint8Array<ArrayBuffer> {
 }
 
 // ---------------------------------------------------------------------------
+// Helper: encode raw bytes to bcrypt's modified base64 salt format.
+//
+// Proton's computeKeyPassword (pm-srp/lib/keys.js):
+//   full = bcrypt(password, "$2y$10$" + encodeBase64(rawSalt, 16))
+//   keyPassword = full.slice(29)   ← strips prefix + salt, keeps 31-char hash
+// where rawSalt = base64-decode(KeySalt from GET /core/v4/keys/salts).
+//
+// bcrypt's modified base64 alphabet differs from standard — same bit order
+// (MSB first, 6 bits per char) but different alphabet. 16 raw bytes → 22 chars.
+// ---------------------------------------------------------------------------
+const BCRYPT_B64 =
+  "./ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+function encodeToBcryptBase64(buf: Buffer): string {
+  let result = "";
+  let c1: number, c2: number;
+  let off = 0;
+
+  while (off < buf.length) {
+    c1 = buf[off++]! & 0xff;
+    result += BCRYPT_B64[c1 >> 2]!;
+    c1 = (c1 & 0x03) << 4;
+    if (off >= buf.length) {
+      result += BCRYPT_B64[c1]!;
+      break;
+    }
+    c2 = buf[off++]! & 0xff;
+    c1 |= c2 >> 4;
+    result += BCRYPT_B64[c1]!;
+    c1 = (c2 & 0x0f) << 2;
+    if (off >= buf.length) {
+      result += BCRYPT_B64[c1]!;
+      break;
+    }
+    c2 = buf[off++]! & 0xff;
+    c1 |= c2 >> 6;
+    result += BCRYPT_B64[c1]!;
+    result += BCRYPT_B64[c2 & 0x3f]!;
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // Helper: map openpgp VerificationResult[] to VERIFICATION_STATUS
 // ---------------------------------------------------------------------------
 async function resolveVerificationStatus(
@@ -510,11 +687,14 @@ async function resolveVerificationStatus(
 // Private to sdk.ts — NOT exported.
 // ---------------------------------------------------------------------------
 class ProtonHTTPClient implements ProtonDriveHTTPClient {
-  constructor(private readonly token: string) {}
+  constructor(private readonly token: string, private readonly uid?: string) {}
 
   async fetchJson(request: ProtonDriveHTTPClientJsonRequest): Promise<Response> {
     const headers = new Headers(request.headers);
     headers.set("Authorization", `Bearer ${this.token}`);
+    if (this.uid) headers.set("x-pm-uid", this.uid);
+    if (!headers.has("x-pm-appversion")) headers.set("x-pm-appversion", "web-drive@5.0.0.0");
+    if (!headers.has("Accept")) headers.set("Accept", "application/vnd.protonmail.v1+json");
 
     const signal = request.signal
       ? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
@@ -535,17 +715,44 @@ class ProtonHTTPClient implements ProtonDriveHTTPClient {
 
   async fetchBlob(request: ProtonDriveHTTPClientBlobRequest): Promise<Response> {
     const headers = new Headers(request.headers);
-    headers.set("Authorization", `Bearer ${this.token}`);
+
+    // Storage servers (e.g. fra-storage.proton.me) use pm-storage-token for auth,
+    // not Bearer. They also do not speak the Proton JSON API, so injecting
+    // Authorization/Accept/x-pm-* headers causes them to reject the request with
+    // "JSON parsing of request body failed" (APICodeError 6001).
+    // Only add Proton API headers for requests to the main API host.
+    const isProtonApi = request.url.includes("protonmail.com") || request.url.includes("proton.me/core") || request.url.includes("proton.me/drive");
+    if (isProtonApi) {
+      headers.set("Authorization", `Bearer ${this.token}`);
+      if (this.uid) headers.set("x-pm-uid", this.uid);
+      if (!headers.has("x-pm-appversion")) headers.set("x-pm-appversion", "web-drive@5.0.0.0");
+      if (!headers.has("Accept")) headers.set("Accept", "application/vnd.protonmail.v1+json");
+    }
 
     const signal = request.signal
       ? AbortSignal.any([request.signal, AbortSignal.timeout(request.timeoutMs)])
       : AbortSignal.timeout(request.timeoutMs);
 
+    // For storage block uploads the body is FormData. Undici's fetch may not
+    // auto-inject Content-Type when an explicit Headers object is provided.
+    // Serialize the FormData through a temporary Response to get both the
+    // multipart boundary and the raw buffer, then send with explicit
+    // Content-Type so the storage server sees a proper multipart/form-data body.
+    let body: BodyInit | null | undefined = request.body;
+    if (!isProtonApi && request.body instanceof FormData) {
+      const tempResp = new Response(request.body as FormData);
+      const contentType = tempResp.headers.get("content-type");
+      const buffer = await tempResp.arrayBuffer();
+      if (contentType) headers.set("Content-Type", contentType);
+      body = buffer;
+      process.stderr.write(`[FETCH-BLOB] storage upload: ct=${contentType} size=${buffer.byteLength}\n`);
+    }
+
     return fetch(request.url, {
       method: request.method,
       headers,
       signal,
-      body: request.body,
+      body,
     });
   }
 }
@@ -642,8 +849,21 @@ class ProtonOpenPGPCryptoProxy {
     };
   }
 
+  /**
+   * Strip config keys that openpgp 6.3.0 doesn't know.
+   * The SDK was written against a newer openpgp that added `ignoreSEIPDv2FeatureFlag`
+   * (controls AEAD/SEIPD-v2 key preference). openpgp 6.3.0 rejects unknown keys;
+   * removing it is safe because 6.3.0 already defaults to SEIPD-v1 behaviour.
+   */
+  private _sanitizeOpenpgpConfig(cfg: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+    if (!cfg) return cfg;
+    const { ignoreSEIPDv2FeatureFlag: _drop, ...rest } = cfg;
+    return Object.keys(rest).length ? rest : undefined;
+  }
+
   async encryptMessage(options: Parameters<OpenPGPCryptoProxy["encryptMessage"]>[0]) {
     const fmt = options.format ?? "armored";
+    const cfg = this._sanitizeOpenpgpConfig(options.config as Record<string, unknown> | undefined);
 
     if (options.detached) {
       // Detached: sign the plaintext separately, then encrypt
@@ -665,7 +885,7 @@ class ProtonOpenPGPCryptoProxy {
             encryptionKeys: options.encryptionKeys as unknown as openpgp.PublicKey[],
             sessionKey: options.sessionKey as unknown as openpgp.SessionKey,
             format: "binary",
-            config: options.config,
+            config: cfg,
           }),
         ]);
         return {
@@ -687,7 +907,7 @@ class ProtonOpenPGPCryptoProxy {
           encryptionKeys: options.encryptionKeys as unknown as openpgp.PublicKey[],
           sessionKey: options.sessionKey as unknown as openpgp.SessionKey,
           format: "armored",
-          config: options.config,
+          config: cfg,
         }),
       ]);
       return {
@@ -706,7 +926,7 @@ class ProtonOpenPGPCryptoProxy {
         signingKeys: options.signingKeys as unknown as openpgp.PrivateKey | undefined,
         sessionKey: options.sessionKey as unknown as openpgp.SessionKey,
         format: "binary",
-        config: options.config,
+        config: cfg,
       });
       return {
         message: toArrayBuffer(encResult as unknown as Uint8Array),
@@ -719,7 +939,7 @@ class ProtonOpenPGPCryptoProxy {
       signingKeys: options.signingKeys as unknown as openpgp.PrivateKey | undefined,
       sessionKey: options.sessionKey as unknown as openpgp.SessionKey,
       format: "armored",
-      config: options.config,
+      config: cfg,
     });
     return {
       message: encResult as string,
@@ -870,7 +1090,59 @@ const srpStub: SRPModule = {
 // Private to sdk.ts — NOT exported.
 // ---------------------------------------------------------------------------
 class ProtonAccountAdapter implements ProtonDriveAccount {
+  // Decrypted user private keys — populated by fetchAndDecryptKeys().
+  // Empty until deriveAndUnlock / applyKeyPassword succeeds.
+  private _decryptedKeys: { id: string; key: openpgp.PrivateKey }[] = [];
+
   constructor(private readonly httpClient: ProtonHTTPClient) {}
+
+  // /core/v4/users — requires "settings" scope (full auth).
+  // Falls back to /core/v4/addresses (accessible with "user"/"locked" scope)
+  // so validateSession succeeds even when the token lacks settings scope (e.g.
+  // when 2FA was not completed in-browser before the cookie was captured).
+  async getUser(): Promise<{ email: string; display_name: string }> {
+    const response = await this.httpClient.fetchJson({
+      url: "https://drive-api.proton.me/core/v4/users",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 10_000,
+    });
+    if (response.ok) {
+      const json = (await response.json()) as {
+        User?: { Email?: string; Name?: string; DisplayName?: string };
+      };
+      const email = json.User?.Email ?? "";
+      const display_name = json.User?.DisplayName ?? json.User?.Name ?? email;
+      return { email, display_name };
+    }
+
+    // On 403 (missing "settings" scope) fall back to /core/v4/addresses which
+    // is accessible with "user"/"locked" scope tokens.
+    let body = "";
+    try { body = await response.text(); } catch { /* ignore */ }
+    process.stderr.write(
+      `[ENGINE] Users API ${response.status}: ${body.slice(0, 200)} — falling back to /addresses\n`,
+    );
+
+    const addrResp = await this.httpClient.fetchJson({
+      url: "https://drive-api.proton.me/core/v4/addresses",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 10_000,
+    });
+    if (!addrResp.ok) {
+      let addrBody = "";
+      try { addrBody = await addrResp.text(); } catch { /* ignore */ }
+      process.stderr.write(`[ENGINE] Addresses API ${addrResp.status}: ${addrBody.slice(0, 200)}\n`);
+      throw new NetworkError(`Addresses API error: ${addrResp.status}`);
+    }
+    const addrJson = (await addrResp.json()) as {
+      Addresses?: Array<{ Email: string; Order: number }>;
+    };
+    const addresses = (addrJson.Addresses ?? []).slice().sort((a, b) => a.Order - b.Order);
+    const email = addresses[0]?.Email ?? "";
+    return { email, display_name: email };
+  }
 
   async getOwnPrimaryAddress(): Promise<ProtonDriveAccountAddress> {
     const addresses = await this.getOwnAddresses();
@@ -883,12 +1155,15 @@ class ProtonAccountAdapter implements ProtonDriveAccount {
 
   async getOwnAddresses(): Promise<ProtonDriveAccountAddress[]> {
     const response = await this.httpClient.fetchJson({
-      url: "https://core.proton.me/core/v4/addresses",
+      url: "https://drive-api.proton.me/core/v4/addresses",
       method: "GET",
       headers: new Headers(),
       timeoutMs: 10_000,
     });
     if (!response.ok) {
+      let body = "";
+      try { body = await response.text(); } catch { /* ignore */ }
+      process.stderr.write(`[ENGINE] Addresses API ${response.status}: ${body.slice(0, 300)}\n`);
       throw new NetworkError(`Addresses API error: ${response.status}`);
     }
     const json = (await response.json()) as {
@@ -897,13 +1172,13 @@ class ProtonAccountAdapter implements ProtonDriveAccount {
     const addresses = json.Addresses ?? [];
     // Sort by Order ascending — lower Order = higher priority (primary first)
     addresses.sort((a, b) => a.Order - b.Order);
+    // Decrypted user keys injected after deriveAndUnlock / applyKeyPassword.
+    // Returns [] until key unlock completes — share decryption fails until then.
     return addresses.map((addr) => ({
       email: addr.Email,
       addressId: addr.ID,
       primaryKeyIndex: 0,
-      // TODO(story-2.x): private key decryption requires key password not available
-      // in current auth flow — see story 2.2.5 Dev Agent Record for investigation findings
-      keys: [],
+      keys: this._decryptedKeys as unknown as { id: string; key: SDKPrivateKey }[],
     }));
   }
 
@@ -920,7 +1195,7 @@ class ProtonAccountAdapter implements ProtonDriveAccount {
 
   async getPublicKeys(email: string): Promise<SDKPublicKey[]> {
     const response = await this.httpClient.fetchJson({
-      url: `https://core.proton.me/core/v4/keys?Email=${encodeURIComponent(email)}`,
+      url: `https://drive-api.proton.me/core/v4/keys?Email=${encodeURIComponent(email)}`,
       method: "GET",
       headers: new Headers(),
       timeoutMs: 10_000,
@@ -940,6 +1215,387 @@ class ProtonAccountAdapter implements ProtonDriveAccount {
   async hasProtonAccount(email: string): Promise<boolean> {
     return (await this.getPublicKeys(email)).length > 0;
   }
+
+  // ---------------------------------------------------------------------------
+  // Key derivation (Story 2.11)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch the bcrypt salt for the current account from GET /core/v4/auth/info.
+   *
+   * Returns `null` for SSO-only accounts (KeySalt field is absent or null).
+   * Throws NetworkError on any API failure.
+   */
+  async fetchKeySalt(): Promise<string | null> {
+    // Authenticated endpoint — returns per-key salts for the current user.
+    // POST /core/v4/auth/info is pre-auth only (SRP modulus); after login use
+    // GET /core/v4/keys/salts instead.
+    const response = await this.httpClient.fetchJson({
+      url: "https://drive-api.proton.me/core/v4/keys/salts",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 10_000,
+    });
+    if (!response.ok) {
+      let body = "";
+      try {
+        body = await response.text();
+      } catch {
+        /* ignore */
+      }
+      process.stderr.write(
+        `[ENGINE] keys/salts API ${response.status}: ${body.slice(0, 200)}\n`,
+      );
+      throw new NetworkError(`keys/salts API error: ${response.status}`);
+    }
+    const json = (await response.json()) as {
+      KeySalts?: Array<{ ID: string; KeySalt: string | null }>;
+    };
+    // Return the first non-null salt — all user keys share the same derived keyPassword.
+    // SSO-only accounts have no salt; return null so caller skips bcrypt derivation.
+    for (const entry of json.KeySalts ?? []) {
+      if (entry.KeySalt) {
+        return entry.KeySalt;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Fetch and decrypt private keys, storing them in _decryptedKeys.
+   *
+   * Primary path: GET /core/v4/users (User.Keys[]) — requires "settings" scope.
+   * Fallback path: GET /core/v4/addresses (Address[].Keys[]) — accessible with
+   * "user"/"locked" scope. Address keys where Token===null are v2 keys encrypted
+   * directly with keyPassword and can be decrypted without user private keys.
+   *
+   * After this call getOwnAddresses() returns addresses with populated keys[].
+   * Throws SyncError if all keys fail to decrypt (wrong keyPassword or empty
+   * key list after attempting both paths).
+   */
+  async fetchAndDecryptKeys(keyPassword: string): Promise<void> {
+    type ArmoredKey = { ID: string; PrivateKey: string };
+
+    // --- Primary path: user keys from /core/v4/users ---
+    const usersResp = await this.httpClient.fetchJson({
+      url: "https://drive-api.proton.me/core/v4/users",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 10_000,
+    });
+
+    if (usersResp.ok) {
+      const json = (await usersResp.json()) as {
+        User?: { Keys?: Array<{ ID: string; PrivateKey: string; Primary?: number }> };
+      };
+      const armoredKeys: ArmoredKey[] = json.User?.Keys ?? [];
+      await this._decryptArmoredKeys(armoredKeys, keyPassword, "user keys");
+      return;
+    }
+
+    // --- Fallback path: address keys from /core/v4/addresses ---
+    let usersBody = "";
+    try { usersBody = await usersResp.text(); } catch { /* ignore */ }
+    process.stderr.write(
+      `[ENGINE] users API (keys) ${usersResp.status}: ${usersBody.slice(0, 200)} — falling back to address keys\n`,
+    );
+
+    const addrResp = await this.httpClient.fetchJson({
+      url: "https://drive-api.proton.me/core/v4/addresses",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 10_000,
+    });
+    if (!addrResp.ok) {
+      let addrBody = "";
+      try { addrBody = await addrResp.text(); } catch { /* ignore */ }
+      process.stderr.write(`[ENGINE] Addresses API (keys) ${addrResp.status}: ${addrBody.slice(0, 200)}\n`);
+      throw new NetworkError(`Addresses API error: ${addrResp.status}`);
+    }
+    const addrJson = (await addrResp.json()) as {
+      Addresses?: Array<{
+        Keys?: Array<{ ID: string; PrivateKey: string; Token: string | null }>;
+      }>;
+    };
+    // Collect v2 address keys (Token===null → encrypted directly with keyPassword).
+    // v3 keys (Token present) require the user private key to unwrap — skip them
+    // when we lack settings scope to fetch user keys.
+    const v2Keys: ArmoredKey[] = [];
+    for (const addr of addrJson.Addresses ?? []) {
+      for (const k of addr.Keys ?? []) {
+        if (k.Token === null) {
+          v2Keys.push({ ID: k.ID, PrivateKey: k.PrivateKey });
+        }
+      }
+    }
+    process.stderr.write(`[ENGINE] address key fallback: found ${v2Keys.length} v2 key(s)\n`);
+    await this._decryptArmoredKeys(v2Keys, keyPassword, "address keys");
+  }
+
+  /** Decrypt an array of armored keys with keyPassword and store results. */
+  private async _decryptArmoredKeys(
+    armoredKeys: Array<{ ID: string; PrivateKey: string }>,
+    keyPassword: string,
+    label: string,
+  ): Promise<void> {
+    const results = await Promise.allSettled(
+      armoredKeys.map(async (k) => {
+        const privateKey = await openpgp.readPrivateKey({ armoredKey: k.PrivateKey });
+        return openpgp.decryptKey({ privateKey, passphrase: keyPassword });
+      }),
+    );
+
+    // Log failures so we can distinguish wrong-passphrase from format errors.
+    for (const r of results) {
+      if (r.status === "rejected") {
+        const msg = r.reason instanceof Error ? r.reason.message : String(r.reason);
+        process.stderr.write(`[ENGINE] key decrypt failure (${label}): ${msg}\n`);
+      }
+    }
+
+    const decrypted = results
+      .filter(
+        (r): r is PromiseFulfilledResult<openpgp.PrivateKey> =>
+          r.status === "fulfilled",
+      )
+      .map((r) => ({ id: r.value.getFingerprint(), key: r.value }));
+
+    if (decrypted.length === 0 && armoredKeys.length > 0) {
+      throw new SyncError(
+        `Key decryption failed (${label}) — incorrect keyPassword or unsupported key format`,
+      );
+    }
+    process.stderr.write(`[ENGINE] decrypted ${decrypted.length}/${armoredKeys.length} ${label}\n`);
+
+    this._decryptedKeys = decrypted;
+  }
+
+  /**
+   * Fetch per-key bcrypt salts from GET /core/v4/keys/salts and return them
+   * as a plain array.  Requires a locked-scope token.
+   */
+  async fetchKeySalts(): Promise<Array<{ ID: string; KeySalt: string | null }>> {
+    const resp = await this.httpClient.fetchJson({
+      url: "https://drive-api.proton.me/core/v4/keys/salts",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 10_000,
+    });
+    if (!resp.ok) {
+      const body = await resp.text().catch(() => "");
+      throw new Error(`keys/salts ${resp.status}: ${body.slice(0, 100)}`);
+    }
+    const json = (await resp.json()) as { KeySalts?: Array<{ ID: string; KeySalt: string | null }> };
+    return json.KeySalts ?? [];
+  }
+
+  /**
+   * Per-key derivation: fetch the salt map from GET /core/v4/keys/salts, fetch
+   * user keys from GET /core/v4/users (or /addresses fallback), derive a separate
+   * keyPassword for each key using its specific salt, and decrypt.
+   *
+   * Returns the keyPassword for the PRIMARY user key (Primary===1, or first
+   * successful) so the caller can store it in the OS keyring for silent relaunch.
+   *
+   * This is the correct implementation of Proton's key derivation: each user key
+   * has its own bcrypt salt. Using a single global salt for all keys fails for
+   * accounts where keys were created at different times or have been rotated.
+   */
+  async fetchAndDecryptAllKeys(
+    loginPassword: string,
+    preCapturedSalts?: Array<{ ID: string; KeySalt: string | null }>,
+  ): Promise<string> {
+    // ── Step 1: build salt map ──────────────────────────────────────────────
+    const saltMap = new Map<string, string | null>();
+
+    if (preCapturedSalts !== undefined && preCapturedSalts.length > 0) {
+      // Use salts captured from the browser during auth (bypasses locked-scope
+      // restriction on GET /core/v4/keys/salts).
+      for (const s of preCapturedSalts) {
+        saltMap.set(s.ID, s.KeySalt);
+      }
+      process.stderr.write(`[ENGINE] fetchAndDecryptAllKeys: ${saltMap.size} salt(s) from browser capture\n`);
+    } else {
+      const saltsResp = await this.httpClient.fetchJson({
+        url: "https://drive-api.proton.me/core/v4/keys/salts",
+        method: "GET",
+        headers: new Headers(),
+        timeoutMs: 10_000,
+      });
+      if (saltsResp.ok) {
+        const saltsJson = (await saltsResp.json()) as {
+          KeySalts?: Array<{ ID: string; KeySalt: string | null }>;
+        };
+        for (const s of saltsJson.KeySalts ?? []) {
+          saltMap.set(s.ID, s.KeySalt);
+        }
+        process.stderr.write(`[ENGINE] fetchAndDecryptAllKeys: ${saltMap.size} salt(s) from API\n`);
+      } else {
+        let body = "";
+        try { body = await saltsResp.text(); } catch { /* ignore */ }
+        process.stderr.write(`[ENGINE] keys/salts ${saltsResp.status}: ${body.slice(0, 200)}\n`);
+        // Fallback: /core/v4/keys/salts requires "locked" scope which post-auth
+        // browser tokens don't have. Try /core/v4/auth/info for the session-level
+        // KeySalt instead and apply it to all keys.
+        const infoResp = await this.httpClient.fetchJson({
+          url: "https://drive-api.proton.me/core/v4/auth/info",
+          method: "GET",
+          headers: new Headers(),
+          timeoutMs: 10_000,
+        });
+        if (infoResp.ok) {
+          const infoJson = (await infoResp.json()) as { KeySalt?: string | null };
+          const sessionKeySalt = infoJson.KeySalt ?? null;
+          process.stderr.write(`[ENGINE] auth/info fallback: KeySalt=${sessionKeySalt ? `"${sessionKeySalt.slice(0, 8)}..."` : "null"}\n`);
+          // Store under sentinel key "_session_" — applied to any key missing from map
+          if (sessionKeySalt !== undefined) {
+            saltMap.set("_session_", sessionKeySalt);
+          }
+        } else {
+          let body2 = "";
+          try { body2 = await infoResp.text(); } catch { /* ignore */ }
+          process.stderr.write(`[ENGINE] auth/info ${infoResp.status}: ${body2.slice(0, 200)}\n`);
+        }
+      }
+    }
+
+    // ── Step 2: fetch user keys (primary path) ──────────────────────────────
+    type RawKey = { ID: string; PrivateKey: string; Primary?: number };
+    let rawKeys: RawKey[] = [];
+    let usedPath = "users";
+    const usersResp = await this.httpClient.fetchJson({
+      url: "https://drive-api.proton.me/core/v4/users",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 10_000,
+    });
+    if (usersResp.ok) {
+      const json = (await usersResp.json()) as {
+        User?: { Keys?: Array<{ ID: string; PrivateKey: string; Primary?: number }> };
+      };
+      rawKeys = json.User?.Keys ?? [];
+    } else {
+      // Fallback to address keys (v2 only — Token===null).
+      let body = "";
+      try { body = await usersResp.text(); } catch { /* ignore */ }
+      process.stderr.write(
+        `[ENGINE] users API (all-keys) ${usersResp.status}: ${body.slice(0, 200)} — falling back to address keys\n`,
+      );
+      usedPath = "addresses";
+      const addrResp = await this.httpClient.fetchJson({
+        url: "https://drive-api.proton.me/core/v4/addresses",
+        method: "GET",
+        headers: new Headers(),
+        timeoutMs: 10_000,
+      });
+      if (addrResp.ok) {
+        const addrJson = (await addrResp.json()) as {
+          Addresses?: Array<{
+            Keys?: Array<{ ID: string; PrivateKey: string; Token: string | null }>;
+          }>;
+        };
+        for (const addr of addrJson.Addresses ?? []) {
+          for (const k of addr.Keys ?? []) {
+            if (k.Token === null) rawKeys.push({ ID: k.ID, PrivateKey: k.PrivateKey });
+          }
+        }
+      } else {
+        let ab = ""; try { ab = await addrResp.text(); } catch { /* ignore */ }
+        throw new NetworkError(`Addresses API error: ${addrResp.status} — ${ab.slice(0, 100)}`);
+      }
+    }
+    process.stderr.write(`[ENGINE] fetchAndDecryptAllKeys: ${rawKeys.length} key(s) from ${usedPath}\n`);
+
+    // ── Step 3: per-key bcrypt derivation + decryption ──────────────────────
+    const decrypted: Array<{ id: string; key: openpgp.PrivateKey }> = [];
+    let primaryKeyPassword = "";
+
+    process.stderr.write(`[ENGINE] saltMap IDs (last 8): ${[...saltMap.keys()].map(id => id.slice(-8)).join(", ")}\n`);
+
+    for (const k of rawKeys) {
+      // Prefer per-key salt; fall back to session-level salt from auth/info fallback
+      let keySalt = saltMap.has(k.ID) ? saltMap.get(k.ID)! : undefined;
+      // "_session_" = API auth/info fallback; "__auth__" = browser-captured from POST /auth/v4
+      if (keySalt === undefined && (saltMap.has("_session_") || saltMap.has("__auth__"))) {
+        keySalt = saltMap.get("_session_") ?? saltMap.get("__auth__")!;
+        process.stderr.write(`[ENGINE] key ${k.ID.slice(-8)}: using fallback session KeySalt\n`);
+      } else {
+        process.stderr.write(`[ENGINE] key ${k.ID.slice(-8)}: saltFound=${keySalt !== undefined} saltNull=${keySalt === null}\n`);
+      }
+
+      let keyPassword: string;
+      if (keySalt === null) {
+        // SSO / no-key account — key is not encrypted.
+        keyPassword = "";
+      } else if (keySalt === undefined) {
+        // Salt not in map — try loginPassword directly as last resort.
+        keyPassword = loginPassword;
+      } else {
+        const rawSalt = Buffer.from(keySalt, "base64");
+        const bcryptSaltSuffix = encodeToBcryptBase64(rawSalt);
+        // Proton's computeKeyPassword: bcrypt(password, "$2y$10$" + encode(rawSalt))
+        // then strip the first 29 chars (prefix + salt) — only the 31-char hash
+        // suffix is used as the actual passphrase. See pm-srp/lib/keys.js.
+        const bcryptSaltStr = `$2y$10$${bcryptSaltSuffix}`;
+        keyPassword = (await bcrypt.hash(loginPassword, bcryptSaltStr)).slice(29);
+      }
+
+      try {
+        // Log first line of armored key to verify it's a valid PGP private key block
+        const firstLine = k.PrivateKey.split("\n")[0] ?? "";
+        process.stderr.write(`[ENGINE] key ${k.ID.slice(-8)}: armoredFirstLine="${firstLine}"\n`);
+        const privateKey = await openpgp.readPrivateKey({ armoredKey: k.PrivateKey });
+        // Log key version and S2K info
+        const kp = privateKey.keyPacket as unknown as {
+          s2k?: { type?: string; algorithm?: number; c?: number; count?: number };
+          symmetric?: number;
+          version?: number;
+        };
+        process.stderr.write(
+          `[ENGINE] key ${k.ID.slice(-8)}: v=${kp.version} s2kType="${kp.s2k?.type}" s2kAlgo=${kp.s2k?.algorithm} s2kCount=${kp.s2k?.count ?? kp.s2k?.c} sym=${kp.symmetric}\n`
+        );
+
+        let decryptedKey: openpgp.PrivateKey | null = null;
+
+        if (keyPassword === "") {
+          decryptedKey = privateKey;
+        } else {
+          try {
+            decryptedKey = await openpgp.decryptKey({ privateKey, passphrase: keyPassword });
+            process.stderr.write(`[ENGINE] key ${k.ID.slice(-8)} DECRYPTED\n`);
+          } catch (e1) {
+            const e1msg = e1 instanceof Error ? e1.message : String(e1);
+            process.stderr.write(`[ENGINE] key ${k.ID.slice(-8)}: decrypt failed: ${e1msg}\n`);
+          }
+        }
+
+        if (decryptedKey !== null) {
+          decrypted.push({ id: decryptedKey.getFingerprint(), key: decryptedKey });
+          process.stderr.write(`[ENGINE] key ${k.ID.slice(-8)} decrypted OK (Primary=${k.Primary ?? 0})\n`);
+          if (k.Primary === 1 || primaryKeyPassword === "") {
+            primaryKeyPassword = keyPassword;
+          }
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        process.stderr.write(`[ENGINE] key ${k.ID.slice(-8)} outer error: ${msg}\n`);
+      }
+    }
+
+    if (decrypted.length === 0 && rawKeys.length > 0) {
+      throw new SyncError(
+        "All keys failed to decrypt — incorrect password or unsupported key format",
+      );
+    }
+    process.stderr.write(`[ENGINE] fetchAndDecryptAllKeys: ${decrypted.length}/${rawKeys.length} decrypted\n`);
+    this._decryptedKeys = decrypted;
+    return primaryKeyPassword;
+  }
+
+  /** Return stored decrypted private keys (empty until fetchAndDecryptKeys succeeds). */
+  getPrivateKeys(): { id: string; key: openpgp.PrivateKey }[] {
+    return this._decryptedKeys;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -952,9 +1608,9 @@ class ProtonAccountAdapter implements ProtonDriveAccount {
 // The account adapter is injected into both ProtonDriveClient (for SDK crypto
 // operations) and DriveClient (for validateSession).
 // ---------------------------------------------------------------------------
-export function createDriveClient(token: string): DriveClient {
+export function createDriveClient(token: string, uid?: string): DriveClient {
   try {
-    const httpClient = new ProtonHTTPClient(token);
+    const httpClient = new ProtonHTTPClient(token, uid);
 
     const entitiesCache = new MemoryCache<string>();
     const cryptoCache = new MemoryCache<CachedCryptoMaterial>();
@@ -987,7 +1643,7 @@ export function createDriveClient(token: string): DriveClient {
     };
 
     const sdkClient = new ProtonDriveClient(params);
-    return new DriveClient(sdkClient, account);
+    return new DriveClient(sdkClient, account, account);
   } catch (err) {
     mapSdkError(err);
     throw err; // defensive

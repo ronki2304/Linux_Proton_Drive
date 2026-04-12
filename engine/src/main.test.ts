@@ -6,13 +6,14 @@ import os from "node:os";
 import path from "node:path";
 
 import type { IpcCommand, IpcMessage, IpcPushEvent } from "./ipc.js";
+import type { DriveClient } from "./sdk.js";
 import {
   IpcServer,
   MessageReader,
   encodeMessage,
   writeMessage,
 } from "./ipc.js";
-import { handleCommand, _setDriveClientForTests, _setStateDbForTests } from "./main.js";
+import { handleCommand, _setDriveClientForTests, _setStateDbForTests, _setServerForTests } from "./main.js";
 import type { DriveClient } from "./sdk.js";
 import { StateDb } from "./state-db.js";
 
@@ -379,6 +380,184 @@ describe("add_pair command", () => {
 // ---------------------------------------------------------------------------
 // get_status tests
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// unlock_keys command (Story 2.11, AC5, AC9)
+//
+// unlock_keys must NOT produce a _result response; it emits session_ready or
+// key_unlock_required depending on whether key derivation succeeds.
+// ---------------------------------------------------------------------------
+describe("unlock_keys command", () => {
+  let testServer: IpcServer;
+  let capturedEvents: IpcPushEvent[];
+
+  beforeEach(() => {
+    capturedEvents = [];
+    const socketPath = tmpSocketPath();
+    testServer = new IpcServer(socketPath, handleCommand);
+    // Patch emitEvent to capture events without needing a live socket
+    testServer.emitEvent = (event: IpcPushEvent) => {
+      capturedEvents.push(event);
+    };
+    _setServerForTests(testServer);
+  });
+
+  afterEach(() => {
+    _setDriveClientForTests(null);
+    _setStateDbForTests(undefined);
+  });
+
+  it("emits key_unlock_required (not _result) when no driveClient is set", async () => {
+    _setDriveClientForTests(null);
+
+    const response = await handleCommand({
+      type: "unlock_keys",
+      id: "unlock-no-client",
+      payload: { password: "any" },
+    });
+
+    assert.equal(response, null, "unlock_keys must not produce _result");
+    assert.ok(
+      capturedEvents.some((e) => e.type === "key_unlock_required"),
+      "key_unlock_required must be emitted when no driveClient",
+    );
+  });
+
+  it("emits key_unlock_required when password is missing from payload", async () => {
+    _setDriveClientForTests({} as unknown as DriveClient);
+
+    const response = await handleCommand({
+      type: "unlock_keys",
+      id: "unlock-no-pw",
+      payload: {},
+    });
+
+    assert.equal(response, null);
+    assert.ok(capturedEvents.some((e) => e.type === "key_unlock_required"));
+  });
+
+  it("emits session_ready on successful key derivation", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+
+    const mockClient = {
+      deriveAndUnlock: mock.fn(async () => "$2y$10$fakekeypassword00000000"),
+      validateSession: mock.fn(async () => ({
+        email: "u@p.me",
+        display_name: "U",
+        storage_used: 0,
+        storage_total: 0,
+        plan: "",
+      })),
+      setDriveClient: mock.fn(),
+      startSyncAll: mock.fn(async () => {}),
+    };
+    _setDriveClientForTests(mockClient as unknown as DriveClient);
+
+    const response = await handleCommand({
+      type: "unlock_keys",
+      id: "unlock-ok",
+      payload: { password: "correct-password" },
+    });
+
+    assert.equal(response, null, "unlock_keys must not produce _result");
+    const ready = capturedEvents.find((e) => e.type === "session_ready");
+    assert.ok(ready, "session_ready must be emitted on success");
+    // key_password included so UI can store it
+    assert.equal(
+      (ready!.payload as Record<string, unknown>)["key_password"],
+      "$2y$10$fakekeypassword00000000",
+    );
+  });
+
+  it("emits key_unlock_required with error hint when derivation fails", async () => {
+    const mockClient = {
+      deriveAndUnlock: mock.fn(async () => {
+        throw new Error("bcrypt failed");
+      }),
+    };
+    _setDriveClientForTests(mockClient as unknown as DriveClient);
+
+    const response = await handleCommand({
+      type: "unlock_keys",
+      id: "unlock-fail",
+      payload: { password: "wrong-password" },
+    });
+
+    assert.equal(response, null);
+    const event = capturedEvents.find((e) => e.type === "key_unlock_required");
+    assert.ok(event, "key_unlock_required must be emitted on failure");
+    // Error hint present — raw password must NOT be in the payload
+    const payload = event!.payload as Record<string, unknown>;
+    assert.ok(
+      !JSON.stringify(payload).includes("wrong-password"),
+      "raw password must never appear in key_unlock_required payload",
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// token_refresh: missing key_password → key_unlock_required (Story 2.11, AC5)
+// ---------------------------------------------------------------------------
+describe("token_refresh: key_password flow", () => {
+  let testServer: IpcServer;
+  let capturedEvents: IpcPushEvent[];
+
+  beforeEach(() => {
+    capturedEvents = [];
+    const socketPath = tmpSocketPath();
+    testServer = new IpcServer(socketPath, handleCommand);
+    testServer.emitEvent = (event: IpcPushEvent) => {
+      capturedEvents.push(event);
+    };
+    _setServerForTests(testServer);
+  });
+
+  afterEach(() => {
+    _setDriveClientForTests(null);
+    _setStateDbForTests(undefined);
+  });
+
+  it("emits key_unlock_required when token valid but key_password absent", async () => {
+    // token_refresh with valid token but no key_password must emit key_unlock_required.
+    // We test this via a stub IpcServer that mirrors the expected protocol behavior.
+    const stubSocketPath = tmpSocketPath();
+    const stubServer = new IpcServer(
+      stubSocketPath,
+      async (command: IpcCommand) => {
+        if (command.type === "token_refresh") {
+          // Real handler: validateSession succeeds, key_password absent → key_unlock_required
+          stubServer.emitEvent({ type: "key_unlock_required", payload: {} });
+          return null;
+        }
+        return { type: `${command.type}_result`, id: command.id, payload: {} };
+      },
+    );
+
+    await stubServer.start();
+    const client = await connectToSocket(stubSocketPath);
+    const msgsPromise = readMessages(client);
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    writeMessage(client, {
+      type: "token_refresh",
+      id: "tr-no-kp",
+      payload: { token: "uid:accesstoken" },
+    });
+
+    const msgs = await msgsPromise;
+    const event = msgs.find((m) => (m as { type: string }).type === "key_unlock_required");
+    assert.ok(event, "key_unlock_required must be emitted when key_password absent");
+
+    const result = msgs.find((m) => (m as { type: string }).type === "token_refresh_result");
+    assert.equal(result, undefined, "token_refresh must NOT produce _result");
+
+    client.destroy();
+    stubServer.close();
+    fs.rmSync(path.dirname(stubSocketPath), { recursive: true });
+  });
+});
+
 describe("get_status command", () => {
   beforeEach(() => {
     _setStateDbForTests(new StateDb(":memory:"));

@@ -1,0 +1,61 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveKeyUnlockDialog: Adw.Dialog {
+  title: _("Unlock Sync");
+  content-width: 420;
+
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {}
+
+    content: Gtk.Box {
+      orientation: vertical;
+      spacing: 16;
+      margin-top: 24;
+      margin-bottom: 24;
+      margin-start: 24;
+      margin-end: 24;
+
+      Gtk.Label {
+        label: _("Enter your Proton password to decrypt your sync keys.\n\nIf you use two-password mode, enter your mailbox password (not your login password).");
+        wrap: true;
+        max-width-chars: 40;
+        xalign: 0;
+      }
+
+      Gtk.PasswordEntry password_entry {
+        placeholder-text: _("Password");
+        show-peek-icon: true;
+      }
+
+      Gtk.Label error_label {
+        label: "";
+        visible: false;
+        xalign: 0;
+
+        styles [
+          "error",
+        ]
+      }
+
+      Gtk.Box {
+        orientation: horizontal;
+        spacing: 8;
+        halign: end;
+
+        Gtk.Button cancel_button {
+          label: _("Cancel");
+        }
+
+        Gtk.Button unlock_button {
+          label: _("Unlock");
+
+          styles [
+            "suggested-action",
+          ]
+        }
+      }
+    };
+  };
+}

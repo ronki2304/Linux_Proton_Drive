@@ -15,18 +15,49 @@ finish-args:
   - --socket=fallback-x11
   - --socket=wayland
   - --device=dri
+  - --filesystem=home
+  - --filesystem=/run/systemd/resolve:ro
+  - --talk-name=org.freedesktop.secrets
 
 modules:
+  # Python dependencies
+  - name: python3-pyyaml
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - pip3 install --prefix=/app pyyaml
+    sources: []
+
   # UI module — Python/GTK4/Libadwaita
   - name: protondrive-ui
     buildsystem: meson
+    post-install:
+      - glib-compile-schemas /app/share/glib-2.0/schemas
     sources:
       - type: dir
         path: ../ui
 
-  # Engine module — placeholder for TypeScript/Node sync engine
+  # Engine module — TypeScript/Node sync engine built with node22 SDK extension
   - name: protondrive-engine
     buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+      env:
+        npm_config_nodedir: /usr/lib/sdk/node22
+        npm_config_cache: /run/build/protondrive-engine/flatpak-node/npm-cache
     build-commands:
-      - echo "Engine module placeholder"
-    sources: []
+      - /usr/lib/sdk/node22/bin/npm ci --build-from-source
+      - ./node_modules/.bin/tsc
+      - /usr/lib/sdk/node22/bin/npm prune --omit=dev
+      - mkdir -p /app/lib/protondrive-engine
+      - cp -r dist /app/lib/protondrive-engine/
+      - cp -rP node_modules /app/lib/protondrive-engine/
+      - cp package.json /app/lib/protondrive-engine/
+      - install -Dm755 /usr/lib/sdk/node22/bin/node /app/bin/node
+    sources:
+      - type: dir
+        path: ../engine
+      - generated-sources.json

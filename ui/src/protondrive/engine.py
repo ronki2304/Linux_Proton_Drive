@@ -29,8 +29,8 @@ def get_engine_path() -> tuple[str, str]:
     """Return (node_binary, engine_script) paths for the current environment."""
     if os.environ.get("FLATPAK_ID"):
         return (
-            "/usr/lib/sdk/node22/bin/node",
-            "/app/lib/protondrive/engine.js",
+            "/app/bin/node",
+            "/app/lib/protondrive-engine/dist/src/main.js",
         )
 
     node = GLib.find_program_in_path("node")
@@ -141,12 +141,6 @@ class EngineClient:
 
         self._engine_pid = int(proc.get_identifier() or 0)
         self._proc = proc
-
-        self._retry_delay_ms = INITIAL_RETRY_DELAY_MS
-        self._elapsed_ms = 0
-        self._retry_timer_id = GLib.timeout_add(
-            self._retry_delay_ms, self._attempt_connection
-        )
 
         self._retry_delay_ms = INITIAL_RETRY_DELAY_MS
         self._elapsed_ms = 0
@@ -376,13 +370,38 @@ class EngineClient:
                 self._pending_commands.extend(pending[index + 1 :])
                 return
 
-    def send_token_refresh(self, token: str) -> None:
+    def send_token_refresh(
+        self,
+        token: str,
+        key_password: str | None = None,
+        login_password: str | None = None,
+        captured_salts: list | None = None,
+    ) -> None:
         """Send token_refresh command to engine.
 
         This is a special command — response comes as session_ready or
         token_expired push event, NOT as a _result message.
+
+        key_password: already-derived keyPassword from OS keyring (silent relaunch).
+        login_password: raw login password captured from browser during auth.
+        captured_salts: key salts captured from browser, bypassing locked-scope restriction.
         """
-        self.send_command({"type": "token_refresh", "payload": {"token": token}})
+        payload: dict[str, Any] = {"token": token}
+        if key_password is not None:
+            payload["key_password"] = key_password
+        if login_password is not None:
+            payload["login_password"] = login_password
+        if captured_salts is not None:
+            payload["captured_salts"] = captured_salts
+        self.send_command({"type": "token_refresh", "payload": payload})
+
+    def send_unlock_keys(self, password: str) -> None:
+        """Send unlock_keys command carrying the user's raw password.
+
+        The password must never appear in any log or error message —
+        the engine derives keyPassword and discards the raw value immediately.
+        """
+        self.send_command({"type": "unlock_keys", "payload": {"password": password}})
 
     def send_command(self, cmd: dict[str, Any]) -> None:
         """Send a command to the engine, or queue it if not yet ready."""

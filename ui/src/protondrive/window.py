@@ -61,6 +61,10 @@ class MainWindow(Adw.ApplicationWindow):
             self._settings.set_int("window-height", self.get_height())
         return False  # False = allow close; True would veto close entirely
 
+    def is_auth_browser_active(self) -> bool:
+        """Return True if the auth browser is the current window content."""
+        return self._auth_window is not None and self.get_content() is self._auth_window
+
     def show_pre_auth(self) -> None:
         """Display the pre-auth screen as the window content."""
         if self._pre_auth_screen is None:
@@ -317,20 +321,38 @@ class MainWindow(Adw.ApplicationWindow):
             app.start_auth_flow()
 
     def _on_auth_completed(self, auth_window: AuthWindow, token: str) -> None:
-        """Handle auth completion — store token and transition to main UI.
+        """Forward candidate token to application for engine validation.
 
-        On credential-storage failure the auth screen stays visible with an
-        inline error so the user can retry. show_main() must NOT run unless
-        the application reports success.
+        We do NOT transition to main here — the WebView stays open so the
+        cookie poller can keep running in case the first candidate has
+        insufficient scope (pre-auth visitor token).  The UI transition
+        happens in close_auth_browser(), called after engine emits session_ready.
+
+        On credential-storage failure, show an inline error and keep the auth
+        screen visible so the user can retry.
         """
         app = self.get_application()
         if app is None or not hasattr(app, "on_auth_completed"):
             return
-        success = app.on_auth_completed(token)
-        if success:
-            self.show_main()
-        elif self._auth_window is not None:
+        login_password = auth_window.captured_login_password
+        captured_salts = auth_window.captured_salts
+        success = app.on_auth_completed(
+            token,
+            login_password=login_password,
+            captured_salts=captured_salts,
+        )
+        if not success and self._auth_window is not None:
             self._auth_window.show_credential_error()
+
+    def close_auth_browser(self) -> None:
+        """Tear down the auth browser WebView without changing the window content.
+
+        Called by the application after session_ready is confirmed.  The
+        window content transition (show_main / show_setup_wizard) is the
+        caller's responsibility.
+        """
+        if self._auth_window is not None:
+            self._auth_window.mark_auth_complete()
 
     def _on_logout_confirmed(self) -> None:
         """Execute logout sequence via Application."""

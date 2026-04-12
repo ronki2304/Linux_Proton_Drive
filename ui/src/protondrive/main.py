@@ -37,6 +37,11 @@ class Application(Adw.Application):
         self._token_validation_timer_id: int | None = None
         self._cached_session_data: dict[str, Any] | None = None
         self._watcher_status: str = "unknown"
+        self._pending_key_unlock_dialog: Any | None = None
+        # True once the user has started a browser auth session in this process
+        # lifetime.  Used to decide whether to show the key-unlock dialog or to
+        # route back to pre-auth (if the stored token is insufficient on startup).
+        self._had_browser_session: bool = False
 
     @property
     def settings(self) -> Gio.Settings:
@@ -62,6 +67,7 @@ class Application(Adw.Application):
         self._engine.on_event("watcher_status", self._on_watcher_status)
         self._engine.on_event("sync_progress", self._on_sync_progress)
         self._engine.on_event("sync_complete", self._on_sync_complete)
+        self._engine.on_event("key_unlock_required", self._on_key_unlock_required)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -79,7 +85,8 @@ class Application(Adw.Application):
             if self._engine is not None and self._engine.is_running:
                 token = self._get_stored_token()
                 if token is not None:
-                    self._engine.send_token_refresh(token)
+                    key_password = self._get_stored_key_password()
+                    self._engine.send_token_refresh(token, key_password)
                     self._start_validation_timeout()
         win.present()
 
@@ -88,39 +95,50 @@ class Application(Adw.Application):
 
     def start_auth_flow(self) -> None:
         """Called by window when user clicks sign-in."""
+        self._had_browser_session = True
         if self._window is not None:
             self._window.show_auth_browser()
 
-    def on_auth_completed(self, token: str) -> bool:
+    def on_auth_completed(
+        self,
+        token: str,
+        login_password: str | None = None,
+        captured_salts: list | None = None,
+    ) -> bool:
         """Persist auth token and refresh the engine session.
+
+        login_password and captured_salts, when provided, are captured from
+        Proton's browser login form via JS injection.  The engine uses them to
+        derive keyPassword silently without showing the key-unlock dialog.
 
         Returns:
             True on success — caller may transition to the main UI.
             False if credential storage failed — caller MUST keep the auth
-            screen visible so the user can retry. ``wizard-auth-complete`` is
-            NOT set and ``send_token_refresh`` is NOT called on failure.
+            screen visible so the user can retry.
         """
-        import sys
-        print("[DEBUG] on_auth_completed called", file=sys.stderr)
         if self._credential_manager is not None:
             try:
                 self._credential_manager.store_token(token)
-                print("[DEBUG] token stored ok", file=sys.stderr)
-            except AuthError as e:
-                print(f"[DEBUG] store_token failed: {e}", file=sys.stderr)
+            except AuthError:
                 return False
-        else:
-            print("[DEBUG] no credential_manager", file=sys.stderr)
 
         try:
             self.settings.set_boolean("wizard-auth-complete", True)
-            print("[DEBUG] settings ok", file=sys.stderr)
-        except Exception as e:
-            print(f"[DEBUG] settings error: {e}", file=sys.stderr)
+        except Exception:
+            pass
 
         if self._engine is not None:
-            self._engine.send_token_refresh(token)
-            print("[DEBUG] token_refresh sent", file=sys.stderr)
+            import sys
+            print(
+                f"[APP] send_token_refresh: login_password={'yes' if login_password else 'no'} "
+                f"captured_salts={len(captured_salts) if captured_salts else 0}",
+                file=sys.stderr,
+            )
+            self._engine.send_token_refresh(
+                token,
+                login_password=login_password,
+                captured_salts=captured_salts,
+            )
         return True
 
     def _on_engine_ready(self, message: dict[str, Any]) -> None:
@@ -130,7 +148,8 @@ class Application(Adw.Application):
 
         if token is not None:
             if self._engine is not None:
-                self._engine.send_token_refresh(token)
+                key_password = self._get_stored_key_password()
+                self._engine.send_token_refresh(token, key_password)
             self._start_validation_timeout()
         else:
             if self._window is not None:
@@ -168,24 +187,49 @@ class Application(Adw.Application):
             self._token_validation_timer_id = None
 
     def _on_validation_timeout(self) -> bool:
-        """Token validation timed out — route to pre-auth."""
+        """Token validation timed out — route to pre-auth (unless auth browser is active)."""
+        import sys
+        print("[APP] validation timeout fired — routing to pre-auth", file=sys.stderr)
         self._token_validation_timer_id = None
         if self._credential_manager is not None:
             try:
                 self._credential_manager.delete_token()
             except Exception:
                 pass
-        if self._window is not None:
+        if self._window is not None and not self._window.is_auth_browser_active():
             self._window.show_pre_auth()
         return False
 
     def _on_session_ready(self, payload: dict[str, Any]) -> None:
-        """Token validated — route to wizard or main window based on pair config."""
+        """Token validated — close auth browser then route to wizard or main window."""
+        import sys
+        print(f"[APP] session_ready received: {list(payload.keys())}", file=sys.stderr)
         self._cancel_validation_timeout()
         self._cached_session_data = payload
+
+        # Persist key_password when the engine derived it in-session (AC4).
+        key_password = payload.get("key_password")
+        if key_password and self._credential_manager is not None:
+            try:
+                self._credential_manager.store_key_password(key_password)
+            except Exception:
+                pass
+
         if self._window is None:
+            print("[APP] session_ready: _window is None, skipping", file=sys.stderr)
             return
-        if self._has_configured_pairs():
+        # Close key unlock dialog if it is still open (unlock succeeded).
+        if self._pending_key_unlock_dialog is not None:
+            try:
+                self._pending_key_unlock_dialog.close()
+            except Exception:
+                pass
+            self._pending_key_unlock_dialog = None
+        # Tear down WebView (stop cookie poller) now that we have a valid token.
+        self._window.close_auth_browser()
+        has_pairs = self._has_configured_pairs()
+        print(f"[APP] has_configured_pairs={has_pairs}", file=sys.stderr)
+        if has_pairs:
             self._window.show_main()
             self._window.on_session_ready(payload)
             if self._engine is not None:
@@ -193,6 +237,7 @@ class Application(Adw.Application):
                     {"type": "get_status"}, self._on_get_status_result
                 )
         else:
+            print("[APP] calling show_setup_wizard", file=sys.stderr)
             self._window.show_setup_wizard(self._engine)
 
     def _has_configured_pairs(self) -> bool:
@@ -241,13 +286,30 @@ class Application(Adw.Application):
                 )
 
     def _on_token_expired(self, payload: dict[str, Any]) -> None:
-        """Token expired at launch — route to pre-auth silently (no error)."""
+        """Token expired — route to pre-auth, unless auth browser is active.
+
+        When the auth browser is open the user is mid-login; the cookie poller
+        will automatically retry with the next token it finds (e.g., after the
+        user completes the full login flow and Proton upgrades the session scope).
+        We must not disrupt that flow.
+        """
+        import sys
+        print(f"[APP] token_expired received: {payload}", file=sys.stderr)
         self._cancel_validation_timeout()
         self._watcher_status = "unknown"
+
+        if self._window is not None and self._window.is_auth_browser_active():
+            # Mid-login: keep the auth browser open and let the poller retry.
+            print("[APP] token_expired ignored — auth browser active, waiting for valid token", file=sys.stderr)
+            return
 
         if self._credential_manager is not None:
             try:
                 self._credential_manager.delete_token()
+            except Exception:
+                pass
+            try:
+                self._credential_manager.delete_key_password()
             except Exception:
                 pass
 
@@ -259,10 +321,15 @@ class Application(Adw.Application):
     def logout(self) -> None:
         """Execute logout: clear credentials, shutdown engine, show pre-auth."""
         self._watcher_status = "unknown"
+        self._had_browser_session = False
 
         if self._credential_manager is not None:
             try:
                 self._credential_manager.delete_token()
+            except Exception:
+                pass
+            try:
+                self._credential_manager.delete_key_password()
             except Exception:
                 pass
 
@@ -289,12 +356,96 @@ class Application(Adw.Application):
         """Handle engine errors."""
         pass  # TODO: Story 5.x error display
 
+    def _on_key_unlock_required(self, message: dict[str, Any]) -> None:
+        """Engine needs a password to unlock sync keys.
+
+        If the user has not yet opened the browser in this session (e.g., the
+        stored token triggered this on startup), route them back to pre-auth so
+        they can do a fresh browser login — the JS injection will capture the
+        login password and salts, enabling silent unlock.
+
+        Only show the key-unlock dialog when the user has already gone through
+        the browser: they know what password to expect.
+        """
+        self._cancel_validation_timeout()
+
+        payload = message.get("payload", {})
+        error = payload.get("error") if isinstance(payload, dict) else None
+
+        if not self._had_browser_session:
+            # Startup case: stored token can't unlock keys. Clear it so the
+            # user is routed to fresh browser login where we capture the password.
+            if self._credential_manager is not None:
+                try:
+                    self._credential_manager.delete_token()
+                except Exception:
+                    pass
+                try:
+                    self._credential_manager.delete_key_password()
+                except Exception:
+                    pass
+            self.settings.set_boolean("wizard-auth-complete", False)
+            if self._window is not None:
+                self._window.show_pre_auth()
+            return
+
+        from protondrive.widgets.key_unlock_dialog import KeyUnlockDialog
+
+        if self._pending_key_unlock_dialog is not None:
+            # Dialog already showing — surface the error inline so the user
+            # can retry without a second popup appearing.
+            if error:
+                self._pending_key_unlock_dialog.show_error(
+                    "Wrong password. Please try again."
+                )
+            return
+
+        dialog = KeyUnlockDialog()
+        self._pending_key_unlock_dialog = dialog
+        dialog.connect("unlock-confirmed", self._on_unlock_confirmed)
+        dialog.connect("unlock-cancelled", self._on_unlock_cancelled)
+
+        if self._window is not None:
+            dialog.present(self._window)
+
+    def _on_unlock_confirmed(self, _dialog: Any, password: str) -> None:
+        """User submitted password — send unlock_keys to engine.
+
+        Do NOT clear _pending_key_unlock_dialog here: the engine will respond
+        asynchronously with either session_ready (success) or key_unlock_required
+        (failure). Clearing the reference early causes a second dialog to open
+        when the failure event arrives.
+        """
+        if self._engine is not None:
+            self._engine.send_unlock_keys(password)
+
+    def _on_unlock_cancelled(self, _dialog: Any) -> None:
+        """User cancelled key unlock — discard token, route to pre-auth."""
+        self._pending_key_unlock_dialog = None
+        if self._credential_manager is not None:
+            try:
+                self._credential_manager.delete_token()
+            except Exception:
+                pass
+        self.settings.set_boolean("wizard-auth-complete", False)
+        if self._window is not None:
+            self._window.show_pre_auth()
+
     def _get_stored_token(self) -> str | None:
         """Retrieve stored token from credential store. Returns None if absent."""
         if self._credential_manager is None:
             return None
         try:
             return self._credential_manager.retrieve_token()
+        except Exception:
+            return None
+
+    def _get_stored_key_password(self) -> str | None:
+        """Retrieve stored keyPassword from credential store. Returns None if absent."""
+        if self._credential_manager is None:
+            return None
+        try:
+            return self._credential_manager.retrieve_key_password()
         except Exception:
             return None
 

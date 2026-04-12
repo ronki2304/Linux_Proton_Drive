@@ -81,6 +81,7 @@ def _build_gi_mocks() -> dict[str, MagicMock]:
     adw.Bin = _FakeWidget
     adw.Application = _FakeWidget
     adw.ApplicationWindow = _FakeWidget
+    adw.Dialog = _FakeWidget
     gtk.Box = _FakeWidget
     gtk.ListBoxRow = _FakeWidget
 

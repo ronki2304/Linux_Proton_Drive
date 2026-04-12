@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import time
 from urllib.parse import unquote, urlparse
 
 import gi
@@ -36,15 +37,28 @@ class AuthWindow(Adw.Bin):
         super().__init__(**kwargs)
         self._auth_server: AuthCallbackServer | None = None
         self._webview: WebKit.WebView | None = None
+        self._ucm: WebKit.UserContentManager | None = None
         self._auth_start_url: str | None = None
         self._completed: bool = False
         self._cookie_poll_id: int | None = None
+        # Data captured from Proton's web app via JS injection during login.
+        # login_password: the exact bytes the user typed in Proton's login form.
+        # captured_salts: per-key bcrypt salts from GET /core/v4/keys/salts
+        #   (Proton's browser calls this with a locked-scope token we can't reuse).
+        self._captured_login_password: str | None = None
+        self._captured_salts: list | None = None
 
         self.error_banner.connect("button-clicked", self._on_retry_clicked)
         # AdwBanner is a GtkOverlay child — GTK4 does not zero out its input
         # region when revealed=False, so it intercepts all pointer events even
         # while invisible.  Disable event targeting until the banner is shown.
         self.error_banner.set_can_target(False)
+        # Token dedup: resend if value changed OR if same value but N seconds elapsed.
+        # After 2FA, Proton upgrades scope server-side without changing the cookie value,
+        # so we must periodically retry the same token to catch the scope upgrade.
+        self._last_token_sent: str | None = None
+        self._last_send_time: float = 0.0
+        self._RESEND_INTERVAL_S: float = 8.0
 
     def start_auth(self) -> None:
         """Start the auth flow: bind server socket, then navigate WebView.
@@ -62,9 +76,118 @@ class AuthWindow(Adw.Bin):
         self._create_webview()
         self._webview.load_uri(self._auth_start_url)
 
+    # JavaScript injected at document-start into Proton's login page.
+    # Captures the login password from input events and intercepts the
+    # GET /core/v4/keys/salts response (called with a locked-scope token
+    # that we cannot reuse after scope upgrade).  Both values are sent back
+    # via the "protonCapture" WebKit script message handler.
+    _CAPTURE_JS = r"""
+(function() {
+  'use strict';
+  var _pw = '';
+
+  // Capture password as the user types in Proton's login form.
+  document.addEventListener('input', function(e) {
+    var t = e.target;
+    if (t && t.tagName === 'INPUT' && t.type === 'password') { _pw = t.value; }
+  }, true);
+  document.addEventListener('change', function(e) {
+    var t = e.target;
+    if (t && t.tagName === 'INPUT' && t.type === 'password') { _pw = t.value; }
+  }, true);
+
+  function _post(obj) {
+    try { window.webkit.messageHandlers.protonCapture.postMessage(JSON.stringify(obj)); }
+    catch(e) { /* handler not registered (non-WebKit env) */ }
+  }
+
+  function _handleResponse(url, method, body, pw) {
+    if (method === 'GET' && url.indexOf('/core/v4/keys/salts') >= 0) {
+      try {
+        var j = JSON.parse(body);
+        if (j && Array.isArray(j.KeySalts)) {
+          _post({ type: 'key_salts', keySalts: j.KeySalts });
+        }
+      } catch(e) {}
+    }
+    if (method === 'POST' && url.indexOf('/core/v4/auth') >= 0 &&
+        url.indexOf('refresh') < 0 && url.indexOf('2fa') < 0 && url.indexOf('unlock') < 0) {
+      try {
+        var j = JSON.parse(body);
+        if (j && (j.UID || j.AccessToken)) {
+          if (pw) { _post({ type: 'auth_success', loginPassword: pw }); }
+          if (j.KeySalt) { _post({ type: 'auth_key_salt', keySalt: j.KeySalt }); }
+        }
+      } catch(e) {}
+    }
+  }
+
+  // Override fetch
+  var _origFetch = window.fetch;
+  window.fetch = function() {
+    var resource = arguments[0];
+    var init = arguments[1];
+    var url = typeof resource === 'string' ? resource : (resource && resource.url) || '';
+    var method = ((init && init.method) || (resource && resource.method) || 'GET').toUpperCase();
+    var pw = _pw;
+    var promise = _origFetch.apply(this, arguments);
+    promise.then(function(r) {
+      return r.clone().text();
+    }).then(function(body) {
+      _handleResponse(url, method, body, pw);
+    }).catch(function() {});
+    return promise;
+  };
+
+  // Override XMLHttpRequest (Proton may use XHR instead of fetch)
+  var _origXHR = window.XMLHttpRequest;
+  window.XMLHttpRequest = function() {
+    var xhr = new _origXHR();
+    var _method = 'GET', _url = '';
+    var _origOpen = xhr.open.bind(xhr);
+    var _origSend = xhr.send.bind(xhr);
+    xhr.open = function(method, url) {
+      _method = (method || 'GET').toUpperCase();
+      _url = url || '';
+      return _origOpen.apply(this, arguments);
+    };
+    xhr.send = function() {
+      var pw = _pw;
+      xhr.addEventListener('load', function() {
+        try { _handleResponse(_url, _method, xhr.responseText, pw); } catch(e) {}
+      });
+      return _origSend.apply(this, arguments);
+    };
+    return xhr;
+  };
+  window.XMLHttpRequest.prototype = _origXHR.prototype;
+})();
+"""
+
     def _create_webview(self) -> None:
-        """Create WebView programmatically (no Blueprint representation)."""
-        self._webview = WebKit.WebView()
+        """Create WebView with JS injection for key-capture, then configure it."""
+        # UserContentManager lets us inject scripts and receive postMessage calls.
+        self._ucm = WebKit.UserContentManager()
+        try:
+            self._ucm.register_script_message_handler("protonCapture")
+            self._ucm.connect(
+                "script-message-received::protonCapture", self._on_capture_message
+            )
+            script = WebKit.UserScript(
+                self._CAPTURE_JS,
+                WebKit.UserContentInjectedFrames.ALL_FRAMES,
+                WebKit.UserScriptInjectionTime.START,
+                None,
+                None,
+            )
+            self._ucm.add_script(script)
+        except Exception as e:
+            print(f"[AUTH] JS injection setup failed: {e}", file=sys.stderr)
+
+        # Use the default (persistent) WebKit network session so Proton's auth
+        # cookies persist between app launches.  This means the user is not
+        # prompted for 2FA on every restart once they have completed a full login.
+        self._webview = WebKit.WebView(user_content_manager=self._ucm)
 
         # On Wayland the DMA-BUF renderer creates a separate EGL surface whose
         # input region isn't registered with the compositor, causing pointer
@@ -76,7 +199,6 @@ class AuthWindow(Adw.Bin):
             settings.set_hardware_acceleration_policy(
                 WebKit.HardwareAccelerationPolicy.NEVER
             )
-            print("[AUTH] HW accel disabled (NEVER)", file=sys.stderr)
         except Exception as e:
             print(f"[AUTH] HW accel policy failed: {e}", file=sys.stderr)
 
@@ -89,6 +211,51 @@ class AuthWindow(Adw.Bin):
         # grab_focus() is a no-op before the widget is realized; fire it on the
         # first map event instead so it runs after the widget tree is on-screen.
         self._webview.connect("map", lambda w: w.grab_focus())
+
+    def _on_capture_message(
+        self, ucm: WebKit.UserContentManager, js_value: object
+    ) -> None:
+        """Handle postMessage from the injected JS capture script.
+
+        WebKit 6.0: the signal passes a JavaScriptCore.Value directly (not a
+        ScriptMessage wrapper).  Call .to_string() on it to get the JSON.
+        """
+        import json as _json
+        try:
+            text = js_value.to_string()  # type: ignore[union-attr]
+            data = _json.loads(text)
+            msg_type = data.get("type")
+            if msg_type == "key_salts":
+                salts = data.get("keySalts", [])
+                self._captured_salts = salts
+                print(f"[AUTH] captured {len(salts)} key salt(s) from browser", file=sys.stderr)
+            elif msg_type == "auth_success":
+                pw = data.get("loginPassword", "")
+                if pw:
+                    self._captured_login_password = pw
+                    print(f"[AUTH] captured login password from browser (len={len(pw)})", file=sys.stderr)
+            elif msg_type == "auth_key_salt":
+                # KeySalt from POST /auth response — single global salt (legacy accounts)
+                salt = data.get("keySalt", "")
+                if salt:
+                    print(f"[AUTH] captured auth KeySalt from browser: {salt[:8]}...", file=sys.stderr)
+                    # Store as a synthetic single-salt entry (no key ID, used as fallback)
+                    if self._captured_salts is None:
+                        self._captured_salts = []
+                    # Add as a special entry with ID "__auth__" for the engine to use
+                    self._captured_salts.append({"ID": "__auth__", "KeySalt": salt})
+        except Exception as e:
+            print(f"[AUTH] capture message error: {e}", file=sys.stderr)
+
+    @property
+    def captured_login_password(self) -> str | None:
+        """Login password captured from Proton's browser login form, or None."""
+        return self._captured_login_password
+
+    @property
+    def captured_salts(self) -> list | None:
+        """Per-key bcrypt salts captured from browser, or None."""
+        return self._captured_salts
 
     def _on_load_changed(self, webview: WebKit.WebView, event: WebKit.LoadEvent) -> None:
         """Update URL label with current domain on navigation."""
@@ -148,11 +315,13 @@ class AuthWindow(Adw.Bin):
                 return
             for cookie in cookies:
                 if cookie.get_name().startswith("AUTH-"):
+                    uid = cookie.get_name()[len("AUTH-"):]
                     raw = cookie.get_value() or ""
-                    token = unquote(raw)
-                    if token:
+                    access_token = unquote(raw)
+                    if uid and access_token:
+                        # Encode as "uid:accesstoken" — engine splits on first colon
                         print("[AUTH] AUTH cookie found — completing auth", file=sys.stderr)
-                        GLib.idle_add(self._on_token_received, token)
+                        GLib.idle_add(self._on_token_received, f"{uid}:{access_token}")
                     return
 
         cookie_manager.get_all_cookies(None, _on_cookies)
@@ -207,15 +376,38 @@ class AuthWindow(Adw.Bin):
         self._completed = False
 
     def _on_token_received(self, token: str) -> None:
-        """Clean up WebView and auth server, emit auth-completed signal."""
-        print(f"[AUTH] token received (len={len(token)})", file=sys.stderr)
+        """Emit auth-completed signal with the candidate token.
+
+        The WebView is NOT torn down here — Proton sets an AUTH-{UID} cookie
+        before the user enters credentials (pre-auth visitor session).  We keep
+        the browser open and keep polling so the cookie poller can capture the
+        real post-login token once the user completes authentication.
+
+        mark_auth_complete() is called by the application after the engine
+        confirms session_ready, at which point the WebView is torn down.
+        """
         if self._completed:
             return
-        self._completed = True
-
-        self._teardown_webview()
-
+        now = time.monotonic()
+        if (token == self._last_token_sent and
+                now - self._last_send_time < self._RESEND_INTERVAL_S):
+            return  # Same token, too soon to retry scope upgrade
+        self._last_token_sent = token
+        self._last_send_time = now
+        print(f"[AUTH] token candidate (len={len(token)}) — sending to engine", file=sys.stderr)
         self.emit("auth-completed", token)
+
+    def mark_auth_complete(self) -> None:
+        """Tear down the WebView and stop polling.
+
+        Called by the application after the engine emits session_ready,
+        confirming the token has sufficient scope.
+        """
+        if self._completed:
+            return
+        print("[AUTH] mark_auth_complete — tearing down WebView", file=sys.stderr)
+        self._completed = True
+        self._teardown_webview()
 
     def cleanup(self) -> None:
         """Force cleanup if auth window is destroyed before completion."""
@@ -232,7 +424,9 @@ class AuthWindow(Adw.Bin):
             self._auth_server = None
 
         if self._webview is not None:
-            self._clear_webview_session(self._webview)
+            # Do NOT clear cookies — we want the Proton session to persist so the
+            # user doesn't need to enter credentials + 2FA on every app launch.
+            # The cookie poller will reuse the existing session on next launch.
             self._webview.try_close()
             self.webview_container.remove(self._webview)
             self._webview = None

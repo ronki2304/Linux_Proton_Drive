@@ -81,6 +81,7 @@ export class SyncEngine {
   async startSyncAll(): Promise<void> {
     if (this.isSyncing) return; // re-entrancy guard (F1)
     this.isSyncing = true;
+    process.stderr.write("[ENGINE] startSyncAll: begin\n");
     try {
       // Cold-start: restore pairs in config but missing from SQLite (AC5)
       const configPairs = this.getConfigPairs();
@@ -97,12 +98,15 @@ export class SyncEngine {
         }
       }
 
+      const pairs = this.stateDb.listPairs();
+      process.stderr.write(`[ENGINE] startSyncAll: ${pairs.length} pair(s)\n`);
       // Sync all pairs sequentially; per-pair errors do not abort siblings
-      for (const pair of this.stateDb.listPairs()) {
+      for (const pair of pairs) {
         try {
           await this.syncPair(pair);
         } catch (err) {
           const msg = err instanceof Error ? err.message : "unknown";
+          process.stderr.write(`[ENGINE] sync_cycle_error pair=${pair.pair_id.slice(-8)}: ${msg}\n`);
           this.emitEvent({
             type: "error",
             payload: { code: "sync_cycle_error", message: msg, pair_id: pair.pair_id },
@@ -110,6 +114,7 @@ export class SyncEngine {
         }
       }
     } finally {
+      process.stderr.write("[ENGINE] startSyncAll: done\n");
       this.isSyncing = false;
     }
   }
@@ -123,11 +128,14 @@ export class SyncEngine {
     // Resolve remote_id if empty (AC6)
     if (pair.remote_id === "") {
       try {
+        process.stderr.write(`[ENGINE] resolving remote_id for pair=${pair.pair_id.slice(-8)} remote_path=${pair.remote_path}\n`);
         const resolvedId = await this.resolveRemoteId(pair, client);
+        process.stderr.write(`[ENGINE] resolved remote_id=${resolvedId.slice(-8)} for pair=${pair.pair_id.slice(-8)}\n`);
         // Update the in-memory pair for this cycle
         pair = { ...pair, remote_id: resolvedId };
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
+        process.stderr.write(`[ENGINE] remote_path_not_found pair=${pair.pair_id.slice(-8)}: ${msg}\n`);
         this.emitEvent({
           type: "error",
           payload: { code: "remote_path_not_found", message: msg, pair_id: pair.pair_id },
@@ -181,14 +189,16 @@ export class SyncEngine {
 
     for (const segment of segments) {
       const folders = await client.listRemoteFolders(parentId);
+      process.stderr.write(`[ENGINE] resolveRemoteId: looking for "${segment}" among [${folders.map((f) => f.name).join(", ")}]\n`);
       const match = folders.find((f) => f.name === segment);
       if (!match) {
-        throw new SyncError(
-          `Remote path segment not found: "${segment}" in "${pair.remote_path}"`,
-        );
+        process.stderr.write(`[ENGINE] resolveRemoteId: "${segment}" not found — creating it\n`);
+        resolvedId = await client.createRemoteFolder(parentId, segment);
+        process.stderr.write(`[ENGINE] resolveRemoteId: created "${segment}" id=${resolvedId.slice(-8)}\n`);
+      } else {
+        resolvedId = match.id;
       }
-      resolvedId = match.id;
-      parentId = match.id;
+      parentId = resolvedId;
     }
 
     this.stateDb.updatePairRemoteId(pair.pair_id, resolvedId);

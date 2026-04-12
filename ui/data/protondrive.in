@@ -1,0 +1,3 @@
+#!/usr/bin/env @PYTHON@
+import runpy
+runpy.run_module('protondrive', run_name='__main__')

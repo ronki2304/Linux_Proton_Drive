@@ -1061,6 +1061,41 @@ So that sandbox issues are caught early and not discovered at Flathub submission
 
 ---
 
+### Story 2.11: Post-Auth Key Password Derivation and Drive Crypto Unlock
+
+_Added via Sprint Change Proposal CC-2026-04-11: browser cookie auth captures AccessToken but not the
+bcrypt-derived keyPassword needed to decrypt the user's OpenPGP private keys. Without it,
+`getPrivateKeys()` returns `[]` and all Proton Drive share key decryption fails._
+
+As a user who has signed in via the embedded browser,
+I want the app to derive my Proton cryptographic key password from my login password,
+So that the sync engine can decrypt my Proton Drive share keys and actually sync files.
+
+**Acceptance Criteria:**
+
+**Given** a valid AccessToken and UID stored from browser auth
+**When** the engine receives `token_refresh` without a `key_password`
+**Then** the engine emits `key_unlock_required` and the UI shows a native "Unlock Sync" password dialog
+
+**Given** the user enters their Proton password in the unlock dialog
+**When** they press "Unlock"
+**Then** the engine fetches the bcrypt salt via `GET /core/v4/auth/info`
+**And** derives `keyPassword = bcrypt(password, salt)`
+**And** fetches and decrypts the user's private keys via `GET /core/v4/keys/user`
+**And** `ProtonAccountAdapter.getPrivateKeys()` returns the decrypted keys
+**And** subsequent `listRemoteFolders` and sync operations succeed
+
+**Given** successful key unlock
+**When** the session is established
+**Then** `keyPassword` (not the raw password) is stored in the OS keyring
+**And** on the next launch, `token_refresh` includes the stored `keyPassword` and keys are decrypted silently with no dialog shown
+
+**Given** any error path in this story
+**When** writing logs or IPC events
+**Then** the raw user password is never written anywhere (logged, transmitted, or stored)
+
+---
+
 ## Epic 3: Offline Resilience & Network Handling
 
 User always knows when they're offline, changes queue automatically and persist to disk, and sync resumes without user action when network returns. Rate limiting is surfaced visibly. The app never appears frozen or broken during network disruptions.

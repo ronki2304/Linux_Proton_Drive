@@ -945,11 +945,18 @@ describe("ProtonHTTPClient via createDriveClient", () => {
 
   before(() => {
     originalFetch = globalThis.fetch;
+    // validateSession now calls GET /core/v4/users (works with "locked" scope).
     mockedFetch = mock.fn(async () =>
-      new Response(JSON.stringify({ Addresses: [], Code: 1000 }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({
+          User: { Email: "test@proton.me", DisplayName: "Test User" },
+          Code: 1000,
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
     );
     // @ts-expect-error — replacing global fetch for test isolation
     globalThis.fetch = mockedFetch;
@@ -963,13 +970,9 @@ describe("ProtonHTTPClient via createDriveClient", () => {
     const token = "test-bearer-xyz";
     const client = createDriveClient(token);
 
-    // validateSession calls getOwnPrimaryAddress → GET /core/v4/addresses
-    // The response has Addresses: [] → SyncError("No primary Proton address found")
-    // That's expected — we just want to verify the fetch call received the header.
-    await assert.rejects(
-      () => client.validateSession(),
-      (err: unknown) => err instanceof SyncError,
-    );
+    // validateSession calls getUser → GET /core/v4/users.
+    // Mock returns a valid User object so it succeeds.
+    await client.validateSession();
 
     assert.ok(mockedFetch.mock.callCount() >= 1, "fetch must be called at least once");
     const call = mockedFetch.mock.calls[0]!;
@@ -989,7 +992,7 @@ describe("ProtonHTTPClient via createDriveClient", () => {
     mockedFetch.mock.resetCalls();
 
     const client = createDriveClient("token-timeout-test");
-    await assert.rejects(() => client.validateSession(), () => true);
+    await client.validateSession();
 
     assert.ok(mockedFetch.mock.callCount() >= 1);
     const init = mockedFetch.mock.calls[0]!.arguments[1] as RequestInit;
@@ -998,42 +1001,37 @@ describe("ProtonHTTPClient via createDriveClient", () => {
 });
 
 // ---------------------------------------------------------------------------
-// DriveClient.validateSession (AC11: AccountInfo shape + error wrapping)
+// DriveClient.validateSession (AC11 + Story 2.11: uses GET /core/v4/users)
 // ---------------------------------------------------------------------------
 describe("DriveClient.validateSession", () => {
-  it("returns AccountInfo with correct shape when account returns an address", async () => {
-    const mockAccount = {
-      getOwnPrimaryAddress: mock.fn(async () => ({
+  it("returns AccountInfo with correct shape when adapter.getUser() succeeds", async () => {
+    // validateSession calls accountAdapter.getUser() (third DriveClient arg).
+    // The same ProtonAccountAdapter object is used for both account and accountAdapter
+    // in production (createDriveClient passes `account` twice). In tests we mock the
+    // third arg directly with a minimal duck-typed object.
+    const mockAdapter = {
+      getUser: mock.fn(async () => ({
         email: "alice@proton.me",
-        addressId: "addr-123",
-        primaryKeyIndex: 0,
-        keys: [],
+        display_name: "Alice",
       })),
-      getOwnAddresses: mock.fn(async () => []),
-      getOwnAddress: mock.fn(async () => { throw new Error("unused"); }),
-      hasProtonAccount: mock.fn(async () => false),
-      getPublicKeys: mock.fn(async () => []),
     };
 
-    // Construct DriveClient directly with a mock account (second arg).
-    // Cast to any: test accounts don't satisfy the full ProtonDriveAccount
-    // interface and constructing real ones would require @protontech/drive-sdk.
     const sdk = makeFakeSdk();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const client = new DriveClient(sdk, mockAccount as any);
+    const client = new DriveClient(sdk, undefined, mockAdapter as any);
 
     const info = await client.validateSession();
 
     assert.equal(info.email, "alice@proton.me");
-    assert.equal(info.display_name, "alice@proton.me");
+    assert.equal(info.display_name, "Alice");
     assert.equal(info.storage_used, 0);
     assert.equal(info.storage_total, 0);
     assert.equal(info.plan, "");
   });
 
-  it("throws SyncError when account adapter is not wired (no second arg)", async () => {
+  it("throws SyncError when account adapter is not wired", async () => {
     const sdk = makeFakeSdk();
-    const client = new DriveClient(sdk); // no account arg
+    const client = new DriveClient(sdk); // no adapter args
 
     await assert.rejects(
       () => client.validateSession(),
@@ -1043,20 +1041,16 @@ describe("DriveClient.validateSession", () => {
     );
   });
 
-  it("wraps account errors through mapSdkError", async () => {
-    const mockAccount = {
-      getOwnPrimaryAddress: mock.fn(async () => {
-        throw sdkErrorFactoriesForTests.connection("address fetch failed");
+  it("wraps adapter errors through mapSdkError", async () => {
+    const mockAdapter = {
+      getUser: mock.fn(async () => {
+        throw sdkErrorFactoriesForTests.connection("users fetch failed");
       }),
-      getOwnAddresses: mock.fn(async () => []),
-      getOwnAddress: mock.fn(async () => { throw new Error("unused"); }),
-      hasProtonAccount: mock.fn(async () => false),
-      getPublicKeys: mock.fn(async () => []),
     };
 
     const sdk = makeFakeSdk();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const client = new DriveClient(sdk, mockAccount as any);
+    const client = new DriveClient(sdk, undefined, mockAdapter as any);
 
     await assert.rejects(
       () => client.validateSession(),
@@ -1111,5 +1105,161 @@ describe("ProtonOpenPGPCryptoProxy openpgp round-trip", () => {
     // construction does not throw at the SDK constructor boundary.
     const client = createDriveClient("round-trip-token");
     assert.ok(client instanceof DriveClient, "createDriveClient must return a DriveClient");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DriveClient.deriveAndUnlock + applyKeyPassword (Story 2.11, AC1-AC3, AC5)
+//
+// All tests mock accountAdapter to avoid real network/crypto calls.
+// The bcrypt output is verified structurally (60-char hash starting with "$2").
+// ---------------------------------------------------------------------------
+describe("DriveClient.deriveAndUnlock", () => {
+  // Build a minimal mock adapter. fetchKeySalt and fetchAndDecryptKeys are
+  // replaced per-test via mock.fn so we can capture calls.
+  function makeMockAdapter(options: {
+    keySalt?: string | null;
+    decryptShouldFail?: boolean;
+  }) {
+    return {
+      fetchKeySalt: mock.fn(async () => options.keySalt ?? null),
+      fetchAndDecryptKeys: mock.fn(async (kp: string) => {
+        if (options.decryptShouldFail) {
+          throw new Error("wrong passphrase");
+        }
+        void kp; // consumed — not stored on the mock
+      }),
+      getUser: mock.fn(async () => ({ email: "u@p.me", display_name: "U" })),
+    };
+  }
+
+  it("throws SyncError when accountAdapter is not wired", async () => {
+    const sdk = makeFakeSdk();
+    const client = new DriveClient(sdk); // no adapter
+
+    await assert.rejects(
+      () => client.deriveAndUnlock("secret"),
+      (err: unknown) =>
+        err instanceof SyncError &&
+        /account adapter not wired/.test((err as Error).message),
+    );
+  });
+
+  it("returns empty string keyPassword for SSO account (keySalt === null)", async () => {
+    const adapter = makeMockAdapter({ keySalt: null });
+    const sdk = makeFakeSdk();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = new DriveClient(sdk, undefined, adapter as any);
+
+    const keyPassword = await client.deriveAndUnlock("any-password");
+
+    assert.equal(keyPassword, "", "SSO account must yield empty keyPassword");
+    assert.equal(
+      adapter.fetchAndDecryptKeys.mock.callCount(),
+      0,
+      "fetchAndDecryptKeys must NOT be called for SSO accounts",
+    );
+  });
+
+  it("calls fetchAndDecryptKeys with a bcrypt-shaped keyPassword for normal accounts", async () => {
+    // Use a real base64-encoded 16-byte salt to exercise the full bcrypt path.
+    // The exact hash value is not tested — only the structure.
+    const rawSalt = Buffer.alloc(16, 0xab);
+    const keySalt = rawSalt.toString("base64");
+    const adapter = makeMockAdapter({ keySalt });
+    const sdk = makeFakeSdk();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = new DriveClient(sdk, undefined, adapter as any);
+
+    const keyPassword = await client.deriveAndUnlock("hunter2");
+
+    // Proton computeKeyPassword: bcrypt(password, salt).slice(29) → 31-char hash suffix
+    // (strips "$2y$10$" prefix (7) + 22-char bcrypt salt = 29 chars)
+    assert.equal(typeof keyPassword, "string");
+    assert.equal(keyPassword.length, 31, "keyPassword must be 31 chars (bcrypt hash suffix after slice(29))");
+
+    // fetchAndDecryptKeys called with derived keyPassword
+    assert.equal(adapter.fetchAndDecryptKeys.mock.callCount(), 1);
+    const calledWith = adapter.fetchAndDecryptKeys.mock.calls[0]!.arguments[0];
+    assert.equal(calledWith, keyPassword);
+  });
+
+  it("propagates SyncError when fetchAndDecryptKeys fails (wrong password)", async () => {
+    const rawSalt = Buffer.alloc(16, 0x01);
+    const keySalt = rawSalt.toString("base64");
+    const adapter = makeMockAdapter({ keySalt, decryptShouldFail: true });
+    const sdk = makeFakeSdk();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = new DriveClient(sdk, undefined, adapter as any);
+
+    await assert.rejects(
+      () => client.deriveAndUnlock("wrong-password"),
+      // The underlying error is from fetchAndDecryptKeys (generic Error).
+      (err: unknown) => err instanceof Error,
+    );
+  });
+});
+
+describe("DriveClient.applyKeyPassword", () => {
+  it("throws SyncError when accountAdapter is not wired", async () => {
+    const sdk = makeFakeSdk();
+    const client = new DriveClient(sdk);
+
+    await assert.rejects(
+      () => client.applyKeyPassword("some-key-password"),
+      (err: unknown) =>
+        err instanceof SyncError &&
+        /account adapter not wired/.test((err as Error).message),
+    );
+  });
+
+  it("skips fetchAndDecryptKeys for empty keyPassword (SSO account)", async () => {
+    const adapter = {
+      fetchAndDecryptKeys: mock.fn(async () => {}),
+    };
+    const sdk = makeFakeSdk();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = new DriveClient(sdk, undefined, adapter as any);
+
+    await client.applyKeyPassword("");
+
+    assert.equal(
+      adapter.fetchAndDecryptKeys.mock.callCount(),
+      0,
+      "fetchAndDecryptKeys must not be called for SSO (empty keyPassword)",
+    );
+  });
+
+  it("calls fetchAndDecryptKeys with the given keyPassword", async () => {
+    const adapter = {
+      fetchAndDecryptKeys: mock.fn(async () => {}),
+    };
+    const sdk = makeFakeSdk();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = new DriveClient(sdk, undefined, adapter as any);
+
+    await client.applyKeyPassword("$2y$10$somebcrypthash");
+
+    assert.equal(adapter.fetchAndDecryptKeys.mock.callCount(), 1);
+    assert.equal(
+      adapter.fetchAndDecryptKeys.mock.calls[0]!.arguments[0],
+      "$2y$10$somebcrypthash",
+    );
+  });
+
+  it("propagates errors from fetchAndDecryptKeys (stored keyPassword invalid)", async () => {
+    const adapter = {
+      fetchAndDecryptKeys: mock.fn(async () => {
+        throw new Error("Key decryption failed");
+      }),
+    };
+    const sdk = makeFakeSdk();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const client = new DriveClient(sdk, undefined, adapter as any);
+
+    await assert.rejects(
+      () => client.applyKeyPassword("$2y$10$stale"),
+      (err: unknown) => err instanceof Error,
+    );
   });
 });

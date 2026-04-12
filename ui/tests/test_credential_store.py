@@ -186,3 +186,146 @@ class TestCredentialManager:
             mgr = CredentialManager()
             mgr.delete_token()
             mock_delete.assert_called_once()
+
+    def test_store_key_password_delegates_to_active_backend(self) -> None:
+        with (
+            patch.object(SecretPortalStore, "is_available", return_value=True),
+            patch.object(SecretPortalStore, "store_key_password") as mock_store,
+        ):
+            mgr = CredentialManager()
+            mgr.store_key_password("$2y$10$fakehash")
+            mock_store.assert_called_once_with("$2y$10$fakehash")
+
+    def test_retrieve_key_password_delegates_to_active_backend(self) -> None:
+        with (
+            patch.object(SecretPortalStore, "is_available", return_value=True),
+            patch.object(SecretPortalStore, "retrieve_key_password", return_value="$2y$10$stored"),
+        ):
+            mgr = CredentialManager()
+            result = mgr.retrieve_key_password()
+            assert result == "$2y$10$stored"
+
+    def test_delete_key_password_delegates_to_active_backend(self) -> None:
+        with (
+            patch.object(SecretPortalStore, "is_available", return_value=True),
+            patch.object(SecretPortalStore, "delete_key_password") as mock_delete,
+        ):
+            mgr = CredentialManager()
+            mgr.delete_key_password()
+            mock_delete.assert_called_once()
+
+    def test_retrieve_key_password_returns_none_when_absent(self) -> None:
+        with (
+            patch.object(SecretPortalStore, "is_available", return_value=True),
+            patch.object(SecretPortalStore, "retrieve_key_password", return_value=None),
+        ):
+            mgr = CredentialManager()
+            result = mgr.retrieve_key_password()
+            assert result is None
+
+    def test_key_password_never_in_error_message(self) -> None:
+        """Raw keyPassword must never appear in exception messages."""
+        key_pw = "bcrypt-output-secret-$2y$10$abcdefghijklmnopqrstuuABCDEFGHIJKL"
+        with (
+            patch.object(SecretPortalStore, "is_available", return_value=True),
+            patch.object(
+                SecretPortalStore,
+                "store_key_password",
+                side_effect=AuthError("Failed to store key password"),
+            ),
+        ):
+            mgr = CredentialManager()
+            with pytest.raises(AuthError) as exc_info:
+                mgr.store_key_password(key_pw)
+            assert key_pw not in str(exc_info.value)
+
+
+class TestSecretPortalStoreKeyPassword:
+    """Test libsecret backend key password methods."""
+
+    def setup_method(self) -> None:
+        _secret_mock.reset_mock()
+        _glib_mock.reset_mock(side_effect=True)
+        SecretPortalStore._schema = None
+
+    def test_store_key_password(self) -> None:
+        store = SecretPortalStore()
+        store.store_key_password("$2y$10$fakehash")
+        _secret_mock.password_store_sync.assert_called_once()
+
+    def test_retrieve_key_password(self) -> None:
+        store = SecretPortalStore()
+        _secret_mock.password_lookup_sync.return_value = "$2y$10$stored"
+        result = store.retrieve_key_password()
+        assert result == "$2y$10$stored"
+
+    def test_delete_key_password(self) -> None:
+        store = SecretPortalStore()
+        store.delete_key_password()
+        _secret_mock.password_clear_sync.assert_called_once()
+
+    def test_store_uses_different_attributes_from_token(self) -> None:
+        """Key password must be stored under a different label than the token."""
+        store = SecretPortalStore()
+        store.store_key_password("$2y$10$kp")
+        call_args = _secret_mock.password_store_sync.call_args
+        # The attributes dict (second positional arg) must differ from the token attributes.
+        attrs = call_args[0][1]
+        assert attrs.get("type") == "key-password", "key-password must use distinct type attribute"
+
+
+class TestEncryptedFileStoreKeyPassword:
+    """Test encrypted file fallback backend key password methods."""
+
+    def test_key_password_round_trip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = EncryptedFileStore()
+            store._dir = Path(tmpdir)
+            store._token_path = Path(tmpdir) / "session.enc"
+            store._salt_path = Path(tmpdir) / "salt.bin"
+            store._key_password_path = Path(tmpdir) / "key-password.enc"
+
+            store.store_key_password("$2y$10$mykeypassword")
+            result = store.retrieve_key_password()
+        assert result == "$2y$10$mykeypassword"
+
+    def test_retrieve_key_password_missing_returns_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = EncryptedFileStore()
+            store._dir = Path(tmpdir)
+            store._token_path = Path(tmpdir) / "session.enc"
+            store._salt_path = Path(tmpdir) / "salt.bin"
+            store._key_password_path = Path(tmpdir) / "key-password.enc"
+
+            result = store.retrieve_key_password()
+        assert result is None
+
+    def test_delete_key_password_removes_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = EncryptedFileStore()
+            store._dir = Path(tmpdir)
+            store._token_path = Path(tmpdir) / "session.enc"
+            store._salt_path = Path(tmpdir) / "salt.bin"
+            store._key_password_path = Path(tmpdir) / "key-password.enc"
+
+            store.store_key_password("$2y$10$todelete")
+            assert store._key_password_path.exists()
+
+            store.delete_key_password()
+            assert not store._key_password_path.exists()
+
+    def test_key_password_independent_of_token(self) -> None:
+        """Token and keyPassword are stored independently — deleting one leaves the other."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = EncryptedFileStore()
+            store._dir = Path(tmpdir)
+            store._token_path = Path(tmpdir) / "session.enc"
+            store._salt_path = Path(tmpdir) / "salt.bin"
+            store._key_password_path = Path(tmpdir) / "key-password.enc"
+
+            store.store_token("mytoken")
+            store.store_key_password("$2y$10$kp")
+            store.delete_key_password()
+
+            assert store.retrieve_token() == "mytoken"
+            assert store.retrieve_key_password() is None
