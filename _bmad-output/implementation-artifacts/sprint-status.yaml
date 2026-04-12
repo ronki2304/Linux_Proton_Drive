@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-11  # Story 2-10 → in-progress
+last_updated: 2026-04-12  # Epic 2 retrospective done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -60,7 +60,7 @@ development_status:
   epic-1-retrospective: done
 
   # Epic 2: First Sync Pair & File Sync
-  epic-2: in-progress
+  epic-2: done
   2-0-tech-debt-cleanup: done
   2-1-sqlite-state-database-and-schema: done
   2-2-sdk-driveclient-wrapper: done
@@ -72,9 +72,9 @@ development_status:
   2-7-syncpairrow-and-statusfooterbar-components: done
   2-8-syncprogresscard-and-detail-panel: done
   2-9-window-state-persistence: done
-  2-10-flatpak-build-validation: in-progress
-  2-11-key-password-derivation: review  # Tasks 1–6 complete; Task 7 is manual smoke test only
-  epic-2-retrospective: optional
+  2-10-flatpak-build-validation: done
+  2-11-key-password-derivation: done  # Manual smoke test passed
+  epic-2-retrospective: done
 
   # Epic 3: Offline Resilience & Network Handling
   epic-3: backlog
