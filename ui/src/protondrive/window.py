@@ -252,7 +252,13 @@ class MainWindow(Adw.ApplicationWindow):
             self.pairs_list.append(row)
             self._sync_pair_rows[pair_id] = row
 
-        self._pairs_data = {p.get("pair_id", ""): dict(p) for p in pairs}
+        self._pairs_data = {}
+        for p in pairs:
+            d = dict(p)
+            last_synced_at = p.get("last_synced_at")
+            if last_synced_at:
+                d["last_synced_text"] = _fmt_relative_time(last_synced_at)
+            self._pairs_data[p.get("pair_id", "")] = d
 
         if not pairs:
             self.pair_detail_panel.show_no_pairs()

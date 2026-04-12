@@ -139,6 +139,7 @@ export type ProtonDriveClientLike = Pick<
   | "getMyFilesRootFolder"
   | "iterateFolderChildren"
   | "getFileUploader"
+  | "getFileRevisionUploader"
   | "getFileDownloader"
   | "createFolder"
 >;
@@ -424,6 +425,41 @@ export class DriveClient {
       }
       mapSdkError(err);
       throw err; // defensive — see listRemoteFolders catch
+    }
+  }
+
+  /**
+   * Upload a new revision of an existing file identified by nodeUid.
+   *
+   * Used when a file already exists remotely and has been modified locally.
+   * Delegates to `getFileRevisionUploader` instead of `getFileUploader` so
+   * the SDK creates a new revision on the existing node rather than a new node.
+   */
+  async uploadFileRevision(
+    nodeUid: string,
+    body: UploadBody,
+  ): Promise<{ node_uid: string; revision_uid: string }> {
+    try {
+      const metadata: UploadMetadata = {
+        mediaType: body.mediaType,
+        expectedSize: body.sizeBytes,
+        modificationTime: body.modificationTime,
+      };
+      const uploader = await this.sdk.getFileRevisionUploader(nodeUid, metadata);
+      const controller = await uploader.uploadFromStream(body.stream, []);
+      const result = await controller.completion();
+      return {
+        node_uid: result.nodeUid,
+        revision_uid: result.nodeRevisionUid,
+      };
+    } catch (err) {
+      try {
+        await body.stream.cancel(err);
+      } catch {
+        /* secondary error: stream already closed/locked — ignore */
+      }
+      mapSdkError(err);
+      throw err;
     }
   }
 

@@ -152,7 +152,7 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 
 ## Deferred from: code review of 2-5-sync-engine-core-two-way-sync (2026-04-10)
 
-- Deletion propagation never implemented — remote→local and local→remote file deletions are silently skipped; tracked for Epic 4 or later [sync-engine.ts:316-319]
+- Deletion propagation never implemented — local→remote and remote→local file deletions are silently skipped; the engine only syncs additions and modifications. Required behaviour: if a local file is deleted and `last_synced_at` is newer than the local deletion time (i.e. the file was previously synced), trash it on Proton Drive. Conversely, if a remote file is deleted after the last sync, delete the local copy. Needs: tracking deleted-file state in `sync_state`, SDK `trashNode` call, and a conflict rule when both sides are deleted. Tracked for Epic 4 [sync-engine.ts:337-356]
 - Upload remoteMtime assumes SDK stores body.modificationTime exactly as provided — if SDK normalizes timestamps (truncation, timezone), every uploaded file re-uploads on next cycle; documented design tradeoff in Dev Notes; validate against live API before shipping
 - walkRemoteTree unbounded recursion — no max-depth or cycle guard for circular folder references (e.g. Proton shared folders); add depth cap before enabling multi-user scenarios
 - upsertSyncState uses INSERT OR REPLACE which resets rowid — add CHECK or ON CONFLICT DO UPDATE SET if sync_state gains foreign-key dependents in Epic 4
@@ -197,6 +197,14 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - No test for `get_width()`/`get_height()` returning 0 at close time — boundary not covered; `test_window_state_persistence.py`
 - No test for `Gio.Settings` write failure — `set_int`/`set_boolean` can silently fail or raise; `test_window_state_persistence.py`
 - `connect` not mocked in `TestGeometryRestore._make_window` — latent `AttributeError` if future tests call `__init__`; `test_window_state_persistence.py`
+
+## Deferred from: code review of 2-11-key-password-derivation (2026-04-12)
+
+- Remote change polling not implemented — files uploaded or modified via the Proton Drive web interface (or any other client) are only detected on the next app open or when a local file change triggers a sync cycle; there is no background poll. Add a periodic `startSyncAll()` timer (e.g. every 5 minutes) or integrate the Proton Drive Events API for push-based remote change detection [engine/src/main.ts:_activateSession]
+- No sync pair management UI — the user cannot create additional pairs, edit, or delete existing sync pairs from within the app once the initial setup wizard has run; the wizard only fires on first launch (no configured pairs). Needs: an "Add pair" button in the main window that re-invokes the setup wizard flow, engine `update_pair` / `remove_pair` IPC commands + SQLite CRUD, FileWatcher restart on change, config.yaml rewrite, and a UI surface (e.g. gear/context menu on each SyncPairRow) for edit and delete actions [engine/src/main.ts, engine/src/state-db.ts, ui/src/protondrive/window.py, ui/src/protondrive/main.py]
+- Block upload diagnostic log left in production code — `[FETCH-BLOB] storage upload:` line written via `process.stderr.write` in `fetchBlob`; should be removed or gated behind a debug flag before shipping [engine/src/sdk.ts:fetchBlob]
+- `_sanitizeOpenpgpConfig` strips `ignoreSEIPDv2FeatureFlag` globally — if a future openpgp upgrade reintroduces this flag, the strip will silently no-op; add a comment with the openpgp version that dropped it so the workaround can be removed when safe [engine/src/sdk.ts:_sanitizeOpenpgpConfig]
+- One user private key failed to decrypt (`decrypted 1/2 user keys`) — engine continues with partial key set; no user-visible warning is shown; if the undecrypted key is needed for a future file, the operation will fail silently [engine/src/sdk.ts:_activateSession]
 
 ## Deferred from: code review of 2-10-flatpak-build-validation (2026-04-11)
 

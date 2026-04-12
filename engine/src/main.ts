@@ -474,6 +474,7 @@ export async function handleCommand(
       remote_path: remotePath,
       remote_id: remoteId,
       created_at: new Date().toISOString(),
+      last_synced_at: null,
     };
 
     try {
@@ -536,6 +537,7 @@ export async function handleCommand(
       pair_id: p.pair_id,
       local_path: p.local_path,
       remote_path: p.remote_path,
+      last_synced_at: p.last_synced_at ?? null,
     }));
     return {
       type: "get_status_result",

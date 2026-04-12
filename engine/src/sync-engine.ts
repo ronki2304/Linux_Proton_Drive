@@ -22,6 +22,8 @@ type WorkItem =
       kind: "upload";
       relativePath: string;
       remoteFolderId: string;
+      /** Set when updating an existing remote file — upload a new revision. */
+      existingNodeUid?: string;
       size: number;
       localMtime: string;
     }
@@ -94,6 +96,7 @@ export class SyncEngine {
             remote_path: cp.remote_path,
             remote_id: "",
             created_at: cp.created_at ?? new Date().toISOString(),
+            last_synced_at: null,
           });
         }
       }
@@ -144,7 +147,7 @@ export class SyncEngine {
       }
     }
 
-    const localFiles = await this.walkLocalTree(pair.local_path);
+    const { files: localFiles, dirs: localDirs } = await this.walkLocalTree(pair.local_path);
     const { files: remoteFiles, folders: remoteFolders } = await this.walkRemoteTree(
       pair.remote_id,
       "",
@@ -154,7 +157,34 @@ export class SyncEngine {
       this.stateDb.listSyncStates(pair.pair_id).map((s) => [s.relative_path, s]),
     );
 
+    // ── Local dirs → remote ──────────────────────────────────────────────────
+    // Collect all local dirs (both from explicit dir entries and as parents of
+    // files). Sort so parents are created before children.
+    const allLocalDirs = new Set(localDirs);
+    for (const relPath of localFiles.keys()) {
+      let d = dirname(relPath);
+      while (d !== ".") { allLocalDirs.add(d); d = dirname(d); }
+    }
+    for (const localDir of [...allLocalDirs].sort()) {
+      if (!remoteFolders.has(localDir)) {
+        const parentDir = dirname(localDir);
+        const parentId = parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
+        if (parentId) {
+          const newId = await client.createRemoteFolder(parentId, basename(localDir));
+          remoteFolders.set(localDir, newId);
+        }
+      }
+    }
+
+    // ── Remote dirs → local ──────────────────────────────────────────────────
+    // Create any remote directories that don't exist locally yet.
+    for (const relDir of [...remoteFolders.keys()].sort()) {
+      const localDir = join(pair.local_path, relDir);
+      await mkdir(localDir, { recursive: true });
+    }
+
     const workItems = this.computeWorkList(pair, localFiles, remoteFiles, remoteFolders, syncStates);
+    process.stderr.write(`[ENGINE] workList: ${workItems.length} items (localFiles=${localFiles.size} remoteFiles=${remoteFiles.size} remoteFolders=${remoteFolders.size})\n`);
 
     // Emit initial sync_progress (AC7)
     const bytesTotal = workItems.reduce((a, w) => a + w.size, 0);
@@ -171,10 +201,12 @@ export class SyncEngine {
 
     await this.executeWorkList(pair, workItems, client);
 
-    // Emit sync_complete (AC7)
+    // Persist and emit sync_complete (AC7)
+    const completedAt = new Date().toISOString();
+    this.stateDb.updateLastSynced(pair.pair_id, completedAt);
     this.emitEvent({
       type: "sync_complete",
-      payload: { pair_id: pair.pair_id, timestamp: new Date().toISOString() },
+      payload: { pair_id: pair.pair_id, timestamp: completedAt },
     });
   }
 
@@ -205,15 +237,24 @@ export class SyncEngine {
     return resolvedId;
   }
 
-  private async walkLocalTree(localPath: string): Promise<Map<string, LocalFile>> {
+  private async walkLocalTree(localPath: string): Promise<{
+    files: Map<string, LocalFile>;
+    dirs: Set<string>;
+  }> {
     const fileMap = new Map<string, LocalFile>();
+    const dirSet = new Set<string>();
     // Let readdir failures propagate — an inaccessible local path aborts the pair
     // sync cycle via startSyncAll's catch, emitting sync_cycle_error. (F3)
     const entries = await readdir(localPath, { withFileTypes: true, recursive: true });
     for (const entry of entries) {
-      if (!entry.isFile()) continue;
       // entry.parentPath is Node.js 21.2+; fallback to entry.path for older versions
       const dir = (entry as { parentPath?: string }).parentPath ?? (entry as { path?: string }).path ?? localPath;
+      if (entry.isDirectory()) {
+        const relDir = relative(localPath, join(dir, entry.name));
+        if (relDir) dirSet.add(relDir);
+        continue;
+      }
+      if (!entry.isFile()) continue;
       const fullPath = join(dir, entry.name);
       const relPath = relative(localPath, fullPath);
       try {
@@ -228,7 +269,7 @@ export class SyncEngine {
         debugLog(`sync-engine: stat failed for ${fullPath} — skipping`);
       }
     }
-    return fileMap;
+    return { files: fileMap, dirs: dirSet };
   }
 
   private async walkRemoteTree(
@@ -289,7 +330,7 @@ export class SyncEngine {
           continue;
         }
         if (localChanged) {
-          // Upload
+          // Upload new revision of existing remote file
           const parentDir = dirname(relPath);
           const remoteFolderId =
             parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
@@ -301,6 +342,7 @@ export class SyncEngine {
             kind: "upload",
             relativePath: relPath,
             remoteFolderId,
+            existingNodeUid: remote.id,
             size: local.size,
             localMtime: local.mtime,
           });
@@ -321,7 +363,7 @@ export class SyncEngine {
         const remoteFolderId =
           parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
         if (!remoteFolderId) {
-          debugLog(`sync-engine: skipping upload ${relPath} — remote parent dir not found`);
+          process.stderr.write(`[ENGINE] skip upload ${relPath} — parentDir="${parentDir}" not in remoteFolders\n`);
           continue;
         }
         workItems.push({
@@ -430,6 +472,7 @@ export class SyncEngine {
       onComplete();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "unknown";
+      process.stderr.write(`[ENGINE] sync_file_error ${item.relativePath}: ${msg}\n`);
       this.emitEvent({
         type: "error",
         payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
@@ -442,12 +485,18 @@ export class SyncEngine {
   private async uploadOne(pair: SyncPair, item: WorkItem & { kind: "upload" }, client: DriveClient): Promise<void> {
     const localPath = join(pair.local_path, item.relativePath);
     const stream = Readable.toWeb(createReadStream(localPath)) as ReadableStream<Uint8Array>;
-    await client.uploadFile(item.remoteFolderId, basename(item.relativePath), {
+    const body = {
       stream,
       sizeBytes: item.size,
       modificationTime: new Date(item.localMtime),
       mediaType: "application/octet-stream",
-    });
+    };
+    if (item.existingNodeUid) {
+      // File already exists remotely — upload a new revision instead of creating a new node.
+      await client.uploadFileRevision(item.existingNodeUid, body);
+    } else {
+      await client.uploadFile(item.remoteFolderId, basename(item.relativePath), body);
+    }
   }
 
   private async downloadOne(
@@ -462,13 +511,18 @@ export class SyncEngine {
     const writableStream = Writable.toWeb(nodeWritable) as WritableStream<Uint8Array>;
     try {
       await client.downloadFile(item.nodeUid, writableStream);
-      // Await nodeWritable closure before rename — symmetric with failure path,
-      // ensures all data is flushed before the atomic rename. (F23)
-      await new Promise<void>((resolve) => {
-        if (nodeWritable.closed) {
+      // Explicitly end and flush — the SDK writes all chunks but does not
+      // guarantee it closes the WritableStream, so nodeWritable.close/finish
+      // may never fire if we just wait passively.
+      await new Promise<void>((resolve, reject) => {
+        if (nodeWritable.writableFinished) {
           resolve();
-        } else {
-          nodeWritable.once("close", resolve);
+          return;
+        }
+        nodeWritable.once("finish", resolve);
+        nodeWritable.once("error", reject);
+        if (!nodeWritable.writableEnded) {
+          nodeWritable.end();
         }
       });
       await rename(tmpPath, destPath);

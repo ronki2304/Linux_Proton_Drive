@@ -12,6 +12,7 @@ export interface SyncPair {
   remote_path: string;
   remote_id: string;
   created_at: string; // ISO 8601
+  last_synced_at: string | null; // ISO 8601, null if never synced
 }
 
 export interface SyncState {
@@ -64,9 +65,13 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 2,
+    up: `ALTER TABLE sync_pair ADD COLUMN last_synced_at TEXT;`,
+  },
 ];
 
-const CURRENT_VERSION = 1;
+const CURRENT_VERSION = 2;
 
 // ── StateDb ──────────────────────────────────────────────────────────────────
 
@@ -151,6 +156,12 @@ export class StateDb {
     return this.db
       .prepare(`SELECT * FROM sync_pair ORDER BY created_at ASC`)
       .all() as SyncPair[];
+  }
+
+  updateLastSynced(pairId: string, timestamp: string): void {
+    this.db
+      .prepare(`UPDATE sync_pair SET last_synced_at = ? WHERE pair_id = ?`)
+      .run(timestamp, pairId);
   }
 
   deletePair(pairId: string): void {
