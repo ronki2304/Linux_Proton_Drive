@@ -218,6 +218,10 @@ function _activateSession(
       await syncEngine!.startSyncAll();
     },
     (e) => server.emitEvent(e),
+    undefined,   // watchFn: use default
+    undefined,   // debounceMs: use default
+    () => networkMonitor?.isCurrentlyOnline ?? true,
+    (e) => stateDb!.enqueue(e),
   );
   void fileWatcher.initialize();
   const payload: Record<string, unknown> = { ...info };
@@ -235,7 +239,10 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
     syncEngine?.setDriveClient(null);
     fileWatcher?.stop();
     fileWatcher = undefined;
-    server.emitEvent({ type: "token_expired", payload: { queued_changes: 0 } });
+    const queuedTotal = stateDb
+      ? stateDb.listPairs().reduce((sum, p) => sum + stateDb!.queueSize(p.pair_id), 0)
+      : 0;
+    server.emitEvent({ type: "token_expired", payload: { queued_changes: queuedTotal } });
     return;
   }
 
@@ -347,7 +354,10 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
     syncEngine?.setDriveClient(null);
     fileWatcher?.stop();
     fileWatcher = undefined;
-    server.emitEvent({ type: "token_expired", payload: { queued_changes: 0 } });
+    const queuedTotal = stateDb
+      ? stateDb.listPairs().reduce((sum, p) => sum + stateDb!.queueSize(p.pair_id), 0)
+      : 0;
+    server.emitEvent({ type: "token_expired", payload: { queued_changes: queuedTotal } });
   }
 }
 
@@ -523,6 +533,10 @@ export async function handleCommand(
           await syncEngine!.startSyncAll();
         },
         (e) => server.emitEvent(e),
+        undefined,   // watchFn: use default
+        undefined,   // debounceMs: use default
+        () => networkMonitor?.isCurrentlyOnline ?? true,
+        (e) => stateDb!.enqueue(e),
       );
       void fileWatcher.initialize();
       void syncEngine?.startSyncAll();
@@ -548,6 +562,7 @@ export async function handleCommand(
       local_path: p.local_path,
       remote_path: p.remote_path,
       last_synced_at: p.last_synced_at ?? null,
+      queued_changes: stateDb!.queueSize(p.pair_id),
     }));
     return {
       type: "get_status_result",

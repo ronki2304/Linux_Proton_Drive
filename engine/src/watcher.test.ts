@@ -1,12 +1,12 @@
 import { describe, it, mock, spyOn, beforeEach, afterEach, expect } from "bun:test";
 import fs from "node:fs";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { FSWatcher, WatchListener } from "node:fs";
 import type { IpcPushEvent } from "./ipc.js";
-import type { SyncPair } from "./state-db.js";
+import type { SyncPair, ChangeQueueEntry } from "./state-db.js";
 import { FileWatcher } from "./watcher.js";
 import type { WatchFn } from "./watcher.js";
 
@@ -342,6 +342,224 @@ describe("FileWatcher — onChangesDetected rejection logging (AC3)", () => {
     } finally {
       fw.stop();
     }
+  });
+});
+
+// ── Offline change queue ──────────────────────────────────────────────────────
+
+describe("FileWatcher — offline change queue", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = join(tmpdir(), `watcher-offline-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tmpDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  // 3.2 — online path: enqueueChange NOT called
+  it("online: 'change' event → onChanges called, enqueueChange NOT called", async () => {
+    const mockWatcher = makeMockWatcher();
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => mockWatcher);
+    const onChanges = mock(async (_pairId: string) => {});
+    const enqueueCalls: Array<Omit<ChangeQueueEntry, "id">> = [];
+    const pair = makeTestPair(tmpDir);
+
+    const fw = new FileWatcher(
+      [pair],
+      onChanges,
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      0,            // debounceMs=0 so timer fires immediately
+      () => true,   // isOnline = true
+      (e) => enqueueCalls.push(e),
+    );
+    await fw.initialize();
+
+    const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
+    listener("change", "file.txt");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(onChanges.mock.calls.length).toBe(1);
+    expect(enqueueCalls.length).toBe(0);
+
+    fw.stop();
+  });
+
+  // 3.3 — offline + 'change' → change_type: "modified", scheduleSync NOT triggered
+  it("offline: 'change' event → enqueueChange with change_type='modified', onChanges NOT called", async () => {
+    const mockWatcher = makeMockWatcher();
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => mockWatcher);
+    const onChanges = mock(async (_pairId: string) => {});
+    const enqueueCalls: Array<Omit<ChangeQueueEntry, "id">> = [];
+    const pair = makeTestPair(tmpDir);
+
+    const fw = new FileWatcher(
+      [pair],
+      onChanges,
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      0,             // debounceMs=0
+      () => false,   // isOnline = false
+      (e) => enqueueCalls.push(e),
+    );
+    await fw.initialize();
+
+    const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
+    listener("change", "file.txt");
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(enqueueCalls.length).toBe(1);
+    expect(enqueueCalls[0]!.change_type).toBe("modified");
+    expect(onChanges.mock.calls.length).toBe(0);
+
+    fw.stop();
+  });
+
+  // 3.4 — offline + 'rename' + file exists → change_type: "created"
+  it("offline: 'rename' + file exists → change_type='created'", async () => {
+    const mockWatcher = makeMockWatcher();
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => mockWatcher);
+    const enqueueCalls: Array<Omit<ChangeQueueEntry, "id">> = [];
+    const pair = makeTestPair(tmpDir);
+
+    const fw = new FileWatcher(
+      [pair],
+      mock(async () => {}),
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      undefined,
+      () => false,
+      (e) => enqueueCalls.push(e),
+    );
+    await fw.initialize();
+
+    const tmpFile = join(tmpDir, "newfile.txt");
+    writeFileSync(tmpFile, "");  // file exists
+
+    const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
+    listener("rename", "newfile.txt");
+
+    expect(enqueueCalls.length).toBe(1);
+    expect(enqueueCalls[0]!.change_type).toBe("created");
+
+    fw.stop();
+  });
+
+  // 3.5 — offline + 'rename' + file missing → change_type: "deleted"
+  it("offline: 'rename' + file missing → change_type='deleted'", async () => {
+    const mockWatcher = makeMockWatcher();
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => mockWatcher);
+    const enqueueCalls: Array<Omit<ChangeQueueEntry, "id">> = [];
+    const pair = makeTestPair(tmpDir);
+
+    const fw = new FileWatcher(
+      [pair],
+      mock(async () => {}),
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      undefined,
+      () => false,
+      (e) => enqueueCalls.push(e),
+    );
+    await fw.initialize();
+
+    // Do NOT create ghost.txt — it should not exist
+    const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
+    listener("rename", "ghost.txt");
+
+    expect(enqueueCalls.length).toBe(1);
+    expect(enqueueCalls[0]!.change_type).toBe("deleted");
+
+    fw.stop();
+  });
+
+  // 3.6 — offline + null filename → enqueueChange NOT called, scheduleSync NOT called
+  it("offline: null filename → enqueueChange NOT called, scheduleSync NOT called", async () => {
+    const mockWatcher = makeMockWatcher();
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => mockWatcher);
+    const enqueueCalls: Array<Omit<ChangeQueueEntry, "id">> = [];
+    const onChanges = mock(async (_pairId: string) => {});
+    const pair = makeTestPair(tmpDir);
+
+    const fw = new FileWatcher(
+      [pair],
+      onChanges,
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      0,
+      () => false,
+      (e) => enqueueCalls.push(e),
+    );
+    await fw.initialize();
+
+    const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
+    listener("change", null);
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(enqueueCalls.length).toBe(0);
+    expect(onChanges.mock.calls.length).toBe(0);
+
+    fw.stop();
+  });
+
+  // 3.7 — multiple offline events each enqueued (no debounce on queue writes)
+  it("offline: 3 events on 3 filenames → enqueueChange called 3 times", async () => {
+    const mockWatcher = makeMockWatcher();
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => mockWatcher);
+    const enqueueCalls: Array<Omit<ChangeQueueEntry, "id">> = [];
+    const pair = makeTestPair(tmpDir);
+
+    const fw = new FileWatcher(
+      [pair],
+      mock(async () => {}),
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      500,           // long debounce — queue writes should still fire immediately
+      () => false,
+      (e) => enqueueCalls.push(e),
+    );
+    await fw.initialize();
+
+    const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
+    listener("change", "a.txt");
+    listener("change", "b.txt");
+    listener("change", "c.txt");
+
+    // Should all be enqueued synchronously — no debounce involved
+    expect(enqueueCalls.length).toBe(3);
+
+    fw.stop();
+  });
+
+  // 3.8 — relative path is correct (no leading slash)
+  it("relative path computed correctly — no leading slash", async () => {
+    const mockWatcher = makeMockWatcher();
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => mockWatcher);
+    const enqueueCalls: Array<Omit<ChangeQueueEntry, "id">> = [];
+    const pair = makeTestPair(tmpDir);
+
+    const fw = new FileWatcher(
+      [pair],
+      mock(async () => {}),
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      undefined,
+      () => false,
+      (e) => enqueueCalls.push(e),
+    );
+    await fw.initialize();
+
+    const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
+    listener("change", "notes.txt");
+
+    expect(enqueueCalls.length).toBe(1);
+    expect(enqueueCalls[0]!.relative_path).toBe("notes.txt");
+
+    fw.stop();
   });
 });
 

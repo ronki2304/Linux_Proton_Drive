@@ -546,4 +546,46 @@ describe("get_status command", () => {
     expect(response!.id).toBe("gs-empty");
     expect(response!.payload).toEqual({ pairs: [], online: true });
   });
+
+  it("get_status_result includes queued_changes:0 per pair when queue is empty", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "pair-qs1",
+      local_path: "/tmp/local",
+      remote_path: "/remote",
+      remote_id: "r1",
+      created_at: "2026-01-01T00:00:00Z",
+      last_synced_at: null,
+    });
+
+    const cmd: IpcCommand = { type: "get_status", id: "gs-zero" };
+    const response = await handleCommand(cmd);
+    expect(response!.type).toBe("get_status_result");
+    const pairs = response!.payload["pairs"] as Array<Record<string, unknown>>;
+    expect(pairs.length).toBe(1);
+    expect(pairs[0]!["queued_changes"]).toBe(0);
+  });
+
+  it("get_status_result reflects non-zero queue count", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "pair-qs2",
+      local_path: "/tmp/local2",
+      remote_path: "/remote2",
+      remote_id: "r2",
+      created_at: "2026-01-01T00:00:00Z",
+      last_synced_at: null,
+    });
+    db.enqueue({ pair_id: "pair-qs2", relative_path: "a.txt", change_type: "modified", queued_at: new Date().toISOString() });
+    db.enqueue({ pair_id: "pair-qs2", relative_path: "b.txt", change_type: "created", queued_at: new Date().toISOString() });
+
+    const cmd: IpcCommand = { type: "get_status", id: "gs-nonzero" };
+    const response = await handleCommand(cmd);
+    expect(response!.type).toBe("get_status_result");
+    const pairs = response!.payload["pairs"] as Array<Record<string, unknown>>;
+    expect(pairs.length).toBe(1);
+    expect(pairs[0]!["queued_changes"]).toBe(2);
+  });
 });

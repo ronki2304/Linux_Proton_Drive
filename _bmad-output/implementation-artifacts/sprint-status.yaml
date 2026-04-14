@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-14  # 3-2 ready-for-dev
+last_updated: 2026-04-14  # 3-2 done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -80,8 +80,8 @@ development_status:
   epic-3: in-progress
   3-0a-bun-runtime-migration: done
   3-0b-targeted-debt-fixes: done
-  3-1-offline-detection-and-ui-indicators: review
-  3-2-offline-change-queue-persistent: ready-for-dev
+  3-1-offline-detection-and-ui-indicators: done
+  3-2-offline-change-queue-persistent: done
   3-3-queue-replay-and-auto-resume-on-reconnect: backlog
   3-4-rate-limit-handling-and-ui: backlog
   epic-3-retrospective: optional

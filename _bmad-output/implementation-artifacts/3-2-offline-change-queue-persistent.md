@@ -1,6 +1,6 @@
 # Story 3.2: Offline Change Queue (Persistent)
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -58,14 +58,14 @@ One commit per logical group. Branch: `feat/3-2-offline-change-queue-persistent`
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Extend `FileWatcher` for offline queueing** (AC: #1, #4)
-  - [ ] 1.1 Extend existing imports in `engine/src/watcher.ts` (do NOT add new import lines — extend the ones already there):
+- [x] **Task 1: Extend `FileWatcher` for offline queueing** (AC: #1, #4)
+  - [x] 1.1 Extend existing imports in `engine/src/watcher.ts` (do NOT add new import lines — extend the ones already there):
         Line 2: `import { watch } from "node:fs"` → `import { watch, existsSync } from "node:fs"`
         Line 6: `import type { SyncPair } from "./state-db.js"` → `import type { SyncPair, ChangeQueueEntry, ChangeType } from "./state-db.js"`
-  - [ ] 1.2 Add two optional constructor params (positions 6 and 7, with defaults):
+  - [x] 1.2 Add two optional constructor params (positions 6 and 7, with defaults):
         `private readonly isOnline: () => boolean = () => true,`
         `private readonly enqueueChange: (entry: Omit<ChangeQueueEntry, "id">) => void = () => {},`
-  - [ ] 1.3 In `setupPairWatches`, change the watch callback. The existing params are `(_evt, _filename)` — **rename both: remove the underscore prefix** since they are now used. Final callback:
+  - [x] 1.3 In `setupPairWatches`, change the watch callback. The existing params are `(_evt, _filename)` — **rename both: remove the underscore prefix** since they are now used. Final callback:
         ```typescript
         const watcher = this.watchFn(dir, (evt, filename) => {
           if (!this.isOnline() && filename !== null) {
@@ -75,15 +75,15 @@ One commit per logical group. Branch: `feat/3-2-offline-change-queue-persistent`
           }
         });
         ```
-  - [ ] 1.4 Add private method `queueFileChange(pair: SyncPair, dir: string, evt: string, filename: string): void`:
+  - [x] 1.4 Add private method `queueFileChange(pair: SyncPair, dir: string, evt: string, filename: string): void`:
         - `fullPath = join(dir, filename)`
         - `relPath = fullPath.slice(pair.local_path.length).replace(/^[/\\]/, "")`
         - `changeType`: `evt === "change"` → `"modified"`, else `existsSync(fullPath) ? "created" : "deleted"`
         - Call `this.enqueueChange({ pair_id: pair.pair_id, relative_path: relPath, change_type: changeType, queued_at: new Date().toISOString() })`
-  - [ ] 1.5 `bunx tsc --noEmit` — zero errors
+  - [x] 1.5 `bunx tsc --noEmit` — zero errors
 
-- [ ] **Task 2: Wire queueing and update `get_status` in `main.ts`** (AC: #3)
-  - [ ] 2.1 At **both** `FileWatcher` construction sites (lines ~215 and ~520):
+- [x] **Task 2: Wire queueing and update `get_status` in `main.ts`** (AC: #3)
+  - [x] 2.1 At **both** `FileWatcher` construction sites (lines ~215 and ~520):
         Add two new args after `(e) => server.emitEvent(e)`:
         `watchFn` (existing default — omit, leave position 4 as default),
         `debounceMs` (existing default — omit, leave position 5 as default),
@@ -99,7 +99,7 @@ One commit per logical group. Branch: `feat/3-2-offline-change-queue-persistent`
           (e) => stateDb!.enqueue(e),
         )
         ```
-  - [ ] 2.2 In `handleCommand` for `get_status`, extend each pair mapping to include `queued_changes`:
+  - [x] 2.2 In `handleCommand` for `get_status`, extend each pair mapping to include `queued_changes`:
         ```typescript
         const pairs = stateDb.listPairs().map((p) => ({
           pair_id: p.pair_id,
@@ -109,44 +109,44 @@ One commit per logical group. Branch: `feat/3-2-offline-change-queue-persistent`
           queued_changes: stateDb.queueSize(p.pair_id),
         }));
         ```
-  - [ ] 2.3 Update both `token_expired` emit sites (lines ~238 and ~350) to use real count:
+  - [x] 2.3 Update both `token_expired` emit sites (lines ~238 and ~350) to use real count:
         ```typescript
         const queuedTotal = stateDb
           ? stateDb.listPairs().reduce((sum, p) => sum + stateDb!.queueSize(p.pair_id), 0)
           : 0;
         server.emitEvent({ type: "token_expired", payload: { queued_changes: queuedTotal } });
         ```
-  - [ ] 2.4 `bunx tsc --noEmit` — zero errors
+  - [x] 2.4 `bunx tsc --noEmit` — zero errors
 
-- [ ] **Task 3: Tests for `FileWatcher` offline queueing** (AC: #1, #4)
-  - [ ] 3.1 Extend imports in `engine/src/watcher.test.ts` (extend existing lines, do not add duplicate imports):
+- [x] **Task 3: Tests for `FileWatcher` offline queueing** (AC: #1, #4)
+  - [x] 3.1 Extend imports in `engine/src/watcher.test.ts` (extend existing lines, do not add duplicate imports):
         `import { mkdirSync, rmSync }` → `import { mkdirSync, rmSync, writeFileSync }`
         `import type { SyncPair } from "./state-db.js"` → `import type { SyncPair, ChangeQueueEntry } from "./state-db.js"`
         Add new describe block `FileWatcher — offline change queue`
-  - [ ] 3.2 Test: **online path unchanged** — `isOnline = () => true`, fire 'change' event → `onChanges` called, `enqueueChange` NOT called
-  - [ ] 3.3 Test: **offline + 'change' event** → `enqueueChange` called once with `change_type: "modified"`, `scheduleSync` NOT triggered
+  - [x] 3.2 Test: **online path unchanged** — `isOnline = () => true`, fire 'change' event → `onChanges` called, `enqueueChange` NOT called
+  - [x] 3.3 Test: **offline + 'change' event** → `enqueueChange` called once with `change_type: "modified"`, `scheduleSync` NOT triggered
         (use `onChanges = mock(async () => {})` and verify `onChanges.mock.calls.length === 0` after debounce)
-  - [ ] 3.4 Test: **offline + 'rename' + file exists** → `change_type: "created"`
+  - [x] 3.4 Test: **offline + 'rename' + file exists** → `change_type: "created"`
         Create a real temp file and fire `listener("rename", filename)` while `isOnline = () => false`
-  - [ ] 3.5 Test: **offline + 'rename' + file missing** → `change_type: "deleted"`
+  - [x] 3.5 Test: **offline + 'rename' + file missing** → `change_type: "deleted"`
         Do NOT create the file; fire `listener("rename", "ghost.txt")` while offline
-  - [ ] 3.6 Test: **null filename** → `enqueueChange` NOT called, no crash
+  - [x] 3.6 Test: **null filename** → `enqueueChange` NOT called, no crash
         Fire `listener("change", null)` while offline
-  - [ ] 3.7 Test: **multiple offline events are each enqueued** (no debounce on queue writes) — fire 3 events on 3 different filenames while offline → `enqueueChange` called 3 times before any debounce timer fires
-  - [ ] 3.8 Test: **relative path is correct** — fire event for `filename = "notes.txt"` in root dir of pair → `relative_path = "notes.txt"` (no leading slash)
-  - [ ] 3.9 `bun test engine/src/watcher.test.ts` — all pass, no regressions in prior tests
+  - [x] 3.7 Test: **multiple offline events are each enqueued** (no debounce on queue writes) — fire 3 events on 3 different filenames while offline → `enqueueChange` called 3 times before any debounce timer fires
+  - [x] 3.8 Test: **relative path is correct** — fire event for `filename = "notes.txt"` in root dir of pair → `relative_path = "notes.txt"` (no leading slash)
+  - [x] 3.9 `bun test engine/src/watcher.test.ts` — all pass, no regressions in prior tests
 
-- [ ] **Task 4: Update `get_status` tests in `main.test.ts`** (AC: #3)
-  - [ ] 4.1 Existing test `"returns pairs:[] and online:true when no pairs exist"`: `toEqual({ pairs: [], online: true })` still passes (empty pairs array, no `queued_changes` fields to check)
-  - [ ] 4.2 Add test: **`get_status_result` includes `queued_changes: 0` per pair** when pair exists but queue is empty:
+- [x] **Task 4: Update `get_status` tests in `main.test.ts`** (AC: #3)
+  - [x] 4.1 Existing test `"returns pairs:[] and online:true when no pairs exist"`: `toEqual({ pairs: [], online: true })` still passes (empty pairs array, no `queued_changes` fields to check)
+  - [x] 4.2 Add test: **`get_status_result` includes `queued_changes: 0` per pair** when pair exists but queue is empty:
         Insert a pair via `stateDb.insertPair(...)`, send `get_status`, assert `pairs[0].queued_changes === 0`
-  - [ ] 4.3 Add test: **`get_status_result` reflects non-zero queue count** — insert pair, call `stateDb.enqueue(...)` twice, send `get_status`, assert `pairs[0].queued_changes === 2`
-  - [ ] 4.4 `bun test engine/src/main.test.ts` — all pass
+  - [x] 4.3 Add test: **`get_status_result` reflects non-zero queue count** — insert pair, call `stateDb.enqueue(...)` twice, send `get_status`, assert `pairs[0].queued_changes === 2`
+  - [x] 4.4 `bun test engine/src/main.test.ts` — all pass
 
-- [ ] **Task 5: Final validation**
-  - [ ] 5.1 `bun test engine/src/` — all pass (target: 161+ tests, 0 fail)
-  - [ ] 5.2 UI tests unchanged — no Python code changes in this story
-  - [ ] 5.3 Set story status to `review`
+- [x] **Task 5: Final validation**
+  - [x] 5.1 `bun test engine/src/` — all pass (170 tests, 0 fail)
+  - [x] 5.2 UI tests unchanged — no Python code changes in this story
+  - [x] 5.3 Set story status to `review`
 
 ---
 
@@ -344,6 +344,19 @@ For the deleted case, simply don't write `tmpFile`.
 
 ---
 
+## Review Findings
+
+- [x] [Review][Patch] Null-filename + offline falls through to `scheduleSync` — AC1+AC4 violation [engine/src/watcher.ts:52]
+- [x] [Review][Patch] `relPath` string-slice fragile when `local_path` has trailing slash — use `path.relative()` [engine/src/watcher.ts:85]
+- [x] [Review][Patch] `queueFileChange` has no try/catch — DB write errors propagate uncaught through fs.watch callback [engine/src/watcher.ts:83]
+- [x] [Review][Patch] Empty-string filename not guarded — `""` passes `!== null` and enqueues dir-root entry [engine/src/watcher.ts:52]
+- [x] [Review][Defer] TOCTOU race: `existsSync` called after rename event — file state may have changed; Linux inotify limitation [engine/src/watcher.ts:89] — deferred, pre-existing
+- [x] [Review][Defer] Online→offline transition during active debounce window — scheduled sync fires against offline connection [engine/src/watcher.ts:52-56] — deferred, Story 3-3 scope
+- [x] [Review][Defer] Cross-pair symlink aliasing — symlinked pair dirs may attribute changes to wrong pair [engine/src/watcher.ts:setupPairWatches] — deferred, pre-existing architectural gap
+- [x] [Review][Defer] `local_path` trailing-slash storage convention unspecified — upstream insert/query convention not enforced [engine/src/state-db.ts] — deferred, pre-existing
+
+---
+
 ## Dev Agent Record
 
 ### Agent Model Used
@@ -352,6 +365,20 @@ claude-sonnet-4-6
 
 ### Debug Log References
 
+None — implementation proceeded without blockers.
+
 ### Completion Notes List
 
+- Task 1: Extended `FileWatcher` with `isOnline` and `enqueueChange` constructor params (positions 6/7, default-safe). Added `queueFileChange` private method that resolves `change_type` via `existsSync` for rename events, strips leading separator from `relPath`. Watch callback now branches: offline+non-null filename → enqueue; otherwise → scheduleSync. Null filename is silently skipped.
+- Task 2: Both `FileWatcher` construction sites in `main.ts` wired with `() => networkMonitor?.isCurrentlyOnline ?? true` and `(e) => stateDb!.enqueue(e)`. Both `token_expired` emit sites updated to compute real `queuedTotal` via `reduce`. `get_status` pair mapping extended with `queued_changes: stateDb!.queueSize(p.pair_id)`. TSC non-null assertion required inside `.map()` callback due to narrowing loss.
+- Task 3: Added 7 new tests in `FileWatcher — offline change queue` describe block covering: online path unchanged, offline+change→modified, offline+rename+exists→created, offline+rename+missing→deleted, null filename→no enqueue, 3 events→3 enqueue calls (no debounce), relative path correctness.
+- Task 4: Existing `get_status` empty-pairs test unaffected. Added 2 new tests: `queued_changes:0` for empty queue, `queued_changes:2` after two enqueues.
+- Task 5: 170 tests, 0 fail across all 9 engine test files.
+
 ### File List
+
+engine/src/watcher.ts
+engine/src/main.ts
+engine/src/watcher.test.ts
+engine/src/main.test.ts
+_bmad-output/implementation-artifacts/3-2-offline-change-queue-persistent.md

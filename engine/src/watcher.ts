@@ -1,9 +1,9 @@
 import { readdir } from "node:fs/promises";
-import { watch } from "node:fs";
+import { watch, existsSync } from "node:fs";
 import type { FSWatcher, WatchListener } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { IpcPushEvent } from "./ipc.js";
-import type { SyncPair } from "./state-db.js";
+import type { SyncPair, ChangeQueueEntry, ChangeType } from "./state-db.js";
 import { debugLog } from "./debug-log.js";
 
 export type WatchFn = (path: string, listener: WatchListener<string>) => FSWatcher;
@@ -20,6 +20,8 @@ export class FileWatcher {
     private readonly emitEvent: (event: IpcPushEvent) => void,
     private readonly watchFn: WatchFn = watch,
     private readonly debounceMs: number = 1000,
+    private readonly isOnline: () => boolean = () => true,
+    private readonly enqueueChange: (entry: Omit<ChangeQueueEntry, "id">) => void = () => {},
   ) {}
 
   async initialize(): Promise<void> {
@@ -46,8 +48,13 @@ export class FileWatcher {
     for (const dir of dirs) {
       if (this.stopped) break;
       try {
-        const watcher = this.watchFn(dir, (_evt, _filename) => {
-          this.scheduleSync(pair.pair_id);
+        const watcher = this.watchFn(dir, (evt, filename) => {
+          if (filename === null || filename === "") return;
+          if (!this.isOnline()) {
+            this.queueFileChange(pair, dir, evt ?? "change", filename);
+          } else {
+            this.scheduleSync(pair.pair_id);
+          }
         });
         this.watchers.set(dir, watcher);
         watcher.on("error", (e) =>
@@ -71,6 +78,25 @@ export class FileWatcher {
           continue;
         }
       }
+    }
+  }
+
+  private queueFileChange(pair: SyncPair, dir: string, evt: string, filename: string): void {
+    const fullPath = join(dir, filename);
+    const relPath = relative(pair.local_path, fullPath);
+    const changeType: ChangeType =
+      evt === "change"
+        ? "modified"
+        : existsSync(fullPath) ? "created" : "deleted";
+    try {
+      this.enqueueChange({
+        pair_id: pair.pair_id,
+        relative_path: relPath,
+        change_type: changeType,
+        queued_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      debugLog(`watcher: enqueueChange failed for ${pair.pair_id}/${relPath}: ${(e as Error).message}`);
     }
   }
 

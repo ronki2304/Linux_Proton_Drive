@@ -239,6 +239,13 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - **W2** — `onChangesDetected` reject handler casts non-Error rejections to Error (`engine/src/watcher.ts:84`): `.catch((e) => debugLog(\`...: ${(e as Error).message}\`))` — if `onChangesDetected` rejects with a non-Error value (string, null, etc.), `.message` returns `undefined` and the actual error value is lost. Fix: use `String(e)` or `e instanceof Error ? e.message : String(e)`. Pre-existing; watcher.ts is out of scope for 3-0b.
 - **W3** — `object.__new__(Application)` pattern in test_main.py is fragile (`ui/tests/test_main.py:23`): bypasses `Application.__init__` entirely and manually sets attributes. If `_on_token_expired` or `logout` are refactored to access new attributes, tests will fail with AttributeError instead of a meaningful assertion error. Established project pattern for GTK-bypass testing; accepted as-is for now.
 
+## Deferred from: code review of 3-2-offline-change-queue-persistent (2026-04-14)
+
+- TOCTOU race: `existsSync` called after rename event — file state may have changed before stat; fundamental Linux inotify limitation; `change_type` may be wrong for rapid create-then-delete or delete-then-recreate sequences [engine/src/watcher.ts:89]
+- Online→offline transition during active debounce window — if a sync was scheduled while online and the debounce timer fires after going offline, `scheduleSync` triggers against an offline connection; Story 3-3 queue replay will reduce impact [engine/src/watcher.ts:52-56]
+- Cross-pair symlink aliasing — if two pairs have directories linked by symlinks, inotify events could be attributed to the wrong pair_id; pre-existing architectural gap; mitigated by Story 6-2 (nesting/overlap validation) [engine/src/watcher.ts:setupPairWatches]
+- `local_path` trailing-slash storage convention unspecified — `state-db.ts` has no normalization on insert; if a path is stored with trailing slash, `relPath` string-slice in `queueFileChange` will skip one character even after F2 (path.relative) fix; enforce no-trailing-slash invariant at `insertPair` time in a future story [engine/src/state-db.ts]
+
 ## Deferred from: code review of 3-1-offline-detection-and-ui-indicators (2026-04-14)
 
 - **W1** — `on_online()` resets "syncing" rows to "synced" (`ui/src/protondrive/window.py:287`): per spec, "Returning to 'synced' is the correct safe default — engine immediately pushes `sync_progress`/`sync_complete` to correct state within seconds." No action needed unless UX testing shows the flash is jarring.
