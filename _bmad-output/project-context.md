@@ -219,8 +219,8 @@ GNOME SDK 50 (`org.gnome.Sdk//50`), Bun 1.3.11 (`curl -fsSL https://bun.sh/insta
 
 ```
 # Terminal A — Engine
-cd engine && bun install    # first time only
-bun run src/main.ts
+cd engine && rtk bun install    # first time only
+rtk bun run src/main.ts
 
 # Terminal B — UI
 meson setup builddir        # first time only
@@ -232,8 +232,8 @@ UI auto-spawns the engine in production (Flatpak). In dev, run them separately t
 
 #### Build & Run
 
-- **Engine dev:** `bun run engine/src/main.ts` — no compile step
-- **Engine production:** `bun build --compile src/main.ts --outfile=dist/engine` → self-contained binary with Bun + bun:sqlite embedded; no native addon required
+- **Engine dev:** `rtk bun run engine/src/main.ts` — no compile step
+- **Engine production:** `rtk bun build --compile src/main.ts --outfile=dist/engine` → self-contained binary with Bun + bun:sqlite embedded; no native addon required
 - **UI dev:** `meson compile -C builddir` then `python -m protondrive` or GNOME Builder
 - **Full app (Flatpak):** `flatpak-builder --user --install builddir flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
 
@@ -258,7 +258,7 @@ Always resolve via env var with fallback — never hardcode `~/.config` or `~/.l
 
 #### CI/CD
 
-- **`ci.yml` (PR gate):** `meson test` (UI) + `bun test` (engine unit) — both must pass
+- **`ci.yml` (PR gate):** `meson test` (UI) + `rtk bun test` (engine unit) — both must pass
 - **`release.yml` (on `v*` tag):** Flatpak build + GitHub Release
 - **No automated integration tests in CI** — Proton CAPTCHA blocks unattended auth
 - **Tested distro matrix:** Fedora 43, Ubuntu 24/25, Bazzite, Arch — validated before each release

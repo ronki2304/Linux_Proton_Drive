@@ -12,11 +12,11 @@
 
 ```bash
 # Clone the repository
-git clone <repo-url>
+rtk git clone <repo-url>
 cd ProtonDrive-LinuxClient
 
 # Install dependencies
-bun install
+rtk bun install
 ```
 
 ## Project Structure
@@ -28,13 +28,13 @@ See [source-tree-analysis.md](./source-tree-analysis.md) for a fully annotated d
 ### Type-check without building
 
 ```bash
-bunx tsc --noEmit
+rtk bunx tsc --noEmit
 ```
 
 ### Run unit tests
 
 ```bash
-bun test
+rtk bun test
 ```
 
 Tests matching `src/**/*.test.ts` run automatically. No setup required.
@@ -42,7 +42,7 @@ Tests matching `src/**/*.test.ts` run automatically. No setup required.
 ### Build the binary
 
 ```bash
-bun build --compile src/cli.ts --outfile dist/protondrive
+rtk bun build --compile src/cli.ts --outfile dist/protondrive
 ```
 
 ### Run the CLI locally
@@ -58,8 +58,8 @@ bun build --compile src/cli.ts --outfile dist/protondrive
 Requires the binary to be built first:
 
 ```bash
-bun build --compile src/cli.ts --outfile dist/protondrive
-bun test src/__e2e__/
+rtk bun build --compile src/cli.ts --outfile dist/protondrive
+rtk bun test src/__e2e__/
 ```
 
 ### Run integration tests
@@ -67,7 +67,7 @@ bun test src/__e2e__/
 Requires real Proton account credentials (configure via environment or config file):
 
 ```bash
-bun test src/__integration__/
+rtk bun test src/__integration__/
 ```
 
 > **Warning:** Integration tests make live API calls. Do not run against a production account with important data.
@@ -152,9 +152,9 @@ Pull requests trigger `.github/workflows/ci.yml`:
 
 1. Checkout
 2. Install Bun 1.3.11 (`oven-sh/setup-bun@v2`)
-3. `bun install`
-4. `bunx tsc --noEmit`
-5. `bun test`
+3. `rtk bun install`
+4. `rtk bunx tsc --noEmit`
+5. `rtk bun test`
 
 All steps must pass for a PR to merge.
 
@@ -162,7 +162,7 @@ All steps must pass for a PR to merge.
 
 | Target | Command / Notes |
 |--------|----------------|
-| Binary | `bun build --compile src/cli.ts --outfile dist/protondrive` |
+| Binary | `rtk bun build --compile src/cli.ts --outfile dist/protondrive` |
 | AppImage | See `packaging/appimage/` |
 | AUR (Arch) | See `packaging/aur/` (PKGBUILD) |
 | Nix | `nix build` using `flake.nix` |
