@@ -209,4 +209,25 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 ## Deferred from: code review of 2-10-flatpak-build-validation (2026-04-11)
 
 - Double `GLib.timeout_add` in `engine.py` `start()` — two concurrent `_attempt_connection` callbacks fire, potentially double-counting `_elapsed_ms` and causing premature timeout or concurrent socket connections [ui/src/protondrive/engine.py:147-155]
-- Node binary path not validated before `spawnv` — `get_engine_path()` returns `(node_binary, engine_script)`; only `engine_script` is checked via `isfile`; a missing node binary produces a generic error with no root-cause hint [ui/src/protondrive/engine.py:28-34]
+- Bun binary path not validated before `spawnv` — `get_engine_path()` returns `tuple[str, ...]`; `engine_argv[-1]` (script or compiled binary) is checked via `isfile`, but the `bun` binary itself (first element in dev 2-tuple) is not verified to be executable; a missing or broken Bun produces a generic `GLib.Error` with no root-cause hint [ui/src/protondrive/engine.py:28-34] *(updated from Node-specific wording post-3-0a migration)*
+
+## Deferred from: smoke test of 3-0a-bun-runtime-migration (2026-04-14)
+
+- Key password popup appears twice after WebKit MFA — after successful CAPTCHA/2FA, the "enter your Proton account password to decrypt PGP keys" popup fires twice, requiring the user to enter their password twice. Root cause: the WebKit auth cookie detector fires multiple token candidates; multiple `token_refresh` cycles both succeed and both call `handleUnlockKeys`; each generates a `session_ready` event; the UI presents the key-password dialog once per `session_ready`. Fix options: (a) UI deduplication — if the key-password dialog is already open or was already answered in this session, suppress subsequent `session_ready` triggers; (b) engine deduplication — once keys are successfully loaded in memory, skip `handleUnlockKeys` on subsequent `token_refresh` calls until session is invalidated. Neither option was in scope for 3-0a (migration-only story). Candidate fix: Story 3-0b or a dedicated UX polish story. Not a regression from the Bun migration itself — the auth token loop predates this story; however this was the first time the full re-auth + key-unlock path was exercised end-to-end in Flatpak.
+
+
+## Deferred from: code review of 3-0a-bun-runtime-migration (2026-04-14)
+
+- Flatpak build env lacks `bun` binary for `bun install` / `bun build --compile` steps — the Flatpak manifest (Group D) must install or bundle Bun before the engine build steps run; otherwise the build fails with command-not-found. To be verified during Group D review of `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`.
+
+## Deferred from: code review of 3-0a-bun-runtime-migration Group C (2026-04-14)
+
+- `expect(!expr).toBeTruthy()` / `expect(x >= N).toBeTruthy()` patterns in test files give opaque failure messages — pre-existing from original `assert.ok()`. Improve to `.not.toContain()`, `.toBeGreaterThanOrEqual()`, etc. Affects `sdk.test.ts` (highest density), `watcher.test.ts`, `sync-engine.test.ts`.
+- `expect(true).toBe(false)` sentinel pattern in `sdk.test.ts` try/catch blocks — replace with `throw new Error("unreachable")` for better diagnostics. Pre-existing pattern.
+- Timing-dependent tests in `watcher.test.ts` using hard-coded `setTimeout(r, 100)` for 50 ms debounce — fragile under slow CI. Replace with deterministic signaling. Pre-existing pattern.
+
+## Deferred from: code review of 3-0a-bun-runtime-migration Group D (2026-04-14)
+
+- Flatpak: `bun` binary not in `org.gnome.Sdk` build sandbox — builds work locally because flatpak-builder inherits the host PATH when `--share=network` is set, but this will break for any CI or contributor machine that builds Flatpak. Fix: add a `type: file` source that downloads a pinned Bun binary into the build sandbox, or document the prerequisite explicitly. Note: Flathub would require an offline-sources approach anyway.
+- `bun build --compile` in Flatpak manifest has no `--target` flag — produces a native-arch binary only. x86_64 is the only supported arch for now; add `--target=bun-linux-x64` when multi-arch support is added.
+- `get_engine_path()` return type `tuple[str, ...]` is less precise than `tuple[str] | tuple[str, str]`; both are functionally equivalent but the more precise union type gives better type-checker enforcement.
