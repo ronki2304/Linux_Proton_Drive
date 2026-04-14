@@ -2,12 +2,7 @@ app-id: io.github.ronki2304.ProtonDriveLinuxClient
 runtime: org.gnome.Platform
 runtime-version: '50'
 sdk: org.gnome.Sdk
-sdk-extensions:
-  - org.freedesktop.Sdk.Extension.node22
 command: protondrive
-
-build-options:
-  append-path: /usr/lib/sdk/node22/bin
 
 finish-args:
   - --share=network
@@ -39,25 +34,18 @@ modules:
       - type: dir
         path: ../ui
 
-  # Engine module — TypeScript/Node sync engine built with node22 SDK extension
+  # Engine module — TypeScript/Bun sync engine compiled to self-contained binary (Option A)
+  # `bun build --compile` embeds the Bun runtime + bun:sqlite; no Bun needed at runtime.
   - name: protondrive-engine
     buildsystem: simple
     build-options:
       build-args:
         - --share=network
-      env:
-        npm_config_nodedir: /usr/lib/sdk/node22
-        npm_config_cache: /run/build/protondrive-engine/flatpak-node/npm-cache
     build-commands:
-      - /usr/lib/sdk/node22/bin/npm ci --build-from-source
-      - ./node_modules/.bin/tsc
-      - /usr/lib/sdk/node22/bin/npm prune --omit=dev
-      - mkdir -p /app/lib/protondrive-engine
-      - cp -r dist /app/lib/protondrive-engine/
-      - cp -rP node_modules /app/lib/protondrive-engine/
-      - cp package.json /app/lib/protondrive-engine/
-      - install -Dm755 /usr/lib/sdk/node22/bin/node /app/bin/node
+      - bun install --frozen-lockfile
+      - bun build --compile src/main.ts --outfile=dist/engine
+      - mkdir -p /app/lib/protondrive-engine/dist
+      - install -Dm755 dist/engine /app/lib/protondrive-engine/dist/engine
     sources:
       - type: dir
         path: ../engine
-      - generated-sources.json

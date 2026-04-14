@@ -1,6 +1,6 @@
 # Story 3.0b: Targeted Debt Fixes
 
-Status: ready-for-dev
+Status: done
 
 > **Why this story exists:** After the Bun runtime migration (Story 3-0a), four technical debt
 > items from the Epic 2 retrospective remain. Two of those items (watcher status reset on
@@ -120,52 +120,52 @@ One commit per logical group. Branch: `feat/3-0b-targeted-debt-fixes`.
 > **Order:** Do Tasks 1–3 (code/tests) first. Task 4 (architecture.md) last, after all tests
 > pass — it requires reading the actual post-3-0a implementations.
 
-- [ ] **Task 1: `change_type` enum** (AC: #1)
-  - [ ] 1.1 Add `export type ChangeType = "created" | "modified" | "deleted"` above
+- [x] **Task 1: `change_type` enum** (AC: #1)
+  - [x] 1.1 Add `export type ChangeType = "created" | "modified" | "deleted"` above
         the `ChangeQueueEntry` interface in `state-db.ts`
-  - [ ] 1.2 Update `ChangeQueueEntry.change_type: string` → `ChangeQueueEntry.change_type: ChangeType`
-  - [ ] 1.3 Do NOT add a migration or bump `CURRENT_VERSION` — enforcement is TypeScript-only
+  - [x] 1.2 Update `ChangeQueueEntry.change_type: string` → `ChangeQueueEntry.change_type: ChangeType`
+  - [x] 1.3 Do NOT add a migration or bump `CURRENT_VERSION` — enforcement is TypeScript-only
         (SQLite ALTER TABLE does not support CHECK constraints)
-  - [ ] 1.4 In `state-db.test.ts` — add tests: enqueue with each valid ChangeType value succeeds;
+  - [x] 1.4 In `state-db.test.ts` — add tests: enqueue with each valid ChangeType value succeeds;
         dequeue returns the correct `change_type`
-  - [ ] 1.5 Run `bun test engine/src/state-db.test.ts` — all tests pass
-  - [ ] 1.6 Run `bunx tsc --noEmit` — zero errors
+  - [x] 1.5 Run `bun test engine/src/state-db.test.ts` — all tests pass
+  - [x] 1.6 Run `bunx tsc --noEmit` — zero errors
 
-- [ ] **Task 2: Watcher status reset — test coverage** (AC: #2)
-  - [ ] 2.1 Read existing `ui/tests/test_main.py` — identify the GLib/EngineClient/CredentialManager
+- [x] **Task 2: Watcher status reset — test coverage** (AC: #2)
+  - [x] 2.1 Read existing `ui/tests/test_main.py` — identify the GLib/EngineClient/CredentialManager
         mock setup pattern used in other tests; replicate it exactly
-  - [ ] 2.2 In `ui/tests/test_main.py` — add a test that:
+  - [x] 2.2 In `ui/tests/test_main.py` — add a test that:
         - patches `GLib` in `sys.modules` (required — `_cancel_validation_timeout` calls
           `GLib.source_remove`; without this the test crashes on GLib initialization)
         - creates an `Application` instance with mocked engine + credentials
         - sets `app._watcher_status = "ready"`
         - calls `app._on_token_expired({"payload": {"code": "SESSION_EXPIRED"}})`
         - asserts `app._watcher_status == "unknown"`
-  - [ ] 2.3 Add a second test: set `_watcher_status = "initializing"`, call `app.logout()`,
+  - [x] 2.3 Add a second test: set `_watcher_status = "initializing"`, call `app.logout()`,
         assert `app._watcher_status == "unknown"` (logout also calls `_engine.send_shutdown()` —
         mock `_engine`)
-  - [ ] 2.4 Run `python -m pytest ui/tests/test_main.py -v` — all pass
+  - [x] 2.4 Run `python -m pytest ui/tests/test_main.py -v` — all pass
 
-- [ ] **Task 3: `onChangesDetected` rejection — test coverage** (AC: #3)
-  - [ ] 3.1 Confirm `engine/src/watcher.ts` lines 83–85 use `.catch((e) => debugLog(...))` —
+- [x] **Task 3: `onChangesDetected` rejection — test coverage** (AC: #3)
+  - [x] 3.1 Confirm `engine/src/watcher.ts` lines 83–85 use `.catch((e) => debugLog(...))` —
         no source change required if the pattern is already present
-  - [ ] 3.2 In `engine/src/watcher.test.ts` — add a test:
+  - [x] 3.2 In `engine/src/watcher.test.ts` — add a test:
         - construct `FileWatcher` with an `onChangesDetected` that rejects with `new Error("boom")`
         - trigger `scheduleSync` (call the internal callback, or advance timers)
         - assert `debugLog` was called with a message containing `"boom"` and the pair ID
         - assert no unhandled rejection propagated (the test itself must not throw)
-  - [ ] 3.3 Run `bun test engine/src/watcher.test.ts` — passes
+  - [x] 3.3 Run `bun test engine/src/watcher.test.ts` — passes
 
-- [ ] **Task 4: `architecture.md` surgical update** (AC: #4)
-  - [ ] 4.1 Read current `engine.py` `get_engine_path()` — copy the actual implementation
-  - [ ] 4.2 Read current Flatpak manifest `protondrive-engine` module section — note the approach
-  - [ ] 4.3 Run `grep -n "node22\|Node\.js" architecture.md` — find ALL occurrences
+- [x] **Task 4: `architecture.md` surgical update** (AC: #4)
+  - [x] 4.1 Read current `engine.py` `get_engine_path()` — copy the actual implementation
+  - [x] 4.2 Read current Flatpak manifest `protondrive-engine` module section — note the approach
+  - [x] 4.3 Run `grep -n "node22\|Node\.js" architecture.md` — find ALL occurrences
         (known locations: lines ~91–96, ~392–394; there is also at least one more around line 656)
-  - [ ] 4.4 Update engine runtime paragraph: replace Node.js/node22 with Bun
-  - [ ] 4.5 Update YAML snippet: replace node22 sdk-extension with the actual Bun packaging used
-  - [ ] 4.6 Update `get_engine_path()` code snippet: replace with actual post-3-0a implementation
-  - [ ] 4.7 Update tsconfig snippet: `NodeNext` → `ESNext`/`Bundler`, add `bun-types`
-  - [ ] 4.8 Verify no other lines were accidentally changed (`git diff architecture.md`)
+  - [x] 4.4 Update engine runtime paragraph: replace Node.js/node22 with Bun
+  - [x] 4.5 Update YAML snippet: replace node22 sdk-extension with the actual Bun packaging used
+  - [x] 4.6 Update `get_engine_path()` code snippet: replace with actual post-3-0a implementation
+  - [x] 4.7 Update tsconfig snippet: `NodeNext` → `ESNext`/`Bundler`, add `bun-types`
+  - [x] 4.8 Verify no other lines were accidentally changed (`git diff architecture.md`)
 
 ## Dev Notes
 
@@ -263,10 +263,40 @@ Do NOT touch:
 
 ### Agent Model Used
 
-_to be filled_
+claude-sonnet-4-6
 
 ### Debug Log References
 
+_none — no blocking issues_
+
 ### Completion Notes List
 
+- **Task 1 (AC1):** Added `export type ChangeType = "created" | "modified" | "deleted"` to `state-db.ts`; updated `ChangeQueueEntry.change_type: string → ChangeType`; no migration (TypeScript-only enforcement); updated all existing test `change_type` values ("upload"→"created", "delete"→"deleted") to valid ChangeType literals; added 4 new tests in `StateDb — ChangeType enum` describe block; 27/27 tests pass; `bunx tsc --noEmit` zero errors.
+- **Task 2 (AC2):** Created `ui/tests/test_main.py`; GLib already mocked globally by `conftest.py`; used `object.__new__(Application)` pattern to bypass GTK init; `_token_validation_timer_id = None` prevents `GLib.source_remove` call; 4 tests covering `_on_token_expired` (from "ready" and "initializing") and `logout` (from "ready" and "initializing") — all pass.
+- **Task 3 (AC3):** Confirmed `watcher.ts` lines 83-85 already use `.catch((e) => debugLog(...))` — no source change; added rejection test to `watcher.test.ts` using `PROTONDRIVE_DEBUG=1` + temp `XDG_CACHE_HOME` to verify log file contains "boom" and pairId; `debounceMs: 0` + `await setTimeout(0)` to flush; 7/7 tests pass.
+- **Task 4 (AC4):** Read actual `get_engine_path()` from `engine.py` and `protondrive-engine` module from Flatpak manifest; updated 4 locations in `architecture.md`: (1) line ~91 engine runtime paragraph Node.js/node22 → Bun `bun build --compile`; (2) YAML snippet → actual Flatpak module; (3) `get_engine_path()` snippet → actual post-3-0a implementation; (4) tsconfig snippet `NodeNext` → `ESNext`/`Bundler`/`bun-types`; also updated line ~656 architectural decisions checklist. `git diff` confirms surgical changes only.
+- **Pre-existing failures:** 29 UI test failures in `test_auth_completion.py`, `test_auth_window.py`, `test_credential_store.py`, `test_main_routing.py` — confirmed pre-existing (same failures with stashed changes); not regressions from this story.
+
 ### File List
+
+- `engine/src/state-db.ts`
+- `engine/src/state-db.test.ts`
+- `engine/src/watcher.test.ts`
+- `ui/tests/test_main.py` (new)
+- `_bmad-output/planning-artifacts/architecture.md`
+- `_bmad-output/implementation-artifacts/3-0b-targeted-debt-fixes.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+
+### Change Log
+
+- 2026-04-14: Implemented AC1 (ChangeType enum), AC2 (watcher status reset tests), AC3 (onChangesDetected rejection test), AC4 (architecture.md surgical update). Story set to review.
+
+### Review Findings
+
+- [x] [Review][Decision] D1 — Wrong branch + uncommitted: resolved — committing all changes (3-0a code + 3-0b) together on `feat/3-0a-bun-runtime-migration` per Jeremy's direction (option c).
+- [x] [Review][Decision] D2 — Out-of-scope 3-0a files in working tree: resolved — included in combined commit per Jeremy's direction (option c).
+- [x] [Review][Decision] D3 — AC3 verification method: resolved — refactored to `spyOn(fs, "appendFileSync").mockImplementation(() => {})` with direct call-argument assertions; XDG_CACHE_HOME manipulation removed.
+- [x] [Review][Patch] P1 — `fw.stop()` not in try/finally: fixed — test body wrapped in try/finally. [`engine/src/watcher.test.ts`]
+- [x] [Review][Defer] W1 — Migration runner lacks null guard on PRAGMA user_version result [`engine/src/state-db.ts:128`] — deferred, pre-existing; SQLite guarantees PRAGMA user_version always returns a row
+- [x] [Review][Defer] W2 — onChangesDetected reject handler casts any rejection to Error — non-Error throws log "undefined" instead of actual value [`engine/src/watcher.ts:84`] — deferred, pre-existing; watcher.ts is out of scope per story
+- [x] [Review][Defer] W3 — `object.__new__(Application)` bypasses `__init__`, brittle if new attributes added [`ui/tests/test_main.py:23`] — deferred, established project pattern (conftest.py design)

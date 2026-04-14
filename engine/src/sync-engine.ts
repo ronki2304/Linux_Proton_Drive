@@ -484,7 +484,7 @@ export class SyncEngine {
 
   private async uploadOne(pair: SyncPair, item: WorkItem & { kind: "upload" }, client: DriveClient): Promise<void> {
     const localPath = join(pair.local_path, item.relativePath);
-    const stream = Readable.toWeb(createReadStream(localPath)) as ReadableStream<Uint8Array>;
+    const stream = Readable.toWeb(createReadStream(localPath)) as unknown as ReadableStream<Uint8Array>;
     const body = {
       stream,
       sizeBytes: item.size,
