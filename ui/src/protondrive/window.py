@@ -276,6 +276,21 @@ class MainWindow(Adw.ApplicationWindow):
         self.pair_detail_panel.show_pair(pair_data)
         self.nav_split_view.set_show_content(True)
 
+    def on_offline(self) -> None:
+        """Shift all pair rows and footer bar to offline state."""
+        for pair_id, row in self._sync_pair_rows.items():
+            last_synced_text = self._pairs_data.get(pair_id, {}).get("last_synced_text")
+            row.set_state("offline", last_synced_text=last_synced_text)
+        self.status_footer_bar.set_offline()
+
+    def on_online(self) -> None:
+        """Return all pair rows and footer bar to synced state."""
+        for row in self._sync_pair_rows.values():
+            row.set_state("synced")
+        any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
+        if not any_syncing:
+            self.status_footer_bar.update_all_synced()
+
     def on_sync_progress(self, payload: dict[str, Any]) -> None:
         """Update pair row and footer bar when sync is in progress."""
         pair_id = payload.get("pair_id", "")
@@ -297,7 +312,7 @@ class MainWindow(Adw.ApplicationWindow):
         """Update pair row and footer bar when sync completes."""
         pair_id = payload.get("pair_id", "")
         row = self._sync_pair_rows.get(pair_id)
-        if row is not None:
+        if row is not None and row.state != "offline":  # don't clobber offline state
             row.set_state("synced")
         if self._sync_pair_rows and all(r.state == "synced" for r in self._sync_pair_rows.values()):
             self.status_footer_bar.update_all_synced()
@@ -312,10 +327,9 @@ class MainWindow(Adw.ApplicationWindow):
         if status == "initializing":
             self.status_footer_bar.set_initialising()
         elif status == "ready":
-            any_syncing = any(
-                r.state == "syncing" for r in self._sync_pair_rows.values()
-            )
-            if not any_syncing:
+            any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
+            any_offline = any(r.state == "offline" for r in self._sync_pair_rows.values())
+            if not any_syncing and not any_offline:
                 self.status_footer_bar.update_all_synced()
 
     def _on_sign_in_requested(self, screen: PreAuthScreen) -> None:

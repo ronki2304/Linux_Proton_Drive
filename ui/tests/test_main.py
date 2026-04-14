@@ -64,3 +64,27 @@ class TestLogoutResetsWatcherStatus:
         app._watcher_status = "initializing"
         app.logout()
         assert app._watcher_status == "unknown"
+
+
+class TestOfflineOnlineHandlers:
+    """_on_offline and _on_online forward to window."""
+
+    def test_on_offline_calls_window_on_offline(self) -> None:
+        app = _make_app()
+        app._on_offline({})
+        app._window.on_offline.assert_called_once_with()
+
+    def test_on_online_calls_window_on_online(self) -> None:
+        app = _make_app()
+        app._on_online({})
+        app._window.on_online.assert_called_once_with()
+
+    def test_on_offline_no_window_is_noop(self) -> None:
+        app = _make_app()
+        app._window = None
+        app._on_offline({})  # must not raise
+
+    def test_on_online_no_window_is_noop(self) -> None:
+        app = _make_app()
+        app._window = None
+        app._on_online({})  # must not raise
