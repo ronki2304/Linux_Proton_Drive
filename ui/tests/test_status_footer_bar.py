@@ -25,6 +25,7 @@ def _make_bar() -> StatusFooterBar:
         bar._accessible_label_args = (props, values)
 
     bar.update_property = fake_update_property
+    bar.announce = MagicMock()
     return bar
 
 
@@ -74,13 +75,50 @@ class TestStatusFooterBarUpdateAllSynced:
     def test_css_class_removed(self):
         bar = _make_bar()
         bar.update_all_synced()
-        bar.footer_dot.remove_css_class.assert_called_with("sync-dot-syncing")
+        bar.footer_dot.remove_css_class.assert_any_call("sync-dot-syncing")
 
     def test_accessible_label_is_all_synced(self):
         bar = _make_bar()
         bar.update_all_synced()
         _, values = bar._accessible_label_args
         assert values == ["All synced"]
+
+
+class TestStatusFooterBarSetOffline:
+    def test_label_text_is_offline(self):
+        bar = _make_bar()
+        bar.set_offline()
+        bar.footer_label.set_text.assert_called_with("Offline \u2014 changes queued")
+
+    def test_dot_state_becomes_offline(self):
+        bar = _make_bar()
+        bar.set_offline()
+        assert bar._dot_state == "offline"
+
+    def test_css_class_added(self):
+        bar = _make_bar()
+        bar.set_offline()
+        bar.footer_dot.add_css_class.assert_called_with("sync-dot-offline")
+
+    def test_accessible_label_reflects_offline(self):
+        bar = _make_bar()
+        bar.set_offline()
+        _, values = bar._accessible_label_args
+        assert values == ["Offline \u2014 changes queued"]
+
+    def test_syncing_css_class_removed_on_offline(self):
+        bar = _make_bar()
+        bar._dot_state = "syncing"
+        bar.set_offline()
+        calls = [call.args[0] for call in bar.footer_dot.remove_css_class.call_args_list]
+        assert "sync-dot-syncing" in calls
+
+    def test_announce_called_on_offline(self):
+        bar = _make_bar()
+        bar.set_offline()
+        bar.announce.assert_called_once()
+        args = bar.announce.call_args[0]
+        assert args[0] == "Offline \u2014 changes queued"
 
 
 class TestStatusFooterBarSetInitialising:

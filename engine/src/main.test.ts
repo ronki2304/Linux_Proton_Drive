@@ -1,5 +1,4 @@
-import { describe, it, mock, afterEach, beforeEach } from "node:test";
-import assert from "node:assert/strict";
+import { describe, it, mock, afterEach, beforeEach, expect } from "bun:test";
 import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
@@ -14,7 +13,6 @@ import {
   writeMessage,
 } from "./ipc.js";
 import { handleCommand, _setDriveClientForTests, _setStateDbForTests, _setServerForTests } from "./main.js";
-import type { DriveClient } from "./sdk.js";
 import { StateDb } from "./state-db.js";
 
 function tmpSocketPath(): string {
@@ -47,11 +45,6 @@ async function readMessages(
 
 // ---------------------------------------------------------------------------
 // token_refresh tests
-//
-// These tests verify the IPC contract: token_refresh must NOT produce a
-// _result response and MUST emit a push event (session_ready or token_expired).
-// They use a hand-rolled IpcServer that stubs the handler to avoid hitting
-// real Proton infrastructure.
 // ---------------------------------------------------------------------------
 describe("token_refresh command", () => {
   it("emits session_ready (not _result) for valid token", async () => {
@@ -98,13 +91,13 @@ describe("token_refresh command", () => {
     const result = messages.find(
       (m) => (m as { type: string }).type === "token_refresh_result",
     );
-    assert.equal(result, undefined, "token_refresh must NOT produce a _result");
+    expect(result).toBeUndefined();
 
     // Should have session_ready
     const sessionReady = messages.find(
       (m) => (m as { type: string }).type === "session_ready",
     );
-    assert.ok(sessionReady, "session_ready event should be emitted");
+    expect(sessionReady).toBeTruthy();
 
     client.destroy();
     server.close();
@@ -147,11 +140,10 @@ describe("token_refresh command", () => {
     const expired = messages.find(
       (m) => (m as { type: string }).type === "token_expired",
     );
-    assert.ok(expired, "token_expired event should be emitted");
-    assert.equal(
+    expect(expired).toBeTruthy();
+    expect(
       ((expired as { payload: Record<string, unknown> }).payload)["queued_changes"],
-      0,
-    );
+    ).toBe(0);
 
     client.destroy();
     server.close();
@@ -161,17 +153,6 @@ describe("token_refresh command", () => {
 
 // ---------------------------------------------------------------------------
 // list_remote_folders tests
-//
-// The handler now has three paths:
-//  1. engine_not_ready: driveClient is null (no successful token_refresh yet)
-//  2. happy path: driveClient.listRemoteFolders returns folders
-//  3. error path: driveClient.listRemoteFolders throws
-//
-// We test paths 1 and 3 directly via handleCommand (which uses the module-level
-// driveClient). Since driveClient starts null in test context (no real auth),
-// path 1 is testable without mocking. Paths 2 and 3 require injecting a mock
-// DriveClient via the sdk module, which is done by mocking the createDriveClient
-// import at the module level.
 // ---------------------------------------------------------------------------
 describe("list_remote_folders command", () => {
   afterEach(() => {
@@ -180,8 +161,6 @@ describe("list_remote_folders command", () => {
   });
 
   it("returns engine_not_ready when no driveClient is set (no prior token_refresh)", async () => {
-    // driveClient is null at module init and after test isolation — this tests
-    // the guard path without touching real auth.
     const cmd: IpcCommand = {
       type: "list_remote_folders",
       id: "lrf-not-ready",
@@ -190,10 +169,10 @@ describe("list_remote_folders command", () => {
 
     const response = await handleCommand(cmd);
 
-    assert.ok(response, "handleCommand must return a response");
-    assert.equal(response.type, "list_remote_folders_result");
-    assert.equal(response.id, "lrf-not-ready");
-    assert.deepEqual(response.payload, { error: "engine_not_ready" });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("list_remote_folders_result");
+    expect(response!.id).toBe("lrf-not-ready");
+    expect(response!.payload).toEqual({ error: "engine_not_ready" });
   });
 
   it("returns engine_not_ready when payload is missing", async () => {
@@ -204,10 +183,10 @@ describe("list_remote_folders command", () => {
 
     const response = await handleCommand(cmd);
 
-    assert.ok(response, "handleCommand must return a response");
-    assert.equal(response.type, "list_remote_folders_result");
-    assert.equal(response.id, "lrf-no-payload");
-    assert.deepEqual(response.payload, { error: "engine_not_ready" });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("list_remote_folders_result");
+    expect(response!.id).toBe("lrf-no-payload");
+    expect(response!.payload).toEqual({ error: "engine_not_ready" });
   });
 
   it("returns folders when driveClient is set (happy path)", async () => {
@@ -216,7 +195,7 @@ describe("list_remote_folders command", () => {
       { id: "uid-2", name: "Photos", parent_id: "<root>" },
     ];
     const mockClient = {
-      listRemoteFolders: mock.fn(async () => mockFolders),
+      listRemoteFolders: mock(async () => mockFolders),
     } as unknown as DriveClient;
 
     _setDriveClientForTests(mockClient);
@@ -229,15 +208,15 @@ describe("list_remote_folders command", () => {
 
     const response = await handleCommand(cmd);
 
-    assert.ok(response, "handleCommand must return a response");
-    assert.equal(response.type, "list_remote_folders_result");
-    assert.equal(response.id, "lrf-happy");
-    assert.deepEqual(response.payload, { folders: mockFolders });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("list_remote_folders_result");
+    expect(response!.id).toBe("lrf-happy");
+    expect(response!.payload).toEqual({ folders: mockFolders });
   });
 
   it("returns error message when driveClient.listRemoteFolders throws (error path)", async () => {
     const mockClient = {
-      listRemoteFolders: mock.fn(async () => {
+      listRemoteFolders: mock(async () => {
         throw new Error("network timeout");
       }),
     } as unknown as DriveClient;
@@ -252,10 +231,10 @@ describe("list_remote_folders command", () => {
 
     const response = await handleCommand(cmd);
 
-    assert.ok(response, "handleCommand must return a response");
-    assert.equal(response.type, "list_remote_folders_result");
-    assert.equal(response.id, "lrf-error");
-    assert.deepEqual(response.payload, { error: "network timeout" });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("list_remote_folders_result");
+    expect(response!.id).toBe("lrf-error");
+    expect(response!.payload).toEqual({ error: "network timeout" });
   });
 });
 
@@ -265,12 +244,17 @@ describe("list_remote_folders command", () => {
 describe("add_pair command", () => {
   let tmpDir: string;
   let origXdg: string | undefined;
+  let addPairServer: IpcServer;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "add-pair-test-"));
     origXdg = process.env["XDG_CONFIG_HOME"];
     process.env["XDG_CONFIG_HOME"] = tmpDir;
     _setStateDbForTests(new StateDb(":memory:"));
+    // add_pair handler creates a FileWatcher that calls server.emitEvent — wire a stub server.
+    addPairServer = new IpcServer(tmpSocketPath(), handleCommand);
+    addPairServer.emitEvent = () => {};
+    _setServerForTests(addPairServer);
   });
 
   afterEach(() => {
@@ -286,7 +270,7 @@ describe("add_pair command", () => {
 
   it("success: driveClient set, valid payload → add_pair_result with pair_id (UUID format)", async () => {
     const mockClient = {
-      listRemoteFolders: mock.fn(async () => []),
+      listRemoteFolders: mock(async () => []),
     } as unknown as DriveClient;
     _setDriveClientForTests(mockClient);
 
@@ -298,18 +282,18 @@ describe("add_pair command", () => {
 
     const response = await handleCommand(cmd);
 
-    assert.ok(response);
-    assert.equal(response.type, "add_pair_result");
-    assert.equal(response.id, "ap-happy");
-    assert.ok("pair_id" in response.payload, "response must have pair_id");
-    const pairId = response.payload["pair_id"] as string;
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("add_pair_result");
+    expect(response!.id).toBe("ap-happy");
+    expect("pair_id" in response!.payload).toBeTruthy();
+    const pairId = response!.payload["pair_id"] as string;
     // UUID v4 format
-    assert.match(pairId, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    expect(pairId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
   });
 
   it("missing local_path → invalid_payload", async () => {
     const mockClient = {
-      listRemoteFolders: mock.fn(async () => []),
+      listRemoteFolders: mock(async () => []),
     } as unknown as DriveClient;
     _setDriveClientForTests(mockClient);
 
@@ -320,14 +304,14 @@ describe("add_pair command", () => {
     };
 
     const response = await handleCommand(cmd);
-    assert.ok(response);
-    assert.equal(response.type, "add_pair_result");
-    assert.deepEqual(response.payload, { error: "invalid_payload" });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("add_pair_result");
+    expect(response!.payload).toEqual({ error: "invalid_payload" });
   });
 
   it("missing remote_path → invalid_payload", async () => {
     const mockClient = {
-      listRemoteFolders: mock.fn(async () => []),
+      listRemoteFolders: mock(async () => []),
     } as unknown as DriveClient;
     _setDriveClientForTests(mockClient);
 
@@ -338,13 +322,12 @@ describe("add_pair command", () => {
     };
 
     const response = await handleCommand(cmd);
-    assert.ok(response);
-    assert.equal(response.type, "add_pair_result");
-    assert.deepEqual(response.payload, { error: "invalid_payload" });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("add_pair_result");
+    expect(response!.payload).toEqual({ error: "invalid_payload" });
   });
 
   it("driveClient null → engine_not_ready", async () => {
-    // driveClient already null from module init / afterEach reset
     const cmd: IpcCommand = {
       type: "add_pair",
       id: "ap-not-ready",
@@ -352,14 +335,14 @@ describe("add_pair command", () => {
     };
 
     const response = await handleCommand(cmd);
-    assert.ok(response);
-    assert.equal(response.type, "add_pair_result");
-    assert.deepEqual(response.payload, { error: "engine_not_ready" });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("add_pair_result");
+    expect(response!.payload).toEqual({ error: "engine_not_ready" });
   });
 
   it("stateDb undefined (driveClient set) → engine_not_ready", async () => {
     const mockClient = {
-      listRemoteFolders: mock.fn(async () => []),
+      listRemoteFolders: mock(async () => []),
     } as unknown as DriveClient;
     _setDriveClientForTests(mockClient);
     _setStateDbForTests(undefined);
@@ -371,20 +354,14 @@ describe("add_pair command", () => {
     };
 
     const response = await handleCommand(cmd);
-    assert.ok(response);
-    assert.equal(response.type, "add_pair_result");
-    assert.deepEqual(response.payload, { error: "engine_not_ready" });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("add_pair_result");
+    expect(response!.payload).toEqual({ error: "engine_not_ready" });
   });
 });
 
 // ---------------------------------------------------------------------------
-// get_status tests
-// ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
 // unlock_keys command (Story 2.11, AC5, AC9)
-//
-// unlock_keys must NOT produce a _result response; it emits session_ready or
-// key_unlock_required depending on whether key derivation succeeds.
 // ---------------------------------------------------------------------------
 describe("unlock_keys command", () => {
   let testServer: IpcServer;
@@ -415,11 +392,8 @@ describe("unlock_keys command", () => {
       payload: { password: "any" },
     });
 
-    assert.equal(response, null, "unlock_keys must not produce _result");
-    assert.ok(
-      capturedEvents.some((e) => e.type === "key_unlock_required"),
-      "key_unlock_required must be emitted when no driveClient",
-    );
+    expect(response).toBeNull();
+    expect(capturedEvents.some((e) => e.type === "key_unlock_required")).toBeTruthy();
   });
 
   it("emits key_unlock_required when password is missing from payload", async () => {
@@ -431,8 +405,8 @@ describe("unlock_keys command", () => {
       payload: {},
     });
 
-    assert.equal(response, null);
-    assert.ok(capturedEvents.some((e) => e.type === "key_unlock_required"));
+    expect(response).toBeNull();
+    expect(capturedEvents.some((e) => e.type === "key_unlock_required")).toBeTruthy();
   });
 
   it("emits session_ready on successful key derivation", async () => {
@@ -440,16 +414,16 @@ describe("unlock_keys command", () => {
     _setStateDbForTests(db);
 
     const mockClient = {
-      deriveAndUnlock: mock.fn(async () => "$2y$10$fakekeypassword00000000"),
-      validateSession: mock.fn(async () => ({
+      deriveAndUnlock: mock(async () => "$2y$10$fakekeypassword00000000"),
+      validateSession: mock(async () => ({
         email: "u@p.me",
         display_name: "U",
         storage_used: 0,
         storage_total: 0,
         plan: "",
       })),
-      setDriveClient: mock.fn(),
-      startSyncAll: mock.fn(async () => {}),
+      setDriveClient: mock(() => {}),
+      startSyncAll: mock(async () => {}),
     };
     _setDriveClientForTests(mockClient as unknown as DriveClient);
 
@@ -459,19 +433,18 @@ describe("unlock_keys command", () => {
       payload: { password: "correct-password" },
     });
 
-    assert.equal(response, null, "unlock_keys must not produce _result");
+    expect(response).toBeNull();
     const ready = capturedEvents.find((e) => e.type === "session_ready");
-    assert.ok(ready, "session_ready must be emitted on success");
+    expect(ready).toBeTruthy();
     // key_password included so UI can store it
-    assert.equal(
+    expect(
       (ready!.payload as Record<string, unknown>)["key_password"],
-      "$2y$10$fakekeypassword00000000",
-    );
+    ).toBe("$2y$10$fakekeypassword00000000");
   });
 
   it("emits key_unlock_required with error hint when derivation fails", async () => {
     const mockClient = {
-      deriveAndUnlock: mock.fn(async () => {
+      deriveAndUnlock: mock(async () => {
         throw new Error("bcrypt failed");
       }),
     };
@@ -483,20 +456,17 @@ describe("unlock_keys command", () => {
       payload: { password: "wrong-password" },
     });
 
-    assert.equal(response, null);
+    expect(response).toBeNull();
     const event = capturedEvents.find((e) => e.type === "key_unlock_required");
-    assert.ok(event, "key_unlock_required must be emitted on failure");
+    expect(event).toBeTruthy();
     // Error hint present — raw password must NOT be in the payload
     const payload = event!.payload as Record<string, unknown>;
-    assert.ok(
-      !JSON.stringify(payload).includes("wrong-password"),
-      "raw password must never appear in key_unlock_required payload",
-    );
+    expect(!JSON.stringify(payload).includes("wrong-password")).toBeTruthy();
   });
 });
 
 // ---------------------------------------------------------------------------
-// token_refresh: missing key_password → key_unlock_required (Story 2.11, AC5)
+// token_refresh: key_password flow (Story 2.11, AC5)
 // ---------------------------------------------------------------------------
 describe("token_refresh: key_password flow", () => {
   let testServer: IpcServer;
@@ -518,14 +488,11 @@ describe("token_refresh: key_password flow", () => {
   });
 
   it("emits key_unlock_required when token valid but key_password absent", async () => {
-    // token_refresh with valid token but no key_password must emit key_unlock_required.
-    // We test this via a stub IpcServer that mirrors the expected protocol behavior.
     const stubSocketPath = tmpSocketPath();
     const stubServer = new IpcServer(
       stubSocketPath,
       async (command: IpcCommand) => {
         if (command.type === "token_refresh") {
-          // Real handler: validateSession succeeds, key_password absent → key_unlock_required
           stubServer.emitEvent({ type: "key_unlock_required", payload: {} });
           return null;
         }
@@ -547,10 +514,10 @@ describe("token_refresh: key_password flow", () => {
 
     const msgs = await msgsPromise;
     const event = msgs.find((m) => (m as { type: string }).type === "key_unlock_required");
-    assert.ok(event, "key_unlock_required must be emitted when key_password absent");
+    expect(event).toBeTruthy();
 
     const result = msgs.find((m) => (m as { type: string }).type === "token_refresh_result");
-    assert.equal(result, undefined, "token_refresh must NOT produce _result");
+    expect(result).toBeUndefined();
 
     client.destroy();
     stubServer.close();
@@ -574,9 +541,9 @@ describe("get_status command", () => {
     };
 
     const response = await handleCommand(cmd);
-    assert.ok(response);
-    assert.equal(response.type, "get_status_result");
-    assert.equal(response.id, "gs-empty");
-    assert.deepEqual(response.payload, { pairs: [], online: true });
+    expect(response).toBeTruthy();
+    expect(response!.type).toBe("get_status_result");
+    expect(response!.id).toBe("gs-empty");
+    expect(response!.payload).toEqual({ pairs: [], online: true });
   });
 });

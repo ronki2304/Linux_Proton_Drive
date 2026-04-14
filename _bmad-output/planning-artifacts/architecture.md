@@ -88,12 +88,19 @@ GTK4/Libadwaita desktop app delivering two-way continuous folder sync while the 
 - **GNOME runtime:** `org.gnome.Platform//50` + `org.gnome.Sdk//50`
 - **WebKitGTK:** 6.0 — import as `gi.repository.WebKit` (not the deprecated `WebKit2`)
 - **Libadwaita:** 1.8 (ships with GNOME 50)
-- **Node.js:** bundled via `org.freedesktop.Sdk.Extension.node22` SDK extension (~50MB, Flathub-approved pattern)
+- **Bun:** compiled to a self-contained binary via `bun build --compile` — Bun runtime + `bun:sqlite` embedded in the output binary; no SDK extension or runtime dependency needed
   ```yaml
-  sdk-extensions:
-    - org.freedesktop.Sdk.Extension.node22
-  build-options:
-    append-path: /usr/lib/sdk/node22/bin
+  # Engine module — TypeScript/Bun compiled to self-contained binary
+  - name: protondrive-engine
+    buildsystem: simple
+    build-options:
+      build-args:
+        - --share=network
+    build-commands:
+      - bun install --frozen-lockfile
+      - bun build --compile src/main.ts --outfile=dist/engine
+      - mkdir -p /app/lib/protondrive-engine/dist
+      - install -Dm755 dist/engine /app/lib/protondrive-engine/dist/engine
   ```
 - **Joint release gate:** GNOME runtime 50 + `@protontech/drive-sdk` v0.14.3 must be validated together before each release on the tested matrix: Fedora 43, Ubuntu 24/25, Bazzite, Arch
 
@@ -387,17 +394,34 @@ def _on_engine_ready(self, payload):
 
 **ENGINE_PATH resolution:**
 ```python
-def get_engine_path() -> tuple[str, str]:
-    if os.environ.get('FLATPAK_ID'):
-        return ('/usr/lib/sdk/node22/bin/node', '/app/lib/protondrive/engine.js')
-    node = GLib.find_program_in_path('node')
-    return (node, str(Path(__file__).parent.parent.parent / 'engine/dist/engine.js'))
+def get_engine_path() -> tuple[str, ...]:
+    """Return launcher argv for the sync engine in the current environment.
+
+    Flatpak (Option A): compiled self-contained binary — returns a 1-tuple.
+    Dev: bun runtime + source entry point — returns a 2-tuple.
+    """
+    if os.environ.get("FLATPAK_ID"):
+        return ("/app/lib/protondrive-engine/dist/engine",)
+
+    bun = GLib.find_program_in_path("bun")
+    if bun is None:
+        raise EngineNotFoundError(
+            "Bun runtime not found on PATH. Please install Bun 1.3+."
+        )
+
+    engine_script = str(
+        Path(__file__).resolve().parent.parent.parent.parent
+        / "engine"
+        / "src"
+        / "main.ts"
+    )
+    return (bun, engine_script)
 ```
 
 **TypeScript required tsconfig flags:**
 ```json
 {"strict": true, "noUncheckedIndexedAccess": true, "verbatimModuleSyntax": true,
- "target": "ES2022", "module": "NodeNext"}
+ "target": "ES2022", "module": "ESNext", "moduleResolution": "Bundler", "types": ["bun-types"]}
 ```
 
 **SDK boundary:** All `@protontech/drive-sdk` imports confined to `engine/src/sdk/`. No other engine code imports the SDK directly.
@@ -653,7 +677,7 @@ The WebKitGTK embedded browser widget loads `accounts.proton.me`. Proton's own J
 - [x] IPC: Unix socket, 4-byte length-prefix JSON, request IDs, push events
 - [x] GNOME runtime: org.gnome.Platform//50 (WebKitGTK 6.0)
 - [x] Flatpak App ID: io.github.ronki2304.ProtonDriveLinuxClient
-- [x] Node.js bundling: org.freedesktop.Sdk.Extension.node22
+- [x] Engine bundling: `bun build --compile` self-contained binary (no SDK extension)
 - [x] Process lifecycle: GLib.spawn_async (MVP) → Background Portal (V1)
 - [x] Credential storage: libsecret only, session token only
 

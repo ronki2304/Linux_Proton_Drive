@@ -1,5 +1,4 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
-import assert from "node:assert/strict";
+import { describe, it, beforeEach, afterEach, expect } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -37,7 +36,7 @@ describe("config.ts helpers", () => {
     // Dynamic import after env is set so getConfigPath() resolves to tmpDir.
     const { readConfigYaml } = await import("./config.js");
     const result = readConfigYaml();
-    assert.deepEqual(result, { pairs: [] });
+    expect(result).toEqual({ pairs: [] });
   });
 
   it("writeConfigYaml creates file if absent, then appends to existing", async () => {
@@ -45,15 +44,15 @@ describe("config.ts helpers", () => {
 
     writeConfigYaml("pair-1", "/home/user/Docs", "/Documents");
     const after1 = readConfigYaml();
-    assert.equal(after1.pairs.length, 1);
-    assert.equal(after1.pairs[0]!.pair_id, "pair-1");
-    assert.equal(after1.pairs[0]!.local_path, "/home/user/Docs");
-    assert.equal(after1.pairs[0]!.remote_path, "/Documents");
+    expect(after1.pairs.length).toBe(1);
+    expect(after1.pairs[0]!.pair_id).toBe("pair-1");
+    expect(after1.pairs[0]!.local_path).toBe("/home/user/Docs");
+    expect(after1.pairs[0]!.remote_path).toBe("/Documents");
 
     writeConfigYaml("pair-2", "/home/user/Photos", "/Photos");
     const after2 = readConfigYaml();
-    assert.equal(after2.pairs.length, 2);
-    assert.equal(after2.pairs[1]!.pair_id, "pair-2");
+    expect(after2.pairs.length).toBe(2);
+    expect(after2.pairs[1]!.pair_id).toBe("pair-2");
   });
 
   it("writeConfigYaml uses atomic write (tmp + rename)", async () => {
@@ -62,8 +61,8 @@ describe("config.ts helpers", () => {
     // .tmp file must NOT remain after write
     const configPath = join(tmpDir, "protondrive", "config.yaml");
     const tmpPath = configPath + ".tmp";
-    assert.equal(existsSync(tmpPath), false, ".tmp file must not remain");
-    assert.equal(existsSync(configPath), true, "config.yaml must exist");
+    expect(existsSync(tmpPath)).toBe(false);
+    expect(existsSync(configPath)).toBe(true);
   });
 
   it("written YAML contains correct fields", async () => {
@@ -72,14 +71,14 @@ describe("config.ts helpers", () => {
     const configPath = join(tmpDir, "protondrive", "config.yaml");
     const raw = readFileSync(configPath, "utf8");
     const parsed = yaml.load(raw) as { pairs: Array<Record<string, string>> };
-    assert.ok(Array.isArray(parsed.pairs));
+    expect(Array.isArray(parsed.pairs)).toBeTruthy();
     const pair = parsed.pairs[0]!;
-    assert.equal(pair["pair_id"], "uuid-abc");
-    assert.equal(pair["local_path"], "/sync/folder");
-    assert.equal(pair["remote_path"], "/ProtonFolder");
-    assert.ok(typeof pair["created_at"] === "string");
+    expect(pair["pair_id"]).toBe("uuid-abc");
+    expect(pair["local_path"]).toBe("/sync/folder");
+    expect(pair["remote_path"]).toBe("/ProtonFolder");
+    expect(typeof pair["created_at"]).toBe("string");
     // ISO 8601 format check
-    assert.ok(!isNaN(Date.parse(pair["created_at"])));
+    expect(isNaN(Date.parse(pair["created_at"]))).toBe(false);
   });
 
   it("readConfigYaml returns empty pairs on corrupt YAML", async () => {
@@ -91,7 +90,7 @@ describe("config.ts helpers", () => {
     const { writeFileSync } = await import("node:fs");
     writeFileSync(configPath, "{ invalid yaml: [[[", "utf8");
     const result = readConfigYaml();
-    assert.deepEqual(result, { pairs: [] });
+    expect(result).toEqual({ pairs: [] });
   });
 
   it("listConfigPairs returns pair list", async () => {
@@ -99,8 +98,8 @@ describe("config.ts helpers", () => {
     writeConfigYaml("p1", "/a", "/b");
     writeConfigYaml("p2", "/c", "/d");
     const pairs = listConfigPairs();
-    assert.equal(pairs.length, 2);
-    assert.equal(pairs[0]!.pair_id, "p1");
-    assert.equal(pairs[1]!.pair_id, "p2");
+    expect(pairs.length).toBe(2);
+    expect(pairs[0]!.pair_id).toBe("p1");
+    expect(pairs[1]!.pair_id).toBe("p2");
   });
 });

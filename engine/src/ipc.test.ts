@@ -1,5 +1,4 @@
-import { describe, it, afterEach, beforeEach, mock } from "node:test";
-import assert from "node:assert/strict";
+import { describe, it, afterEach, beforeEach, mock, expect } from "bun:test";
 import net from "node:net";
 import path from "node:path";
 import fs from "node:fs";
@@ -28,13 +27,13 @@ describe("MessageReader", () => {
     // Feed first half only
     const half = msg.subarray(0, Math.floor(msg.length / 2));
     const result1 = reader.feed(half);
-    assert.equal(result1.length, 0);
+    expect(result1.length).toBe(0);
 
     // Feed remainder
     const rest = msg.subarray(Math.floor(msg.length / 2));
     const result2 = reader.feed(rest);
-    assert.equal(result2.length, 1);
-    assert.equal((result2[0] as IpcPushEvent).type, "test");
+    expect(result2.length).toBe(1);
+    expect((result2[0] as IpcPushEvent).type).toBe("test");
   });
 
   it("handles multiple messages in one chunk", () => {
@@ -49,9 +48,9 @@ describe("MessageReader", () => {
     const combined = Buffer.concat([msg1, msg2]);
 
     const results = reader.feed(combined);
-    assert.equal(results.length, 2);
-    assert.equal((results[0] as IpcPushEvent).type, "first");
-    assert.equal((results[1] as IpcPushEvent).type, "second");
+    expect(results.length).toBe(2);
+    expect((results[0] as IpcPushEvent).type).toBe("first");
+    expect((results[1] as IpcPushEvent).type).toBe("second");
   });
 
   it("handles message split across chunks at arbitrary offset", () => {
@@ -65,25 +64,25 @@ describe("MessageReader", () => {
     const part2 = msg.subarray(6);
 
     const r1 = reader.feed(part1);
-    assert.equal(r1.length, 0);
+    expect(r1.length).toBe(0);
 
     const r2 = reader.feed(part2);
-    assert.equal(r2.length, 1);
-    assert.equal((r2[0] as IpcPushEvent).type, "split_test");
+    expect(r2.length).toBe(1);
+    expect((r2[0] as IpcPushEvent).type).toBe("split_test");
   });
 
   it("rejects zero-length payload with IpcError", () => {
     const header = Buffer.alloc(4);
     header.writeUInt32BE(0, 0);
 
-    assert.throws(() => reader.feed(header), IpcError);
+    expect(() => reader.feed(header)).toThrow(IpcError);
   });
 
   it("rejects oversized payload with IpcError", () => {
     const header = Buffer.alloc(4);
     header.writeUInt32BE(2 * 1024 * 1024, 0); // 2 MB > 1 MB limit
 
-    assert.throws(() => reader.feed(header), IpcError);
+    expect(() => reader.feed(header)).toThrow(IpcError);
   });
 
   it("rejects malformed JSON with IpcError", () => {
@@ -92,7 +91,7 @@ describe("MessageReader", () => {
     header.writeUInt32BE(badJson.length, 0);
     const frame = Buffer.concat([header, badJson]);
 
-    assert.throws(() => reader.feed(frame), IpcError);
+    expect(() => reader.feed(frame)).toThrow(IpcError);
   });
 
   it("rejects message missing 'type' field with IpcError", () => {
@@ -101,7 +100,7 @@ describe("MessageReader", () => {
     header.writeUInt32BE(json.length, 0);
     const frame = Buffer.concat([header, json]);
 
-    assert.throws(() => reader.feed(frame), IpcError);
+    expect(() => reader.feed(frame)).toThrow(IpcError);
   });
 });
 
@@ -164,11 +163,11 @@ describe("IpcServer", () => {
     const client = await connectToSocket(socketPath);
     const messages = await readMessages(client);
 
-    assert.equal(messages.length, 1);
+    expect(messages.length).toBe(1);
     const ready = messages[0] as IpcPushEvent;
-    assert.equal(ready.type, "ready");
-    assert.equal(ready.payload["version"], "0.1.0");
-    assert.equal(ready.payload["protocol_version"], 1);
+    expect(ready.type).toBe("ready");
+    expect(ready.payload["version"]).toBe("0.1.0");
+    expect(ready.payload["protocol_version"]).toBe(1);
 
     client.destroy();
   });
@@ -184,10 +183,10 @@ describe("IpcServer", () => {
     const client2 = await connectToSocket(socketPath);
     const messages = await readMessages(client2);
 
-    assert.equal(messages.length, 1);
+    expect(messages.length).toBe(1);
     const err = messages[0] as IpcPushEvent;
-    assert.equal(err.type, "error");
-    assert.equal(err.payload["code"], "ALREADY_CONNECTED");
+    expect(err.type).toBe("error");
+    expect(err.payload["code"]).toBe("ALREADY_CONNECTED");
 
     client1.destroy();
     client2.destroy();
@@ -208,7 +207,7 @@ describe("IpcServer", () => {
 
     // Wait for server to close
     await new Promise((r) => setTimeout(r, 150));
-    assert.equal(server.connected, false);
+    expect(server.connected).toBe(false);
 
     client.destroy();
   });
@@ -234,8 +233,8 @@ describe("IpcServer", () => {
     const response = messages.find(
       (m) => (m as { type: string }).type === "get_status_result",
     );
-    assert.ok(response);
-    assert.equal((response as { id: string }).id, "abc-123");
+    expect(response).toBeTruthy();
+    expect((response as { id: string }).id).toBe("abc-123");
 
     client.destroy();
   });
@@ -259,11 +258,10 @@ describe("IpcServer", () => {
     const errResponse = messages.find(
       (m) => (m as { type: string }).type === "do_something_result",
     );
-    assert.ok(errResponse);
-    assert.equal(
+    expect(errResponse).toBeTruthy();
+    expect(
       (errResponse as IpcPushEvent).payload["error"],
-      "handler failed",
-    );
+    ).toBe("handler failed");
 
     client.destroy();
   });
@@ -272,7 +270,7 @@ describe("IpcServer", () => {
 // --- Backpressure tests ---
 
 interface FakeSocket {
-  write: ReturnType<typeof mock.fn>;
+  write: ReturnType<typeof mock>;
   destroyed: boolean;
   once: (event: string, cb: () => void) => void;
   on: (event: string, cb: (...args: unknown[]) => void) => void;
@@ -283,7 +281,7 @@ interface FakeSocket {
 function makeFakeSocket(initialWriteResult: boolean): FakeSocket {
   const drainListeners: Array<() => void> = [];
   const closeListeners: Array<() => void> = [];
-  const writeFn = mock.fn(() => initialWriteResult);
+  const writeFn = mock(() => initialWriteResult);
   return {
     write: writeFn,
     destroyed: false,
@@ -328,33 +326,29 @@ describe("IpcServer backpressure", () => {
 
     // First write hits a saturated buffer → write() returns false, draining=true.
     server.emitEvent({ type: "evt1", payload: { n: 1 } });
-    assert.equal(fakeSocket.write.mock.callCount(), 1);
+    expect(fakeSocket.write.mock.calls.length).toBe(1);
 
     // Subsequent writes are queued — no more socket.write calls.
     server.emitEvent({ type: "evt2", payload: { n: 2 } });
     server.emitEvent({ type: "evt3", payload: { n: 3 } });
-    assert.equal(
-      fakeSocket.write.mock.callCount(),
-      1,
-      "queued messages must not call socket.write while draining",
-    );
+    expect(fakeSocket.write.mock.calls.length).toBe(1);
 
     // Switch to writeable mode and trigger drain.
-    fakeSocket.write.mock.mockImplementation(() => true);
+    fakeSocket.write.mockImplementation(() => true);
     fakeSocket.triggerDrain();
 
     // Queue should have flushed in FIFO order.
-    assert.equal(fakeSocket.write.mock.callCount(), 3);
+    expect(fakeSocket.write.mock.calls.length).toBe(3);
     const callArgs = fakeSocket.write.mock.calls.map(
-      (c) => c.arguments[0] as Buffer,
+      (c) => c[0] as Buffer,
     );
     const decoded = callArgs.map((buf) => decodeFrame(buf) as IpcPushEvent);
-    assert.equal(decoded[0]?.type, "evt1");
-    assert.equal(decoded[1]?.type, "evt2");
-    assert.equal(decoded[2]?.type, "evt3");
-    assert.equal(decoded[0]?.payload["n"], 1);
-    assert.equal(decoded[1]?.payload["n"], 2);
-    assert.equal(decoded[2]?.payload["n"], 3);
+    expect(decoded[0]?.type).toBe("evt1");
+    expect(decoded[1]?.type).toBe("evt2");
+    expect(decoded[2]?.type).toBe("evt3");
+    expect(decoded[0]?.payload["n"]).toBe(1);
+    expect(decoded[1]?.payload["n"]).toBe(2);
+    expect(decoded[2]?.payload["n"]).toBe(3);
   });
 
   it("re-pauses when drain flush is itself saturated", () => {
@@ -371,32 +365,29 @@ describe("IpcServer backpressure", () => {
     server.emitEvent({ type: "b", payload: {} });
     server.emitEvent({ type: "c", payload: {} });
     server.emitEvent({ type: "d", payload: {} });
-    assert.equal(fakeSocket.write.mock.callCount(), 1);
+    expect(fakeSocket.write.mock.calls.length).toBe(1);
 
     // Drain fires: flush "b" (success) then "c" (saturate) — must re-register
     // drain. "d" stays queued. Note: when socket.write() returns false the
     // bytes ARE still buffered for delivery; we just stop pushing more.
     let flushedCount = 0;
-    fakeSocket.write.mock.mockImplementation(() => {
+    fakeSocket.write.mockImplementation(() => {
       flushedCount += 1;
       return flushedCount <= 1;
     });
     fakeSocket.triggerDrain();
     // 1 (initial) + 2 (b ok, c re-pauses) = 3
-    assert.equal(fakeSocket.write.mock.callCount(), 3);
+    expect(fakeSocket.write.mock.calls.length).toBe(3);
 
     // Second drain: write succeeds, "d" flushes.
-    fakeSocket.write.mock.mockImplementation(() => true);
+    fakeSocket.write.mockImplementation(() => true);
     fakeSocket.triggerDrain();
-    assert.equal(fakeSocket.write.mock.callCount(), 4);
+    expect(fakeSocket.write.mock.calls.length).toBe(4);
 
     const decoded = fakeSocket.write.mock.calls.map(
-      (call) => decodeFrame(call.arguments[0] as Buffer) as IpcPushEvent,
+      (call) => decodeFrame(call[0] as Buffer) as IpcPushEvent,
     );
-    assert.deepEqual(
-      decoded.map((m) => m.type),
-      ["a", "b", "c", "d"],
-    );
+    expect(decoded.map((m) => m.type)).toEqual(["a", "b", "c", "d"]);
   });
 
   it("clears the write queue when the connection closes", () => {
@@ -415,39 +406,30 @@ describe("IpcServer backpressure", () => {
     // Saturate and queue.
     server.emitEvent({ type: "evt1", payload: {} });
     server.emitEvent({ type: "evt2", payload: {} });
-    assert.equal(
+    expect(
       (server as unknown as { writeQueue: Buffer[] }).writeQueue.length,
-      1,
-      "second event should be queued while draining",
-    );
-    assert.equal(
+    ).toBe(1);
+    expect(
       (server as unknown as { draining: boolean }).draining,
-      true,
-    );
+    ).toBe(true);
 
     // Fire the real close handler — production code must reset state.
     fakeSocket.triggerClose();
 
-    assert.equal(
+    expect(
       (server as unknown as { activeConnection: FakeSocket | null })
         .activeConnection,
-      null,
-      "close handler must clear activeConnection",
-    );
-    assert.equal(
+    ).toBeNull();
+    expect(
       (server as unknown as { writeQueue: Buffer[] }).writeQueue.length,
-      0,
-      "close handler must clear writeQueue",
-    );
-    assert.equal(
+    ).toBe(0);
+    expect(
       (server as unknown as { draining: boolean }).draining,
-      false,
-      "close handler must clear draining flag",
-    );
+    ).toBe(false);
 
     // After drop, emitEvent should be a silent no-op (no new write attempt).
     server.emitEvent({ type: "evt3", payload: {} });
-    assert.equal(fakeSocket.write.mock.callCount(), 1);
+    expect(fakeSocket.write.mock.calls.length).toBe(1);
   });
 });
 
@@ -493,10 +475,10 @@ describe("IpcServer debug logging on malformed JSON", () => {
     await new Promise((r) => setTimeout(r, 100));
 
     const logPath = path.join(cacheDir, "protondrive", "engine.log");
-    assert.equal(fs.existsSync(logPath), true, "debug log should exist");
+    expect(fs.existsSync(logPath)).toBe(true);
     const contents = fs.readFileSync(logPath, "utf8");
-    assert.match(contents, /IPC parse error/);
-    assert.match(contents, /Invalid JSON in IPC message/);
+    expect(contents).toMatch(/IPC parse error/);
+    expect(contents).toMatch(/Invalid JSON in IPC message/);
 
     client.destroy();
   });

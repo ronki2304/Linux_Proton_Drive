@@ -1,4 +1,4 @@
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
@@ -23,11 +23,13 @@ export interface SyncState {
   content_hash: string | null;
 }
 
+export type ChangeType = "created" | "modified" | "deleted";
+
 export interface ChangeQueueEntry {
   id: number;
   pair_id: string;
   relative_path: string;
-  change_type: string;
+  change_type: ChangeType;
   queued_at: string; // ISO 8601
 }
 
@@ -84,7 +86,7 @@ export class StateDb {
     "synchronous",
   ]);
 
-  private readonly db: Database.Database;
+  private readonly db: Database;
 
   constructor(dbPath?: string) {
     const resolvedPath = dbPath ?? StateDb.defaultDbPath();
@@ -116,14 +118,15 @@ export class StateDb {
   }
 
   private init(): void {
-    this.db.pragma("journal_mode = DELETE");
-    this.db.pragma("synchronous = NORMAL");
-    this.db.pragma("foreign_keys = ON");
+    this.db.exec("PRAGMA journal_mode=WAL");
+    this.db.exec("PRAGMA synchronous=NORMAL");
+    this.db.exec("PRAGMA foreign_keys=ON");
     this.migrate();
   }
 
   private migrate(): void {
-    const current = this.db.pragma("user_version", { simple: true }) as number;
+    const row = this.db.query("PRAGMA user_version").get() as { user_version: number };
+    const current = row.user_version;
 
     for (const migration of MIGRATIONS) {
       if (migration.version > current) {
@@ -141,15 +144,15 @@ export class StateDb {
     this.db
       .prepare(
         `INSERT INTO sync_pair (pair_id, local_path, remote_path, remote_id, created_at)
-         VALUES (@pair_id, @local_path, @remote_path, @remote_id, @created_at)`
+         VALUES (?, ?, ?, ?, ?)`
       )
-      .run(pair);
+      .run(pair.pair_id, pair.local_path, pair.remote_path, pair.remote_id, pair.created_at);
   }
 
   getPair(pairId: string): SyncPair | undefined {
-    return this.db
+    return (this.db
       .prepare(`SELECT * FROM sync_pair WHERE pair_id = ?`)
-      .get(pairId) as SyncPair | undefined;
+      .get(pairId) as SyncPair | null) ?? undefined;
   }
 
   listPairs(): SyncPair[] {
@@ -173,20 +176,20 @@ export class StateDb {
   // ── sync_state CRUD ──────────────────────────────────────────────────────
 
   getSyncState(pairId: string, relativePath: string): SyncState | undefined {
-    return this.db
+    return (this.db
       .prepare(
         `SELECT * FROM sync_state WHERE pair_id = ? AND relative_path = ?`
       )
-      .get(pairId, relativePath) as SyncState | undefined;
+      .get(pairId, relativePath) as SyncState | null) ?? undefined;
   }
 
   upsertSyncState(state: SyncState): void {
     this.db
       .prepare(
         `INSERT OR REPLACE INTO sync_state (pair_id, relative_path, local_mtime, remote_mtime, content_hash)
-         VALUES (@pair_id, @relative_path, @local_mtime, @remote_mtime, @content_hash)`
+         VALUES (?, ?, ?, ?, ?)`
       )
-      .run(state);
+      .run(state.pair_id, state.relative_path, state.local_mtime, state.remote_mtime, state.content_hash);
   }
 
   listSyncStates(pairId: string): SyncState[] {
@@ -217,9 +220,9 @@ export class StateDb {
     this.db
       .prepare(
         `INSERT INTO change_queue (pair_id, relative_path, change_type, queued_at)
-         VALUES (@pair_id, @relative_path, @change_type, @queued_at)`
+         VALUES (?, ?, ?, ?)`
       )
-      .run(entry);
+      .run(entry.pair_id, entry.relative_path, entry.change_type, entry.queued_at);
   }
 
   dequeue(id: number): void {
@@ -250,7 +253,10 @@ export class StateDb {
     if (!StateDb.SAFE_PRAGMAS.has(name)) {
       throw new Error(`Disallowed pragma: ${name}`);
     }
-    return this.db.pragma(name, { simple: true });
+    const row = this.db.query(`PRAGMA ${name}`).get() as Record<string, unknown> | null;
+    if (row === null) return null;
+    const values = Object.values(row);
+    return values[0];
   }
 
   // ── lifecycle ─────────────────────────────────────────────────────────────

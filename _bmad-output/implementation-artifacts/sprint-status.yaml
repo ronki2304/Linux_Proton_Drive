@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-12  # 3-0b story created → ready-for-dev
+last_updated: 2026-04-14  # 3-1 review
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -77,10 +77,10 @@ development_status:
   epic-2-retrospective: done
 
   # Epic 3: Offline Resilience & Network Handling
-  epic-3: backlog
-  3-0a-bun-runtime-migration: ready-for-dev
-  3-0b-targeted-debt-fixes: ready-for-dev
-  3-1-offline-detection-and-ui-indicators: backlog
+  epic-3: in-progress
+  3-0a-bun-runtime-migration: done
+  3-0b-targeted-debt-fixes: done
+  3-1-offline-detection-and-ui-indicators: review
   3-2-offline-change-queue-persistent: backlog
   3-3-queue-replay-and-auto-resume-on-reconnect: backlog
   3-4-rate-limit-handling-and-ui: backlog

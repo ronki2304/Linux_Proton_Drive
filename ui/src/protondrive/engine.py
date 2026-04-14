@@ -25,28 +25,28 @@ MAX_MESSAGE_SIZE = 16 * 1024 * 1024  # 16 MB
 DEFAULT_RESPONSE_TIMEOUT_SECONDS: float = 10.0
 
 
-def get_engine_path() -> tuple[str, str]:
-    """Return (node_binary, engine_script) paths for the current environment."""
-    if os.environ.get("FLATPAK_ID"):
-        return (
-            "/app/bin/node",
-            "/app/lib/protondrive-engine/dist/src/main.js",
-        )
+def get_engine_path() -> tuple[str, ...]:
+    """Return launcher argv for the sync engine in the current environment.
 
-    node = GLib.find_program_in_path("node")
-    if node is None:
+    Flatpak (Option A): compiled self-contained binary — returns a 1-tuple.
+    Dev: bun runtime + source entry point — returns a 2-tuple.
+    """
+    if os.environ.get("FLATPAK_ID"):
+        return ("/app/lib/protondrive-engine/dist/engine",)
+
+    bun = GLib.find_program_in_path("bun")
+    if bun is None:
         raise EngineNotFoundError(
-            "Node.js not found on PATH. Please install Node.js 22+."
+            "Bun runtime not found on PATH. Please install Bun 1.3+."
         )
 
     engine_script = str(
         Path(__file__).resolve().parent.parent.parent.parent
         / "engine"
-        / "dist"
         / "src"
-        / "main.js"
+        / "main.ts"
     )
-    return (node, engine_script)
+    return (bun, engine_script)
 
 
 def _get_socket_path() -> str:
@@ -121,20 +121,20 @@ class EngineClient:
         """Spawn engine and begin connection attempts."""
         self._shutdown_initiated = False
         try:
-            node_path, engine_script = get_engine_path()
+            engine_argv = get_engine_path()
         except EngineNotFoundError as e:
             self._emit_error(str(e))
             return
 
-        if not os.path.isfile(engine_script):
+        if not os.path.isfile(engine_argv[-1]):
             self._emit_error(
-                f"Sync engine script not found: {engine_script}"
+                f"Sync engine not found: {engine_argv[-1]}"
             )
             return
 
         try:
             launcher = Gio.SubprocessLauncher.new(Gio.SubprocessFlags.NONE)
-            proc = launcher.spawnv([node_path, engine_script])
+            proc = launcher.spawnv(list(engine_argv))
         except GLib.Error as e:
             self._emit_error(f"Sync engine failed to start: {e.message}")
             return

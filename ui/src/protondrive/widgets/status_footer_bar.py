@@ -50,19 +50,35 @@ class StatusFooterBar(Gtk.Box):
             ["Initialising file watcher\u2026"],
         )
 
+    def set_offline(self) -> None:
+        """Show offline state."""
+        text = "Offline \u2014 changes queued"
+        self.footer_label.set_text(text)
+        self._set_dot_state("offline")
+        self.update_property([Gtk.AccessibleProperty.LABEL], [text])
+        # polite live-region announcement required for offline state change (AC5)
+        self.announce(text, Gtk.AccessibleAnnouncementPriority.POLITE)
+
     def _set_dot_state(self, state: str) -> None:
         """Update dot colour and CSS class."""
         self._dot_state = state
         if state == "syncing":
             self.footer_dot.add_css_class("sync-dot-syncing")
+            self.footer_dot.remove_css_class("sync-dot-offline")
+        elif state == "offline":
+            self.footer_dot.add_css_class("sync-dot-offline")
+            self.footer_dot.remove_css_class("sync-dot-syncing")
         else:
             self.footer_dot.remove_css_class("sync-dot-syncing")
+            self.footer_dot.remove_css_class("sync-dot-offline")
         self.footer_dot.queue_draw()
 
     def _on_dot_draw(self, area: Gtk.DrawingArea, cr: object, width: int, height: int) -> None:
         """Draw a filled circle in state-appropriate colour."""
         if self._dot_state == "syncing":
             cr.set_source_rgb(0.11, 0.63, 0.63)  # teal
+        elif self._dot_state == "offline":
+            cr.set_source_rgb(0.60, 0.60, 0.60)  # grey
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2

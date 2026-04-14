@@ -66,7 +66,7 @@ class TestSyncPairRowSetState:
         row = _make_row()
         row._state = "syncing"
         row.set_state("synced")
-        row.status_dot.remove_css_class.assert_called_with("sync-dot-syncing")
+        row.status_dot.remove_css_class.assert_any_call("sync-dot-syncing")
 
     def test_set_state_syncing_queues_draw(self):
         row = _make_row()
@@ -101,6 +101,57 @@ class TestSyncPairRowAccessibleLabel:
         row.set_state("synced")
         _, values = row._accessible_label_args
         assert values == ["Photos \u2014 synced"]
+
+
+class TestSyncPairRowOfflineState:
+    def test_offline_sets_internal_state(self):
+        row = _make_row()
+        row.set_state("offline")
+        assert row._state == "offline"
+
+    def test_offline_with_last_synced_text(self):
+        row = _make_row()
+        row.set_state("offline", last_synced_text="5m ago")
+        row.status_label.set_text.assert_called_with("Offline · 5m ago")
+
+    def test_offline_without_last_synced_text(self):
+        row = _make_row()
+        row.set_state("offline")
+        row.status_label.set_text.assert_called_with("Offline · never synced")
+
+    def test_offline_adds_css_class(self):
+        row = _make_row()
+        row.set_state("offline")
+        row.status_dot.add_css_class.assert_called_with("sync-dot-offline")
+
+    def test_offline_removes_syncing_css_class(self):
+        row = _make_row()
+        row._state = "syncing"
+        row.set_state("offline")
+        row.status_dot.remove_css_class.assert_called_with("sync-dot-syncing")
+
+    def test_synced_removes_offline_css_class(self):
+        row = _make_row()
+        row._state = "offline"
+        row.set_state("synced")
+        calls = [call.args[0] for call in row.status_dot.remove_css_class.call_args_list]
+        assert "sync-dot-offline" in calls
+
+    def test_offline_accessible_label(self):
+        row = _make_row(pair_name="Photos")
+        row.set_state("offline")
+        _, values = row._accessible_label_args
+        assert values == ["Photos \u2014 offline"]
+
+    def test_offline_queues_draw(self):
+        row = _make_row()
+        row.set_state("offline")
+        row.status_dot.queue_draw.assert_called()
+
+    def test_state_property_offline(self):
+        row = _make_row()
+        row.set_state("offline")
+        assert row.state == "offline"
 
 
 class TestSyncPairRowProperty:

@@ -1,5 +1,4 @@
-import { describe, it, beforeEach, afterEach } from "node:test";
-import assert from "node:assert/strict";
+import { describe, it, beforeEach, afterEach, expect } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -43,13 +42,13 @@ describe("debugLog", () => {
   it("does nothing when PROTONDRIVE_DEBUG is unset", () => {
     delete process.env["PROTONDRIVE_DEBUG"];
     debugLog("should not appear");
-    assert.equal(fs.existsSync(logPath), false);
+    expect(fs.existsSync(logPath)).toBe(false);
   });
 
   it("does nothing when PROTONDRIVE_DEBUG is set to a non-1 value", () => {
     process.env["PROTONDRIVE_DEBUG"] = "true"; // not "1"
     debugLog("should not appear");
-    assert.equal(fs.existsSync(logPath), false);
+    expect(fs.existsSync(logPath)).toBe(false);
   });
 
   it("appends to the log file when PROTONDRIVE_DEBUG=1", () => {
@@ -57,12 +56,12 @@ describe("debugLog", () => {
     debugLog("test message one");
     debugLog("test message two");
 
-    assert.equal(fs.existsSync(logPath), true);
+    expect(fs.existsSync(logPath)).toBe(true);
     const contents = fs.readFileSync(logPath, "utf8");
-    assert.match(contents, /test message one/);
-    assert.match(contents, /test message two/);
+    expect(contents).toMatch(/test message one/);
+    expect(contents).toMatch(/test message two/);
     // Two distinct lines.
-    assert.equal(contents.trim().split("\n").length, 2);
+    expect(contents.trim().split("\n").length).toBe(2);
   });
 
   it("preserves the cause chain for Error arguments", () => {
@@ -72,9 +71,9 @@ describe("debugLog", () => {
     debugLog("wrapped error", outer);
 
     const contents = fs.readFileSync(logPath, "utf8");
-    assert.match(contents, /wrapped error/);
-    assert.match(contents, /outer failure/);
-    assert.match(contents, /inner failure/);
+    expect(contents).toMatch(/wrapped error/);
+    expect(contents).toMatch(/outer failure/);
+    expect(contents).toMatch(/inner failure/);
   });
 
   it("rotates the log file when it exceeds the size cap", () => {
@@ -87,11 +86,11 @@ describe("debugLog", () => {
     debugLog("post-rotation message");
 
     const rotated = `${logPath}.1`;
-    assert.equal(fs.existsSync(rotated), true, "rotated file should exist");
+    expect(fs.existsSync(rotated)).toBe(true);
     const newContents = fs.readFileSync(logPath, "utf8");
-    assert.match(newContents, /post-rotation message/);
+    expect(newContents).toMatch(/post-rotation message/);
     // The new file should NOT contain the old content.
-    assert.equal(newContents.includes("x".repeat(100)), false);
+    expect(newContents.includes("x".repeat(100))).toBe(false);
   });
 
   it("swallows filesystem errors silently", () => {
@@ -101,6 +100,6 @@ describe("debugLog", () => {
     fs.writeFileSync(blocker, "");
     process.env["XDG_CACHE_HOME"] = path.join(blocker, "nope");
     // Should not throw despite mkdir failing.
-    assert.doesNotThrow(() => debugLog("ignored"));
+    expect(() => debugLog("ignored")).not.toThrow();
   });
 });

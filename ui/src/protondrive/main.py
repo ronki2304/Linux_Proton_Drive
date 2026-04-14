@@ -68,6 +68,8 @@ class Application(Adw.Application):
         self._engine.on_event("sync_progress", self._on_sync_progress)
         self._engine.on_event("sync_complete", self._on_sync_complete)
         self._engine.on_event("key_unlock_required", self._on_key_unlock_required)
+        self._engine.on_event("offline", self._on_offline)
+        self._engine.on_event("online", self._on_online)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -173,6 +175,14 @@ class Application(Adw.Application):
         if self._window is not None:
             self._window.on_sync_complete(payload)
 
+    def _on_offline(self, message: dict[str, Any]) -> None:
+        if self._window is not None:
+            self._window.on_offline()
+
+    def _on_online(self, message: dict[str, Any]) -> None:
+        if self._window is not None:
+            self._window.on_online()
+
     def _start_validation_timeout(self) -> None:
         """Start timeout for token validation response (NFR1)."""
         self._cancel_validation_timeout()
@@ -273,7 +283,9 @@ class Application(Adw.Application):
             return
         pairs = payload.get("pairs", [])
         if self._window is not None:
-            self._window.populate_pairs(pairs)
+            self._window.populate_pairs(pairs)  # must run first so _pairs_data is populated
+            if not payload.get("online", True):
+                self._window.on_offline()
 
     def _on_wizard_complete(self, pair_id: str) -> None:
         """Called by window after wizard creates a pair — transition to main view."""

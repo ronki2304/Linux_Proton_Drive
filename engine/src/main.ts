@@ -129,6 +129,7 @@ import type { SyncPair } from "./state-db.js";
 import { writeConfigYaml } from "./config.js";
 import { SyncEngine } from "./sync-engine.js";
 import { FileWatcher } from "./watcher.js";
+import { NetworkMonitor } from "./network-monitor.js";
 
 const ENGINE_VERSION: string = pkg.version;
 const PROTOCOL_VERSION = 1;
@@ -148,6 +149,9 @@ let syncEngine: SyncEngine | undefined;
 
 // Module-level file watcher. Undefined until first successful token_refresh.
 let fileWatcher: FileWatcher | undefined;
+
+// Module-level network monitor. Undefined until main() initialises it.
+let networkMonitor: NetworkMonitor | undefined;
 
 // Per-key bcrypt salts cached from a locked-scope token.
 // GET /core/v4/keys/salts requires "locked" scope (pre-2FA window only).
@@ -185,6 +189,12 @@ export function _setSyncEngineForTests(engine: SyncEngine | undefined): void {
 // Underscore prefix signals test-only usage — never call from production code.
 export function _setFileWatcherForTests(fw: FileWatcher | undefined): void {
   fileWatcher = fw;
+}
+
+// Test-only: inject a NetworkMonitor instance for tests.
+// Underscore prefix signals test-only usage — never call from production code.
+export function _setNetworkMonitorForTests(m: NetworkMonitor | undefined): void {
+  networkMonitor = m;
 }
 
 // ---------------------------------------------------------------------------
@@ -542,7 +552,7 @@ export async function handleCommand(
     return {
       type: "get_status_result",
       id: command.id,
-      payload: { pairs, online: true },
+      payload: { pairs, online: networkMonitor?.isCurrentlyOnline ?? true },
     };
   }
 
@@ -558,6 +568,8 @@ async function main(): Promise<void> {
   syncEngine = new SyncEngine(stateDb, (e) => server.emitEvent(e));
   const socketPath = resolveSocketPath();
   server = new IpcServer(socketPath, handleCommand);
+  networkMonitor = new NetworkMonitor((e) => server.emitEvent(e));
+  networkMonitor.start();
 
   server.onConnect(() => {
     server.emitEvent({
@@ -576,10 +588,12 @@ async function main(): Promise<void> {
   await server.start();
 
   process.on("SIGTERM", () => {
+    networkMonitor?.stop();
     server.close();
   });
 
   process.on("SIGINT", () => {
+    networkMonitor?.stop();
     server.close();
   });
 }

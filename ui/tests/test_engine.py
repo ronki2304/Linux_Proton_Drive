@@ -25,23 +25,22 @@ class TestGetEnginePath:
 
     def test_flatpak_path(self) -> None:
         with patch.dict("os.environ", {"FLATPAK_ID": "io.github.ronki2304.ProtonDriveLinuxClient"}):
-            node, script = get_engine_path()
-        assert node == "/usr/lib/sdk/node22/bin/node"
-        assert script == "/app/lib/protondrive/engine.js"
+            argv = get_engine_path()
+        assert argv == ("/app/lib/protondrive-engine/dist/engine",)
 
-    def test_dev_path_with_node(self) -> None:
+    def test_dev_path_with_bun(self) -> None:
         with (
             patch.dict("os.environ", {}, clear=False),
             patch("protondrive.engine.GLib") as mock_glib,
         ):
             import os
             os.environ.pop("FLATPAK_ID", None)
-            mock_glib.find_program_in_path.return_value = "/usr/bin/node"
-            node, script = get_engine_path()
-        assert node == "/usr/bin/node"
-        assert script.endswith("engine/dist/engine.js")
+            mock_glib.find_program_in_path.return_value = "/usr/bin/bun"
+            bun, script = get_engine_path()
+        assert bun == "/usr/bin/bun"
+        assert script.endswith("engine/src/main.ts")
 
-    def test_dev_path_node_missing(self) -> None:
+    def test_dev_path_bun_missing(self) -> None:
         with (
             patch.dict("os.environ", {}, clear=False),
             patch("protondrive.engine.GLib") as mock_glib,
@@ -49,7 +48,7 @@ class TestGetEnginePath:
             import os
             os.environ.pop("FLATPAK_ID", None)
             mock_glib.find_program_in_path.return_value = None
-            with pytest.raises(EngineNotFoundError, match="Node.js not found"):
+            with pytest.raises(EngineNotFoundError, match="Bun runtime not found"):
                 get_engine_path()
 
 
@@ -104,14 +103,19 @@ class TestEngineClient:
         errors: list[tuple[str, bool, str | None]] = []
         client.on_error(lambda msg, fatal, pair_id=None: errors.append((msg, fatal, pair_id)))
 
+        GLibError = type("GLibError", (Exception,), {"message": "spawn failed"})
+
         with (
-            patch("protondrive.engine.get_engine_path", return_value=("/usr/bin/node", "/tmp/fake.js")),
+            patch("protondrive.engine.get_engine_path", return_value=("/usr/bin/bun", "/tmp/fake.ts")),
             patch("os.path.isfile", return_value=True),
+            patch("protondrive.engine.Gio") as mock_gio,
             patch("protondrive.engine.GLib") as mock_glib,
         ):
-            mock_glib.spawn_async.return_value = (False, 0)
-            mock_glib.SpawnFlags.DO_NOT_REAP_CHILD = 0
-            mock_glib.SpawnFlags.SEARCH_PATH = 0
+            mock_glib.Error = GLibError
+            mock_gio.SubprocessFlags.NONE = 0
+            launcher = MagicMock()
+            launcher.spawnv.side_effect = GLibError("spawn failed")
+            mock_gio.SubprocessLauncher.new.return_value = launcher
             client.start()
 
         assert len(errors) == 1
@@ -125,12 +129,12 @@ class TestEngineClient:
 
         with patch(
             "protondrive.engine.get_engine_path",
-            side_effect=EngineNotFoundError("Node.js not found on PATH"),
+            side_effect=EngineNotFoundError("Bun runtime not found on PATH"),
         ):
             client.start()
 
         assert len(errors) == 1
-        assert "Node.js not found" in errors[0][0]
+        assert "Bun runtime not found" in errors[0][0]
 
     def test_protocol_version_stored(self) -> None:
         client, _ = _make_client_with_conn()
@@ -375,14 +379,21 @@ class TestReviewPatches:
         client = EngineClient()
         client._shutdown_initiated = True
 
+        GLibError = type("GLibError", (Exception,), {"message": ""})
+
         with (
-            patch("protondrive.engine.get_engine_path", return_value=("/usr/bin/node", "/tmp/fake.js")),
+            patch("protondrive.engine.get_engine_path", return_value=("/usr/bin/bun", "/tmp/fake.ts")),
             patch("os.path.isfile", return_value=True),
+            patch("protondrive.engine.Gio") as mock_gio,
             patch("protondrive.engine.GLib") as mock_glib,
         ):
-            mock_glib.spawn_async.return_value = (True, 999)
-            mock_glib.SpawnFlags.DO_NOT_REAP_CHILD = 0
-            mock_glib.SpawnFlags.SEARCH_PATH = 0
+            mock_glib.Error = GLibError
+            mock_gio.SubprocessFlags.NONE = 0
+            proc = MagicMock()
+            proc.get_identifier.return_value = "999"
+            launcher = MagicMock()
+            launcher.spawnv.return_value = proc
+            mock_gio.SubprocessLauncher.new.return_value = launcher
             client.start()
 
         assert not client._shutdown_initiated
