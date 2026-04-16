@@ -331,3 +331,72 @@ When 2-12 ships, run a **standalone mini-retrospective** in the story file. Do N
 - New folder created by one upload mid-replay isn't retrievable by subsequent entries in the same pair (stale `remoteFolders` map) — routed to `failed`, next replay resolves. Same root cause as the in-loop `remoteFiles` patch.
 - `on_online` force-resets active `syncing` rows to `synced` — pre-existing Story 3-1 behaviour, not introduced by 3-3.
 
+---
+
+## WebKit aarch64 JIT Instability — Dev Environment Only
+
+**Discovered:** 2026-04-16 during embedded auth flow testing on Fedora 43 aarch64 VM (party-mode session with Winston/Amelia/Quinn).
+**Status:** Known dev-environment limitation. **Zero production impact** — confirmed target is x86_64.
+**Action:** No fix planned. Document, work around in dev, revisit only if ARM Linux is ever promoted to a supported target.
+
+### Symptom
+
+`WebKitWebProcess` (the renderer subprocess of the embedded auth WebView in `ui/src/protondrive/auth_window.py`) crashes intermittently during the Proton sign-in flow — sometimes before the user enters the password, sometimes during MFA, sometimes mid-typing. From the user's perspective the auth window appears to "freeze" because the GTK4 Python parent process stays alive while the renderer dies, leaving a frozen WebView rectangle on screen.
+
+### Evidence
+
+- **17 coredumps in a single day** on the Fedora aarch64 VM (`coredumpctl list --since=today`):
+  - Mix of `SIGSEGV` (8), `SIGABRT` (8), `SIGTRAP` (1)
+  - All from `/usr/libexec/webkitgtk-6.0/WebKitWebProcess`, sizes ~22–30 MB
+- **Stack traces consistently land inside JavaScriptCore JIT'd code:**
+  - Crash signature: frame at offset `+0x1a8940` in `libjavascriptcoregtk-6.0.so.1.7.10` (the JIT entry trampoline)
+  - 10–20 frames above it in *anonymous executable memory* (the JIT code heap)
+  - Bottom of stack: libc `abort`/`raise`
+- **Runtime:** `org.gnome.Platform/aarch64/50` ships `libwebkitgtk-6.0.so.4.16.6`; binaries compiled without build-ids, so symbolicated backtraces are unavailable.
+- **VM has broken GPU passthrough** (irrelevant to the JIT crash itself but contributes to general instability):
+  ```
+  libEGL warning: failed to get driver name for fd -1
+  MESA: error: ZINK: failed to choose pdev
+  libEGL warning: egl: failed to create dri2 screen
+  ```
+
+### What we ruled out
+
+- **OOM/memory pressure:** `dmesg` empty for OOM; `free -h` showed 4 GiB available, swap untouched (1 MiB of 5.8 GiB used). The earlier 2 GB VM RAM bump was a coincidence — it changed timing enough that crashes became less frequent in casual testing, but did not address the root cause. *We chased the wrong ghost for one round.*
+- **Our code:** crash is entirely inside `libjavascriptcoregtk` and JIT'd JS pages — no frames in `auth_window.py` or in the engine.
+- **Host-level / VM-level instability:** the VM stayed responsive throughout (load average ~0.3); only the renderer subprocess died.
+
+### What didn't work
+
+- **`JSC_useJIT=0`** — broke app startup entirely. Confirmed via `flatpak override --user --env=JSC_useJIT=0`: the app fails to launch. Cause: `JSC_*` debug env vars are stripped from release WebKitGTK builds in the GNOME runtime. There is **no public WebKitGTK 6.0 API** to disable the JIT at runtime; it is a build-time choice made upstream.
+
+### What partially helped (but did not prevent crashes)
+
+```bash
+flatpak override --user \
+  --env=WEBKIT_DISABLE_COMPOSITING_MODE=1 \
+  --env=LIBGL_ALWAYS_SOFTWARE=1 \
+  io.github.ronki2304.ProtonDriveLinuxClient
+```
+
+This combo silenced the EGL/Mesa errors and let the auth flow reach the MFA stage at least once before crashing again. Currently retained in the user's flatpak override as the dev-VM baseline.
+
+### Why this is dev-only
+
+The crash signature is **JavaScriptCore JIT codegen on aarch64** — well-known instability surface for WebKitGTK on ARM64, particularly under VM environments with broken GPU passthrough. The same WebKit + Proton login flow runs without these crashes on x86_64 desktops (anecdotal: confirmed during prior story testing in Stories 1-9, 2-2-5, 2-11). Production audience is x86_64 desktops → no shipped users hit this.
+
+### Future paths if ARM Linux ever becomes a real target
+
+Two options surfaced during the party-mode discussion. Neither is scheduled work.
+
+- **Path A — Dev-mode token bypass** (small, ~30 lines, dev-only):
+  Add `PROTONDRIVE_DEV_TOKEN_FILE=~/.protondrive-dev-token` env support in the engine and UI to skip the embedded auth entirely when a token file is present. Lets developers exercise sync engine / queue / UI work on aarch64 without ever opening WebKit. Token captured once on x86_64 (or between aarch64 crashes) and reused. Would NOT ship to users.
+- **Path B — System-browser auth** (real user-facing feature, ~1 story-week):
+  Replace the embedded `WebKit.WebView` with `Gio.AppInfo.launch_default_for_uri()` — open Proton's auth URL in the user's system browser, let the existing localhost callback (`http://127.0.0.1:44925/callback` from Story 1-7) catch the redirect. Eliminates the entire WebKit dependency for auth. Trade-off: must rework the JS-injected `protonCapture` password capture in `auth_window.py:100` (probably by handling SRP key derivation engine-side or by capturing salts via callback URL params). Proton's official desktop apps actually use this pattern. Would benefit hardware-key 2FA and password-manager autofill UX as a side effect.
+
+If Path B is ever picked up, it becomes its own epic ("Alternative Auth Flow & ARM Linux Support") — at which point this deferred entry should be migrated into that epic's discovery section.
+
+### Workaround for the developer (you, today)
+
+Live with intermittent renderer crashes during auth-flow testing on the aarch64 VM. Keep the two graphics env vars in the flatpak override. When auth-flow work is actively painful, revisit Path A as a small dev-quality story.
+
