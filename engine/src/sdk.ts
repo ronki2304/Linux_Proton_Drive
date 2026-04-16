@@ -142,6 +142,7 @@ export type ProtonDriveClientLike = Pick<
   | "getFileRevisionUploader"
   | "getFileDownloader"
   | "createFolder"
+  | "trashNodes"
 >;
 
 // ---------------------------------------------------------------------------
@@ -460,6 +461,40 @@ export class DriveClient {
       }
       mapSdkError(err);
       throw err;
+    }
+  }
+
+  /**
+   * Move a single remote node to trash.
+   *
+   * Delegates to the SDK's `trashNodes` async-generator, which yields one
+   * `NodeResult` per uid. We pass a single-element array and drain the
+   * single yielded result. SDK iteration errors (network/auth) are
+   * translated via `mapSdkError`; a yielded `{ok: false}` result means the
+   * server rejected that specific node (rare — stale uid, permission) and
+   * is surfaced as a `SyncError` so the per-entry replay catch-all counts
+   * it in the `failed` tally.
+   */
+  async trashNode(nodeUid: string): Promise<void> {
+    try {
+      const iter = this.sdk.trashNodes([nodeUid]);
+      let saw = false;
+      for await (const result of iter) {
+        saw = true;
+        if (!result.ok) {
+          throw new SyncError(`trashNode failed for ${nodeUid}: ${result.error}`);
+        }
+      }
+      // Defensive: if the SDK iterator completes without yielding anything
+      // for our uid (e.g. node already gone on the server, or a future SDK
+      // change drops "already-trashed" uids silently), we cannot confirm the
+      // trash actually happened. Treat as a failure so the caller keeps the
+      // queue entry and doesn't drop the sync_state row prematurely.
+      if (!saw) {
+        throw new SyncError(`trashNode produced no result for ${nodeUid}`);
+      }
+    } catch (err) {
+      mapSdkError(err);
     }
   }
 

@@ -254,3 +254,80 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - **W4** — `_pairs_data` relative timestamps go stale during long offline periods (`ui/src/protondrive/window.py:282`): `last_synced_text` is computed at `populate_pairs()` time. After a long offline period, the displayed "Offline · 5m ago" will be wrong on the next offline transition. Corrected on next `sync_complete` event.
 - **W5** — `_setNetworkMonitorForTests` doesn't stop previous monitor before replacing (`engine/src/main.ts:196`): if a test sets a monitor, starts it, then calls `_setNetworkMonitorForTests` again without stopping the first, the old timer leaks. Tests are responsible for calling `monitor.stop()` in `afterEach`; this is the established project pattern.
 - **W6** — Test "emits online after offline" first-monitor block is dead code (`engine/src/network-monitor.test.ts:40-50`): the first monitor is started, verified offline, and stopped — but this duplicates the "emits offline immediately" test. The actual scenario (offline→online transition) is in `monitor2`. Low severity cleanup opportunity.
+
+---
+
+## Cross-Epic Tech Debt — Story 2-12: Unified Queue Drainer Refactor
+
+**Identified:** 2026-04-15 during Story 3-3 party-mode review
+**Status:** Tracked as `2-12-unified-queue-drainer-refactor: backlog` in sprint-status.yaml
+**Story file:** `_bmad-output/implementation-artifacts/2-12-unified-queue-drainer-refactor.md`
+**Precursor:** Story 3-3 (must be done first)
+**Scope estimate:** 3.5–5.5 days (2–3× typical story size)
+**Epic 2 status:** stays `done`; 2-12 is cross-epic tech debt discovered after Epic 2's retrospective shipped (2026-04-12), and will carry its own standalone retrospective.
+
+### The insight (Jeremy, during 3-3 review)
+
+> *"Why don't you put file updates in the same queue instead of a new process?"*
+
+The observation: the current engine has **two sync pathways** — `startSyncAll()` (tree-walk-driven) and `replayQueue()` (queue-driven, new in Story 3-3). They race in concurrency edge cases, duplicate conflict-detection logic, and double the test surface. Collapsing them into **one queue with multiple producers and one consumer** eliminates the race by construction, unifies Story 5-3's re-auth replay path with Story 3-3's reconnect replay path, and halves the test surface.
+
+### Winston's architectural model — 3 producers, 1 consumer
+
+- **Producer A — `FileWatcher`:** always enqueues to `change_queue` (offline OR online). Story 3-2 implemented the offline path; 2-12 extends to always-enqueue.
+- **Producer B — Reconciliation walker:** runs on cold start and periodically, walks local + remote trees, diffs against `sync_state`, enqueues any deltas. Replaces `startSyncAll`'s discovery phase as a clean, named concept.
+- **Producer C — Remote change detector** (future Epic 5 work, out of scope for 2-12): polls SDK events or periodic remote walk, enqueues remote-side deltas.
+- **Single consumer — `drainQueue()`:** processes `change_queue` entries sequentially. Offline = paused. Online = draining. Single `isDraining` boolean lock replaces Story 3-3's `busy` enum.
+
+### Why this collapses bugs
+
+1. **Eliminates Story 3-3 C1 entirely.** One worker = no race. The `busy` enum shrinks to a single boolean.
+2. **Unifies Story 5-3.** Post-2-12, re-auth replay is just another call to `drainQueue()` — same method the watcher and network monitor use.
+3. **Halves test surface.** Testing today requires seeding `sync_state` + faking tree walks + mocking SDK. Testing `drainQueue()` requires seeding `change_queue` rows and calling `drain()`.
+4. **Makes missed-events recovery explicit.** Reconciliation walker is named and documented, not a side-effect of opportunistic tree-walks.
+
+### Mary's cross-epic pattern observation
+
+> *"If I'd spotted this in Epic 2 planning, Story 2-5 would have looked completely different. The pattern also predicts Epic 5 will hit the exact same issues when Story 5-3 reuses replayQueue — race with initial sync, conflict-pending carry-over, etc."*
+
+### Barry's pragmatic framing
+
+> *"Ship 3-3 as planned. Then open 2-12. Refactor with full context. The refactor is better-informed after 3-3 ships because you'll have learned exactly where replayQueue feels awkward next to startSyncAll, and those specific pain points will shape the unification better than any upfront design."*
+
+### Why 2-12 is NOT in Story 3-3
+
+1. **Story 2-5 is done and tested** — recent fixes (upload block, download hang, subfolders, empty dirs, last-synced persistence) are at risk from a core refactor under Epic 3 pressure.
+2. **3-3 is unblocked and ready** — shipping it unblocks Epic 3 and provides real replay behaviour observable in production before refactoring.
+3. **Refactor is better-informed post-3-3** — pain points from running the split architecture in production will shape the unification.
+4. **Scope exceeds typical story** (3.5–5.5 days) — needs its own focused sprint slot and regression-test budget.
+
+### Implementation hints when picked up
+
+Story 3-3's `replayQueue()` is **intentionally shaped as the seed** of the future `drainQueue()`. It is:
+- Sequential per entry (not Promise.all batched)
+- Idempotent per entry (upsert + dequeue atomic)
+- Re-entrancy-safe via `busy` enum + `replayPending`
+- Fully self-contained per entry (no cross-entry state beyond the `remoteFiles` snapshot)
+
+When 2-12 is activated, run `bmad-create-story` against the **codebase at that time** to refresh the ACs and implementation plan. The ACs in `2-12-unified-queue-drainer-refactor.md` are starter scaffolding, not final specs.
+
+### Retrospective intent
+
+When 2-12 ships, run a **standalone mini-retrospective** in the story file. Do NOT fold into any epic retrospective. The learnings are refactor-flavoured (test migration, regression safety, "designed-for-future-unification" dev notes' real-world value) and don't align with any single epic's user-facing theme.
+
+---
+
+## Deferred from: code review of 3-3-queue-replay-and-auto-resume-on-reconnect (2026-04-16)
+
+- Boot-time drain when engine restarts with pre-existing queue entries and network already online — no `online` transition fires, queue sits idle. Explicitly deferred to Story 5-3 per 3-3 spec.
+- No coordination between in-flight `replayQueue` and `token_refresh` / `SIGTERM` handlers — pre-existing shutdown / token-rotation pattern, not unique to 3-3.
+- UI `_conflict_pending_count` not persisted across UI restart — footer may flash "All synced" despite queue having real conflicts; no persistence mechanism in this story's scope.
+- Test 4.11 (per-entry failure isolation) doesn't assert `queue_replay_complete` payload nor AC6a emission ordering under partial failure — test gap, not a functional bug.
+- No state-cycle tests for StatusFooterBar (conflict → syncing → conflict, etc.) — CSS-class drift during unusual transitions is not exercised.
+- `queue_replay_complete` payload omits `failed` count — per AC6 contract the shape is `{synced, skipped_conflicts}`, but pure-failure replays give the user no toast/footer signal. Worth a product call during Epic 5.
+- Orphan queue entries if a pair is deleted with FK cascade disabled — relies on `ON DELETE CASCADE` being in place; no defensive guard.
+- Upload OK but subsequent `upsertSyncState` hits `SQLITE_BUSY` from concurrent watcher write — currently counted as `failed` despite remote success; retry logic is pre-existing gap.
+- `on_sync_progress` has no `_conflict_pending_count` regression guard — syncing temporarily overrides amber, as documented in 3-3 Dev Notes Regression Risk #2.
+- New folder created by one upload mid-replay isn't retrievable by subsequent entries in the same pair (stale `remoteFolders` map) — routed to `failed`, next replay resolves. Same root cause as the in-loop `remoteFiles` patch.
+- `on_online` force-resets active `syncing` rows to `synced` — pre-existing Story 3-1 behaviour, not introduced by 3-3.
+

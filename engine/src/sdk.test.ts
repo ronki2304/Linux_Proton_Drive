@@ -789,6 +789,67 @@ describe("DriveClient.listRemoteFiles", () => {
   });
 });
 
+describe("DriveClient.trashNode", () => {
+  it("iterates the single-entry trashNodes generator with the supplied uid", async () => {
+    const calls: string[][] = [];
+    const trashFn = mock(async function* (uids: string[]): AsyncGenerator<{ uid: string; ok: true }> {
+      calls.push(uids);
+      yield { uid: uids[0]!, ok: true };
+    });
+    const sdk = makeFakeSdk({ trashNodes: trashFn });
+    const client = new DriveClient(sdk);
+
+    await client.trashNode("uid-1");
+
+    expect(trashFn.mock.calls.length).toBe(1);
+    expect(calls[0]).toEqual(["uid-1"]);
+  });
+
+  it("resolves without error when SDK yields a success result", async () => {
+    const trashFn = mock(async function* (
+      uids: string[],
+    ): AsyncGenerator<{ uid: string; ok: true }> {
+      yield { uid: uids[0]!, ok: true };
+    });
+    const sdk = makeFakeSdk({ trashNodes: trashFn });
+    const client = new DriveClient(sdk);
+
+    await expect(client.trashNode("uid-ok")).resolves.toBeUndefined();
+  });
+
+  it("throws SyncError when SDK yields {ok: false}", async () => {
+    const trashFn = mock(async function* (
+      uids: string[],
+    ): AsyncGenerator<{ uid: string; ok: false; error: string }> {
+      yield { uid: uids[0]!, ok: false, error: "node not found" };
+    });
+    const sdk = makeFakeSdk({ trashNodes: trashFn });
+    const client = new DriveClient(sdk);
+
+    await expect(client.trashNode("bad-uid")).rejects.toBeInstanceOf(SyncError);
+  });
+
+  it("throws NetworkError when generator iteration throws ConnectionError", async () => {
+    async function* throwingGen(): AsyncGenerator<{ uid: string; ok: true }> {
+      throw sdkErrorFactoriesForTests.connection("network dropped mid-trash");
+    }
+    const sdk = makeFakeSdk({ trashNodes: mock(throwingGen) });
+    const client = new DriveClient(sdk);
+
+    await expect(client.trashNode("uid-x")).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it("throws SyncError when generator iteration throws IntegrityError", async () => {
+    async function* throwingGen(): AsyncGenerator<{ uid: string; ok: true }> {
+      throw sdkErrorFactoriesForTests.integrity("corrupt");
+    }
+    const sdk = makeFakeSdk({ trashNodes: mock(throwingGen) });
+    const client = new DriveClient(sdk);
+
+    await expect(client.trashNode("uid-y")).rejects.toBeInstanceOf(SyncError);
+  });
+});
+
 // ===========================================================================
 // Story 2.2.5 — SDK live wiring tests (AC11)
 // ===========================================================================

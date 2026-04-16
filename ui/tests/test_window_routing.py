@@ -19,8 +19,10 @@ def _make_window() -> MainWindow:
     win.pair_detail_panel = MagicMock()
     win.nav_split_view = MagicMock()
     win.pairs_list = MagicMock()
+    win.toast_overlay = MagicMock()
     win._sync_pair_rows = {}
     win._pairs_data = {}
+    win._conflict_pending_count = 0
     win._row_activated_connected = False
     win._settings = MagicMock()
     return win
@@ -300,3 +302,107 @@ class TestClearSession:
         win._session_data = {}
         win.clear_session()
         win.pair_detail_panel.show_no_pairs.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Story 3-3 — on_queue_replay_complete
+# ---------------------------------------------------------------------------
+
+class TestOnQueueReplayComplete:
+    """on_queue_replay_complete toast + conflict-pending routing (AC7)."""
+
+    def test_synced_only_shows_toast_with_plural_text(self):
+        win = _make_window()
+        with patch("protondrive.window.Adw") as mock_adw:
+            mock_toast = MagicMock()
+            mock_adw.Toast.new.return_value = mock_toast
+            win.on_queue_replay_complete({"synced": 2, "skipped_conflicts": 0})
+            mock_adw.Toast.new.assert_called_once_with("2 files synced")
+            mock_toast.set_timeout.assert_called_once_with(3)
+            win.toast_overlay.add_toast.assert_called_once_with(mock_toast)
+        # conflict pending stays at 0 → no set_conflict_pending call
+        win.status_footer_bar.set_conflict_pending.assert_not_called()
+        assert win._conflict_pending_count == 0
+
+    def test_synced_one_uses_singular_text(self):
+        win = _make_window()
+        with patch("protondrive.window.Adw") as mock_adw:
+            mock_adw.Toast.new.return_value = MagicMock()
+            win.on_queue_replay_complete({"synced": 1, "skipped_conflicts": 0})
+            mock_adw.Toast.new.assert_called_once_with("1 file synced")
+
+    def test_zero_synced_zero_skipped_is_noop(self):
+        win = _make_window()
+        with patch("protondrive.window.Adw") as mock_adw:
+            win.on_queue_replay_complete({"synced": 0, "skipped_conflicts": 0})
+            mock_adw.Toast.new.assert_not_called()
+        win.status_footer_bar.set_conflict_pending.assert_not_called()
+        assert win._conflict_pending_count == 0
+
+    def test_zero_synced_with_conflicts_calls_set_conflict_pending(self):
+        win = _make_window()
+        with patch("protondrive.window.Adw") as mock_adw:
+            win.on_queue_replay_complete({"synced": 0, "skipped_conflicts": 2})
+            mock_adw.Toast.new.assert_not_called()
+        win.status_footer_bar.set_conflict_pending.assert_called_once_with(2)
+        assert win._conflict_pending_count == 2
+
+    def test_synced_and_conflicts_shows_both_toast_and_set_conflict_pending(self):
+        win = _make_window()
+        with patch("protondrive.window.Adw") as mock_adw:
+            mock_adw.Toast.new.return_value = MagicMock()
+            win.on_queue_replay_complete({"synced": 3, "skipped_conflicts": 1})
+            mock_adw.Toast.new.assert_called_once_with("3 files synced")
+        win.status_footer_bar.set_conflict_pending.assert_called_once_with(1)
+        assert win._conflict_pending_count == 1
+
+
+class TestConflictPendingRegressionGuards:
+    """Regression guards: _conflict_pending_count > 0 preserves footer state."""
+
+    def test_on_sync_complete_preserves_footer_when_conflict_pending(self):
+        win = _make_window()
+        win._conflict_pending_count = 2
+        row = _make_row(state="synced")
+        win._sync_pair_rows["p1"] = row
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-15T00:00:00.000Z"})
+        # Footer must NOT be reset to update_all_synced while conflict_pending is set
+        win.status_footer_bar.update_all_synced.assert_not_called()
+
+    def test_on_sync_complete_still_updates_when_conflict_pending_is_zero(self):
+        win = _make_window()
+        win._conflict_pending_count = 0
+        row = _make_row(state="syncing")
+        win._sync_pair_rows["p1"] = row
+
+        def _set_state(s):
+            row.state = s
+        row.set_state.side_effect = _set_state
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-15T00:00:00.000Z"})
+        win.status_footer_bar.update_all_synced.assert_called_once()
+
+    def test_on_watcher_status_ready_preserves_footer_when_conflict_pending(self):
+        win = _make_window()
+        win._conflict_pending_count = 2
+        win._sync_pair_rows["p1"] = _make_row(state="synced")
+        win.on_watcher_status("ready")
+        win.status_footer_bar.update_all_synced.assert_not_called()
+
+    def test_on_online_preserves_footer_when_conflict_pending(self):
+        win = _make_window()
+        win._conflict_pending_count = 2
+        win._sync_pair_rows["p1"] = _make_row(state="offline")
+        win.on_online()
+        win.status_footer_bar.update_all_synced.assert_not_called()
+
+    def test_on_online_still_updates_when_conflict_pending_is_zero(self):
+        win = _make_window()
+        win._conflict_pending_count = 0
+        row = _make_row(state="offline")
+        win._sync_pair_rows["p1"] = row
+
+        def _set_state(s):
+            row.state = s
+        row.set_state.side_effect = _set_state
+        win.on_online()
+        win.status_footer_bar.update_all_synced.assert_called_once()

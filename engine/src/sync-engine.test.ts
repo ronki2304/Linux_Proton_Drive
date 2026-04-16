@@ -667,3 +667,526 @@ describe("SyncEngine — atomic download writes (AC2)", () => {
     expect(errorEvent).toBeTruthy();
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Story 3-3 — replayQueue tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("SyncEngine — replayQueue", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `replay-queue-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  function makeReplayClient(
+    overrides: Partial<DriveClient> = {},
+  ): DriveClient {
+    return {
+      ...makeMockClient(),
+      trashNode: mock(async (_uid: string) => {}),
+      ...overrides,
+    } as unknown as DriveClient;
+  }
+
+  function enqueue(
+    relativePath: string,
+    changeType: "created" | "modified" | "deleted",
+  ): void {
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: relativePath,
+      change_type: changeType,
+      queued_at: "2026-04-15T00:00:00.000Z",
+    });
+  }
+
+  it("4.3 empty queue → returns zero counts and emits one queue_replay_complete", async () => {
+    mockClient = makeReplayClient();
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result).toEqual({ synced: 0, skipped_conflicts: 0, failed: 0 });
+    const completeEvents = emittedEvents.filter(
+      (e) => e.type === "queue_replay_complete",
+    );
+    expect(completeEvents.length).toBe(1);
+    expect(completeEvents[0]!.payload).toEqual({
+      synced: 0,
+      skipped_conflicts: 0,
+    });
+  });
+
+  it("4.4 single modified entry, remote unchanged → upload + dequeue + synced=1", async () => {
+    writeLocalFile("file.txt");
+    const remoteMtime = "2026-04-10T10:00:00.000Z";
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "file.txt",
+      local_mtime: "2026-04-10T09:00:00.000Z",
+      remote_mtime: remoteMtime,
+      content_hash: null,
+    });
+    enqueue("file.txt", "modified");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => [makeRemoteFile("file.txt", remoteMtime)]),
+      uploadFileRevision: mock(async () => ({
+        node_uid: "uid-file.txt",
+        revision_uid: "rev-1",
+      })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result.synced).toBe(1);
+    expect(result.skipped_conflicts).toBe(0);
+    expect(result.failed).toBe(0);
+    const uploadRevFn = mockClient.uploadFileRevision as ReturnType<typeof mock>;
+    expect(uploadRevFn.mock.calls.length).toBe(1);
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+    // sync_state row updated (still present — upload path does not delete it)
+    expect(db.getSyncState(PAIR_ID, "file.txt")).toBeTruthy();
+  });
+
+  it("4.5 single modified entry, remote changed → conflict, kept in queue", async () => {
+    writeLocalFile("file.txt");
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "file.txt",
+      local_mtime: "2026-04-10T09:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    enqueue("file.txt", "modified");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => [
+        // Different remote mtime → conflict
+        makeRemoteFile("file.txt", "2026-04-11T10:00:00.000Z"),
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result.synced).toBe(0);
+    expect(result.skipped_conflicts).toBe(1);
+    const uploadRevFn = mockClient.uploadFileRevision as ReturnType<typeof mock>;
+    expect(uploadRevFn.mock.calls.length).toBe(0);
+    expect(db.queueSize(PAIR_ID)).toBe(1);
+  });
+
+  it("4.6 new file (no sync_state), no remote collision → uploaded", async () => {
+    writeLocalFile("new.txt");
+    enqueue("new.txt", "created");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => ({
+        node_uid: "uid-new",
+        revision_uid: "rev-1",
+      })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result.synced).toBe(1);
+    const uploadFn = mockClient.uploadFile as ReturnType<typeof mock>;
+    expect(uploadFn.mock.calls.length).toBe(1);
+    expect(db.getSyncState(PAIR_ID, "new.txt")).toBeTruthy();
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+  });
+
+  it("4.7 new file (no sync_state), remote collision → conflict", async () => {
+    writeLocalFile("collide.txt");
+    enqueue("collide.txt", "created");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("collide.txt", "2026-04-10T10:00:00.000Z"),
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result.skipped_conflicts).toBe(1);
+    expect(result.synced).toBe(0);
+    const uploadFn = mockClient.uploadFile as ReturnType<typeof mock>;
+    expect(uploadFn.mock.calls.length).toBe(0);
+    expect(db.queueSize(PAIR_ID)).toBe(1);
+  });
+
+  it("4.8 deleted entry, remote unchanged → trashNode called + dequeued", async () => {
+    const remoteMtime = "2026-04-10T10:00:00.000Z";
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "gone.txt",
+      local_mtime: "2026-04-10T09:00:00.000Z",
+      remote_mtime: remoteMtime,
+      content_hash: null,
+    });
+    enqueue("gone.txt", "deleted");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("gone.txt", remoteMtime, 100, "remote-node-uid"),
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result.synced).toBe(1);
+    const trashFn = mockClient.trashNode as unknown as ReturnType<typeof mock>;
+    expect(trashFn.mock.calls.length).toBe(1);
+    expect(trashFn.mock.calls[0]![0]).toBe("remote-node-uid");
+    expect(db.getSyncState(PAIR_ID, "gone.txt")).toBeUndefined();
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+  });
+
+  it("4.9 deleted entry, remote already gone → idempotent dequeue", async () => {
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "gone.txt",
+      local_mtime: "2026-04-10T09:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    enqueue("gone.txt", "deleted");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => []),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result.synced).toBe(1);
+    const trashFn = mockClient.trashNode as unknown as ReturnType<typeof mock>;
+    expect(trashFn.mock.calls.length).toBe(0);
+    expect(db.getSyncState(PAIR_ID, "gone.txt")).toBeUndefined();
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+  });
+
+  it("4.10 deleted entry, remote changed → conflict, kept in queue", async () => {
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "gone.txt",
+      local_mtime: "2026-04-10T09:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    enqueue("gone.txt", "deleted");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => [
+        // Remote mtime differs from stored
+        makeRemoteFile("gone.txt", "2026-04-11T10:00:00.000Z"),
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result.skipped_conflicts).toBe(1);
+    expect(result.synced).toBe(0);
+    const trashFn = mockClient.trashNode as unknown as ReturnType<typeof mock>;
+    expect(trashFn.mock.calls.length).toBe(0);
+    expect(db.queueSize(PAIR_ID)).toBe(1);
+    expect(db.getSyncState(PAIR_ID, "gone.txt")).toBeTruthy();
+  });
+
+  it("4.11 per-entry failure isolation — middle entry throws, others succeed", async () => {
+    writeLocalFile("a.txt");
+    writeLocalFile("b.txt");
+    writeLocalFile("c.txt");
+    enqueue("a.txt", "created");
+    enqueue("b.txt", "created");
+    enqueue("c.txt", "created");
+
+    let callCount = 0;
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => {
+        callCount++;
+        if (callCount === 2) throw new Error("network boom");
+        return { node_uid: "uid-x", revision_uid: "rev-x" };
+      }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    expect(result.synced).toBe(2);
+    expect(result.failed).toBe(1);
+    expect(result.skipped_conflicts).toBe(0);
+
+    // Queue: only the middle entry remains
+    const remaining = db.listQueue(PAIR_ID);
+    expect(remaining.length).toBe(1);
+    expect(remaining[0]!.relative_path).toBe("b.txt");
+
+    // One error push event with queue_replay_failed
+    const errEvents = emittedEvents.filter((e) => e.type === "error");
+    expect(errEvents.length).toBe(1);
+    expect(
+      (errEvents[0]!.payload as Record<string, unknown>).code,
+    ).toBe("queue_replay_failed");
+  });
+
+  it("4.12 empty queue → queue_replay_complete still emitted with zero counts", async () => {
+    mockClient = makeReplayClient();
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.replayQueue();
+
+    const completeEvents = emittedEvents.filter(
+      (e) => e.type === "queue_replay_complete",
+    );
+    expect(completeEvents.length).toBe(1);
+    expect(completeEvents[0]!.payload).toEqual({
+      synced: 0,
+      skipped_conflicts: 0,
+    });
+  });
+
+  it("4.13 re-entrancy guard — second concurrent replayQueue() returns zero counts while busy", async () => {
+    writeLocalFile("slow.txt");
+    enqueue("slow.txt", "created");
+
+    let releaseUpload!: () => void;
+    const uploadGate = new Promise<void>((resolve) => {
+      releaseUpload = resolve;
+    });
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => {
+        await uploadGate;
+        return { node_uid: "uid-slow", revision_uid: "rev-1" };
+      }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const firstPromise = engine.replayQueue();
+    // Second call sees busy === 'replay', sets replayPending, returns zero counts
+    const secondResult = await engine.replayQueue();
+    expect(secondResult).toEqual({ synced: 0, skipped_conflicts: 0, failed: 0 });
+
+    releaseUpload();
+    const firstResult = await firstPromise;
+    expect(firstResult.synced).toBe(1);
+  });
+
+  it("4.14 driveClient === null → returns zero counts, emits queue_replay_complete, no DB touch", async () => {
+    enqueue("file.txt", "created");
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(null);
+
+    const result = await engine.replayQueue();
+
+    expect(result).toEqual({ synced: 0, skipped_conflicts: 0, failed: 0 });
+    const completeEvents = emittedEvents.filter(
+      (e) => e.type === "queue_replay_complete",
+    );
+    expect(completeEvents.length).toBe(1);
+    // Queue untouched
+    expect(db.queueSize(PAIR_ID)).toBe(1);
+  });
+
+  it("4.15 concurrent replayQueue + startSyncAll — drain-on-completion", async () => {
+    writeLocalFile("a.txt");
+    writeLocalFile("b.txt");
+    enqueue("a.txt", "created");
+    enqueue("b.txt", "created");
+
+    // Make startSyncAll's walkRemoteTree fail on its first call so syncPair
+    // throws before writing any sync_state — this keeps the drain's decision
+    // table in the (undefined, undefined, created) = upload cell. Subsequent
+    // calls (the drain's own walkRemoteTree) succeed.
+    let lrfCalls = 0;
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => {
+        lrfCalls++;
+        if (lrfCalls === 1) throw new Error("sync-phase-blocker");
+        return [];
+      }),
+      uploadFile: mock(async () => ({ node_uid: "uid-x", revision_uid: "rev-x" })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const syncPromise = engine.startSyncAll();
+
+    // Replay while busy === 'sync' — call runs synchronously up to its first
+    // await, seeing busy='sync' and returning zero counts with replayPending
+    // flipped to true.
+    const bouncedResult = await engine.replayQueue();
+    expect(bouncedResult).toEqual({ synced: 0, skipped_conflicts: 0, failed: 0 });
+
+    await syncPromise;
+    // Drain fires in startSyncAll's finally as a detached void promise.
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    // After the drain, both entries have been processed.
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+    // The drain emits ONE queue_replay_complete — the bounced call returned
+    // early before entering the finally block, so it does not emit.
+    const completeEvents = emittedEvents.filter(
+      (e) => e.type === "queue_replay_complete",
+    );
+    expect(completeEvents.length).toBe(1);
+    expect(completeEvents[0]!.payload).toEqual({
+      synced: 2,
+      skipped_conflicts: 0,
+    });
+  });
+
+  it("4.16 one-shot replayPending flag — multiple bounced calls trigger exactly one drain", async () => {
+    writeLocalFile("a.txt");
+    enqueue("a.txt", "created");
+
+    let lrfCalls = 0;
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => {
+        lrfCalls++;
+        if (lrfCalls === 1) throw new Error("sync-phase-blocker");
+        return [];
+      }),
+      uploadFile: mock(async () => ({ node_uid: "uid-x", revision_uid: "rev-x" })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const syncPromise = engine.startSyncAll();
+
+    // Three bounced calls — replayPending flips to true but only drains once.
+    await engine.replayQueue();
+    await engine.replayQueue();
+    await engine.replayQueue();
+
+    await syncPromise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 30));
+
+    // Exactly ONE drained run → one queue_replay_complete event.
+    const completeEvents = emittedEvents.filter(
+      (e) => e.type === "queue_replay_complete",
+    );
+    expect(completeEvents.length).toBe(1);
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+  });
+
+  it("4.17 replay-during-replay: recursive pending", async () => {
+    writeLocalFile("first.txt");
+    writeLocalFile("second.txt");
+    enqueue("first.txt", "created");
+    enqueue("second.txt", "created");
+
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+
+    let nestedTriggered = false;
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => {
+        if (!nestedTriggered) {
+          nestedTriggered = true;
+          // Nested call sees busy === 'replay', flips replayPending, returns early
+          const nested = await engine.replayQueue();
+          expect(nested).toEqual({
+            synced: 0,
+            skipped_conflicts: 0,
+            failed: 0,
+          });
+        }
+        return { node_uid: "uid-x", revision_uid: "rev-x" };
+      }),
+    });
+    engine.setDriveClient(mockClient);
+
+    const firstResult = await engine.replayQueue();
+    // First replay processed both entries (no new entries added).
+    expect(firstResult.synced).toBe(2);
+    // Drain fires in finally → void detached promise; wait a tick.
+    await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+    // Expect 2 queue_replay_complete events — first run + drain.
+    const completeEvents = emittedEvents.filter(
+      (e) => e.type === "queue_replay_complete",
+    );
+    expect(completeEvents.length).toBe(2);
+  });
+
+  it("AC6a emission ordering — queue_replay_complete BEFORE sync_complete", async () => {
+    writeLocalFile("ordered.txt");
+    enqueue("ordered.txt", "created");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => ({
+        node_uid: "uid-x",
+        revision_uid: "rev-1",
+      })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.replayQueue();
+
+    const types = emittedEvents.map((e) => e.type);
+    const replayIdx = types.indexOf("queue_replay_complete");
+    const syncCompleteIdx = types.indexOf("sync_complete");
+    expect(replayIdx).toBeGreaterThanOrEqual(0);
+    expect(syncCompleteIdx).toBeGreaterThan(replayIdx);
+  });
+
+  it("sync_progress emitted per synced entry during replay", async () => {
+    writeLocalFile("x1.txt");
+    writeLocalFile("x2.txt");
+    enqueue("x1.txt", "created");
+    enqueue("x2.txt", "created");
+
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => ({
+        node_uid: "uid-x",
+        revision_uid: "rev-1",
+      })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.replayQueue();
+
+    const progress = emittedEvents.filter((e) => e.type === "sync_progress");
+    expect(progress.length).toBe(2);
+    expect((progress[0]!.payload as Record<string, unknown>).files_done).toBe(1);
+    expect((progress[1]!.payload as Record<string, unknown>).files_done).toBe(2);
+  });
+});

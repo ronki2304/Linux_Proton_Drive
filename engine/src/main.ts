@@ -120,7 +120,7 @@ if (process.env["FLATPAK_ID"]) {
 }
 
 import pkg from "../package.json" with { type: "json" };
-import type { IpcCommand, IpcResponse } from "./ipc.js";
+import type { IpcCommand, IpcPushEvent, IpcResponse } from "./ipc.js";
 import { IpcServer, resolveSocketPath } from "./ipc.js";
 import { createDriveClient } from "./sdk.js";
 import type { DriveClient } from "./sdk.js";
@@ -195,6 +195,29 @@ export function _setFileWatcherForTests(fw: FileWatcher | undefined): void {
 // Underscore prefix signals test-only usage — never call from production code.
 export function _setNetworkMonitorForTests(m: NetworkMonitor | undefined): void {
   networkMonitor = m;
+}
+
+/**
+ * Build the NetworkMonitor emit callback that forwards every push event to
+ * the IPC server AND triggers a queue-replay on `online` transitions.
+ *
+ * Ordering guarantee: `emitToServer(event)` runs synchronously before
+ * `engine.replayQueue()` is invoked, so the UI receives the `online` push
+ * event before any `queue_replay_complete` that follows.
+ *
+ * Exported for unit tests in `main.test.ts`; `main()` uses this helper
+ * when constructing the real `NetworkMonitor`.
+ */
+export function createNetworkMonitorCallback(
+  emitToServer: (event: IpcPushEvent) => void,
+  getSyncEngine: () => SyncEngine | undefined,
+): (event: IpcPushEvent) => void {
+  return (event) => {
+    emitToServer(event);
+    if (event.type === "online") {
+      void getSyncEngine()?.replayQueue();
+    }
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -583,7 +606,16 @@ async function main(): Promise<void> {
   syncEngine = new SyncEngine(stateDb, (e) => server.emitEvent(e));
   const socketPath = resolveSocketPath();
   server = new IpcServer(socketPath, handleCommand);
-  networkMonitor = new NetworkMonitor((e) => server.emitEvent(e));
+  // Wrap the emit callback so an `online` transition triggers queue replay in
+  // addition to forwarding the push event to the UI. See
+  // `createNetworkMonitorCallback` for the ordering guarantee. Token-expiry
+  // replay (`session_ready`) is Story 5-3's concern. (Story 3-3 Task 3.1)
+  networkMonitor = new NetworkMonitor(
+    createNetworkMonitorCallback(
+      (e) => server.emitEvent(e),
+      () => syncEngine,
+    ),
+  );
   networkMonitor.start();
 
   server.onConnect(() => {

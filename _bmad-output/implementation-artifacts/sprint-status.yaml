@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-14  # 3-2 done
+last_updated: 2026-04-16  # 3-3 done (code review patches applied)
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -75,6 +75,10 @@ development_status:
   2-10-flatpak-build-validation: done
   2-11-key-password-derivation: done  # Manual smoke test passed
   epic-2-retrospective: done
+  # Cross-epic tech debt identified during Story 3-3 review (2026-04-15).
+  # Epic 2 stays 'done'; 2-12 is post-retro tech debt with its own standalone retrospective when picked up.
+  # Precursor: 3-3 must be done first. Full context in deferred-work.md and 2-12-unified-queue-drainer-refactor.md
+  2-12-unified-queue-drainer-refactor: backlog
 
   # Epic 3: Offline Resilience & Network Handling
   epic-3: in-progress
@@ -82,7 +86,7 @@ development_status:
   3-0b-targeted-debt-fixes: done
   3-1-offline-detection-and-ui-indicators: done
   3-2-offline-change-queue-persistent: done
-  3-3-queue-replay-and-auto-resume-on-reconnect: backlog
+  3-3-queue-replay-and-auto-resume-on-reconnect: done
   3-4-rate-limit-handling-and-ui: backlog
   epic-3-retrospective: optional
 

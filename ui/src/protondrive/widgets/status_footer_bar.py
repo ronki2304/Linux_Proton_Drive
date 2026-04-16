@@ -59,18 +59,48 @@ class StatusFooterBar(Gtk.Box):
         # polite live-region announcement required for offline state change (AC5)
         self.announce(text, Gtk.AccessibleAnnouncementPriority.POLITE)
 
+    def set_conflict_pending(self, count: int) -> None:
+        """Show pending-conflict indicator after queue replay (Story 3-3 AC7).
+
+        Non-positive counts are invalid for this state — guard against
+        defensive callers or a malformed engine payload so the footer never
+        displays nonsense like "0 files need conflict resolution".
+        """
+        if count <= 0:
+            self.update_all_synced()
+            return
+        text = (
+            "1 file needs conflict resolution"
+            if count == 1
+            else f"{count} files need conflict resolution"
+        )
+        self.footer_label.set_text(text)
+        self._set_dot_state("conflict")
+        self.update_property([Gtk.AccessibleProperty.LABEL], [text])
+        self.announce(text, Gtk.AccessibleAnnouncementPriority.POLITE)
+
     def _set_dot_state(self, state: str) -> None:
-        """Update dot colour and CSS class."""
+        """Update dot colour and CSS class.
+
+        States: "syncing" | "offline" | "conflict" | "synced" (default).
+        Each state adds exactly one CSS class and explicitly removes the
+        other two. Replacing the old if/elif/else with a remove-all-then-
+        add-one pattern (Story 3-3 Task 7.2) makes state transitions
+        unambiguous and idempotent — no risk of stale classes when moving
+        syncing → conflict → offline → synced in any order.
+        """
         self._dot_state = state
+        # Always start from a clean slate.
+        self.footer_dot.remove_css_class("sync-dot-syncing")
+        self.footer_dot.remove_css_class("sync-dot-offline")
+        self.footer_dot.remove_css_class("sync-dot-conflict")
         if state == "syncing":
             self.footer_dot.add_css_class("sync-dot-syncing")
-            self.footer_dot.remove_css_class("sync-dot-offline")
         elif state == "offline":
             self.footer_dot.add_css_class("sync-dot-offline")
-            self.footer_dot.remove_css_class("sync-dot-syncing")
-        else:
-            self.footer_dot.remove_css_class("sync-dot-syncing")
-            self.footer_dot.remove_css_class("sync-dot-offline")
+        elif state == "conflict":
+            self.footer_dot.add_css_class("sync-dot-conflict")
+        # state == "synced" (or any unknown) → no class, default green.
         self.footer_dot.queue_draw()
 
     def _on_dot_draw(self, area: Gtk.DrawingArea, cr: object, width: int, height: int) -> None:
@@ -79,6 +109,8 @@ class StatusFooterBar(Gtk.Box):
             cr.set_source_rgb(0.11, 0.63, 0.63)  # teal
         elif self._dot_state == "offline":
             cr.set_source_rgb(0.60, 0.60, 0.60)  # grey
+        elif self._dot_state == "conflict":
+            cr.set_source_rgb(0.95, 0.62, 0.14)  # amber (UX-DR)
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2

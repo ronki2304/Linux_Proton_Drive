@@ -4,7 +4,7 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import type { IpcPushEvent } from "./ipc.js";
 import type { DriveClient, RemoteFile } from "./sdk.js";
-import type { StateDb, SyncPair } from "./state-db.js";
+import type { ChangeQueueEntry, StateDb, SyncPair } from "./state-db.js";
 import { listConfigPairs, type ConfigPair } from "./config.js";
 import { SyncError } from "./errors.js";
 import { debugLog } from "./debug-log.js";
@@ -68,7 +68,12 @@ class Semaphore {
 
 export class SyncEngine {
   private driveClient: DriveClient | null = null;
-  private isSyncing = false;
+  // Unified state-machine for sync pathways. `startSyncAll` and `replayQueue`
+  // are mutually exclusive: if one is running, the other bounces and sets
+  // `replayPending` so the drain runs once after the current operation
+  // completes. See Story 3-3 Task 2.2 for rationale.
+  private busy: "idle" | "sync" | "replay" = "idle";
+  private replayPending = false;
 
   constructor(
     private readonly stateDb: StateDb,
@@ -81,8 +86,8 @@ export class SyncEngine {
   }
 
   async startSyncAll(): Promise<void> {
-    if (this.isSyncing) return; // re-entrancy guard (F1)
-    this.isSyncing = true;
+    if (this.busy !== "idle") return; // re-entrancy guard (F1)
+    this.busy = "sync";
     process.stderr.write("[ENGINE] startSyncAll: begin\n");
     try {
       // Cold-start: restore pairs in config but missing from SQLite (AC5)
@@ -118,7 +123,350 @@ export class SyncEngine {
       }
     } finally {
       process.stderr.write("[ENGINE] startSyncAll: done\n");
-      this.isSyncing = false;
+      this.busy = "idle";
+      if (this.replayPending) {
+        this.replayPending = false;
+        // Fire-and-forget drain — any error is already handled inside
+        // replayQueue's per-entry try/catch and emitted as an error push event.
+        void this.replayQueue();
+      }
+    }
+  }
+
+  /**
+   * Replay the persisted `change_queue` entries after an offline→online
+   * transition. Processes per-entry against a one-shot remote snapshot per
+   * pair and tallies `{synced, skipped_conflicts, failed}`.
+   *
+   * Re-entrancy: if another sync pathway (`startSyncAll` or another in-flight
+   * `replayQueue`) holds the busy lock, the call sets `replayPending` and
+   * returns zero counts; the drain runs exactly once after the current
+   * operation releases busy. See Task 2.2/2.2a in Story 3-3.
+   *
+   * Emission ordering (AC6a):
+   *  1. Per-entry `sync_progress` events during upload/trash
+   *  2. `queue_replay_complete` fired BEFORE any final `sync_complete`
+   *  3. Per-pair `sync_complete` only for pairs with ≥1 successful entry
+   */
+  async replayQueue(): Promise<{
+    synced: number;
+    skipped_conflicts: number;
+    failed: number;
+  }> {
+    // Re-entrancy guard — bounce if another pathway is active. The pending
+    // flag is one-shot: repeat calls during busy all collapse to a single
+    // drain pass after busy clears (which is correct — one pass handles all
+    // queued entries).
+    if (this.busy !== "idle") {
+      this.replayPending = true;
+      return { synced: 0, skipped_conflicts: 0, failed: 0 };
+    }
+    this.busy = "replay";
+
+    let synced = 0;
+    let skipped_conflicts = 0;
+    let failed = 0;
+    const pairsWithSuccess = new Set<string>();
+
+    try {
+      // Snapshot driveClient at entry (matches syncPair pattern at line ~128).
+      const client = this.driveClient;
+      if (!client) {
+        // No client — still emit queue_replay_complete (AC6: "even when both
+        // counts are zero") so the UI can reliably clear any replaying state.
+        return { synced, skipped_conflicts, failed };
+      }
+
+      const pairs = this.stateDb.listPairs();
+      for (const pair of pairs) {
+        const pairQueue = this.stateDb.listQueue(pair.pair_id);
+        if (pairQueue.length === 0) continue;
+
+        // One remote-tree walk per pair (not per entry) — avoids O(N²) API
+        // calls and keeps us well under rate-limit thresholds (Story 3-4).
+        let remoteFiles: Map<string, RemoteFile>;
+        let remoteFolders: Map<string, string>;
+        try {
+          const tree = await this.walkRemoteTree(pair.remote_id, "", client);
+          remoteFiles = tree.files;
+          remoteFolders = tree.folders;
+        } catch (err) {
+          // walkRemoteTree failure blocks all entries for this pair — count
+          // them as failed and emit one error event per entry so the UI can
+          // surface them individually (including the affected relative_path).
+          const msg = err instanceof Error ? err.message : "unknown";
+          for (const entry of pairQueue) {
+            failed++;
+            this.emitEvent({
+              type: "error",
+              payload: {
+                code: "queue_replay_failed",
+                message: msg,
+                pair_id: pair.pair_id,
+                relative_path: entry.relative_path,
+              },
+            });
+          }
+          debugLog(
+            `sync-engine: replay walkRemoteTree failed for pair=${pair.pair_id}: ${msg}`,
+          );
+          continue;
+        }
+
+        // Process entries sequentially — NOT in parallel. Rationale: (a)
+        // rate-limit safety, (b) per-entry sync_state writes must observe
+        // prior writes, (c) deterministic sync_progress ordering.
+        for (let i = 0; i < pairQueue.length; i++) {
+          const entry = pairQueue[i]!;
+          const outcome = await this.processQueueEntry(
+            pair,
+            entry,
+            remoteFiles,
+            remoteFolders,
+            client,
+          );
+          if (outcome === "synced") {
+            synced++;
+            pairsWithSuccess.add(pair.pair_id);
+            this.emitEvent({
+              type: "sync_progress",
+              payload: {
+                pair_id: pair.pair_id,
+                files_done: i + 1,
+                files_total: pairQueue.length,
+                bytes_done: 0,
+                bytes_total: 0,
+              },
+            });
+          } else if (outcome === "conflict") {
+            skipped_conflicts++;
+          } else {
+            failed++;
+          }
+        }
+      }
+    } finally {
+      // Ordered emission (AC6a): queue_replay_complete FIRST so the UI can
+      // set _conflict_pending_count before any final sync_complete arrives.
+      this.emitEvent({
+        type: "queue_replay_complete",
+        payload: { synced, skipped_conflicts },
+      });
+      for (const pair_id of pairsWithSuccess) {
+        this.emitEvent({
+          type: "sync_complete",
+          payload: { pair_id, timestamp: new Date().toISOString() },
+        });
+      }
+      this.busy = "idle";
+      // Drain a one-shot replayPending flag: if an `online` event (or any
+      // other trigger) fired during this replay's execution, the top-of-method
+      // busy-check flipped replayPending to true instead of running. Drain it
+      // exactly once here so the queued intent isn't lost. The drained call
+      // itself processes whatever is now in the queue — if the queue is empty
+      // it still emits a zero-count queue_replay_complete per AC6.
+      if (this.replayPending) {
+        this.replayPending = false;
+        void this.replayQueue();
+      }
+    }
+
+    return { synced, skipped_conflicts, failed };
+  }
+
+  /**
+   * Per-entry replay dispatch. Returns `"synced" | "conflict" | "failed"`.
+   *
+   * The decision matrix (from Task 2.6, sole source of truth):
+   *
+   * | state      | remote     | created/modified            | deleted                  |
+   * | undefined  | undefined  | upload (new file)           | dequeue (both agree)     |
+   * | undefined  | defined    | conflict (collision)        | conflict (never knew)    |
+   * | defined    | undefined  | conflict (remote deleted)   | dequeue (both gone)      |
+   * | defined    | defined    | mtime match → upload/trash; mismatch → conflict         |
+   */
+  private async processQueueEntry(
+    pair: SyncPair,
+    entry: ChangeQueueEntry,
+    remoteFiles: Map<string, RemoteFile>,
+    remoteFolders: Map<string, string>,
+    client: DriveClient,
+  ): Promise<"synced" | "conflict" | "failed"> {
+    try {
+      const state = this.stateDb.getSyncState(pair.pair_id, entry.relative_path);
+      const remote = remoteFiles.get(entry.relative_path);
+      const isDelete = entry.change_type === "deleted";
+
+      // Resolve the outcome from the decision table.
+      let outcome: "upload" | "trashNode" | "dequeue" | "conflict";
+      if (state === undefined && remote === undefined) {
+        outcome = isDelete ? "dequeue" : "upload";
+      } else if (state === undefined && remote !== undefined) {
+        // Either a new-local/existing-remote collision OR a delete of a file
+        // we never knew — both are conflicts.
+        outcome = "conflict";
+      } else if (state !== undefined && remote === undefined) {
+        // Remote was deleted by another device. If this was a local delete,
+        // we're idempotently in sync. If it was a create/modify, treat as
+        // conflict — do NOT silently resurrect the file.
+        outcome = isDelete ? "dequeue" : "conflict";
+      } else {
+        // Both defined — compare stored vs current remote_mtime.
+        const remoteUnchanged = state!.remote_mtime === remote!.remote_mtime;
+        if (remoteUnchanged) {
+          outcome = isDelete ? "trashNode" : "upload";
+        } else {
+          outcome = "conflict";
+        }
+      }
+
+      switch (outcome) {
+        case "upload": {
+          // Locate the remote parent folder id for this entry.
+          const parentDir = dirname(entry.relative_path);
+          const remoteFolderId =
+            parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
+          if (!remoteFolderId) {
+            // Parent folder doesn't exist remotely — rare edge case; count as
+            // failed and re-surface on the next replay when walkRemoteTree may
+            // have picked up the new folder.
+            debugLog(
+              `sync-engine: replay upload ${entry.relative_path} — remote parent not found`,
+            );
+            this.emitEvent({
+              type: "error",
+              payload: {
+                code: "queue_replay_failed",
+                message: "remote parent folder not found",
+                pair_id: pair.pair_id,
+                relative_path: entry.relative_path,
+              },
+            });
+            return "failed";
+          }
+
+          // stat() the local file. Only ENOENT (file deleted mid-replay) is a
+          // legitimate "conflict" here — that preserves the user's intent to
+          // not drop the change entirely. Other errors (EACCES, EPERM, EIO,
+          // …) are genuine failures and must route to `failed` with a surfaced
+          // error event so the user can act on them.
+          let fileStat: { size: number; mtime: Date };
+          try {
+            fileStat = await stat(join(pair.local_path, entry.relative_path));
+          } catch (err) {
+            const code = (err as NodeJS.ErrnoException)?.code;
+            if (code === "ENOENT") {
+              debugLog(
+                `sync-engine: replay upload ${entry.relative_path} — local file missing (ENOENT), routing to conflict`,
+              );
+              return "conflict";
+            }
+            const msg = err instanceof Error ? err.message : "unknown";
+            debugLog(
+              `sync-engine: replay upload ${entry.relative_path} — stat failed (${code ?? "no-code"}): ${msg}`,
+            );
+            this.emitEvent({
+              type: "error",
+              payload: {
+                code: "queue_replay_failed",
+                message: `stat failed: ${msg}`,
+                pair_id: pair.pair_id,
+                relative_path: entry.relative_path,
+              },
+            });
+            return "failed";
+          }
+
+          const workItem: WorkItem = {
+            kind: "upload",
+            relativePath: entry.relative_path,
+            remoteFolderId,
+            existingNodeUid: remote?.id,
+            size: fileStat.size,
+            localMtime: fileStat.mtime.toISOString(),
+          };
+          const uploadResult = await this.uploadOne(pair, workItem, client);
+          // Same mtime rule as processOne (see sync-engine.ts:449–454):
+          // remote_mtime = localMtime because the SDK stores
+          // body.modificationTime as activeRevision.claimedModificationTime.
+          // Commit atomically — crashing between upsert and dequeue would
+          // leave the remote uploaded but the queue entry behind, producing a
+          // duplicate upload on restart.
+          this.stateDb.commitUpload(
+            {
+              pair_id: pair.pair_id,
+              relative_path: entry.relative_path,
+              local_mtime: workItem.localMtime,
+              remote_mtime: workItem.localMtime,
+              content_hash: null,
+            },
+            entry.id,
+          );
+          // Refresh the in-loop remote snapshot so a later queue entry for
+          // the SAME relative_path (e.g. create+modify pairs while offline)
+          // sees the just-uploaded node instead of the stale "undefined" from
+          // the pre-replay walkRemoteTree.
+          remoteFiles.set(entry.relative_path, {
+            id: uploadResult.node_uid,
+            name: basename(entry.relative_path),
+            parent_id: remoteFolderId,
+            remote_mtime: workItem.localMtime,
+            size: workItem.size,
+          });
+          return "synced";
+        }
+        case "trashNode": {
+          // remote is guaranteed defined by the decision table for this cell.
+          await client.trashNode(remote!.id);
+          // Atomic — crashing between deleteSyncState and dequeue would leave
+          // the remote trashed, the sync_state row gone, and the queue entry
+          // behind; next replay would hit (undefined, undefined, deleted) and
+          // silently dequeue, but we lose the audit trail. Transaction closes
+          // the gap.
+          this.stateDb.commitTrash(pair.pair_id, entry.relative_path, entry.id);
+          // Remove from the in-loop snapshot: any later entry for this path
+          // now sees (state undef, remote undef) which matches reality.
+          remoteFiles.delete(entry.relative_path);
+          return "synced";
+        }
+        case "dequeue": {
+          // Idempotent both-sides-agree path. If a sync_state row exists
+          // (defined/undefined/deleted cell), drop it alongside the queue row.
+          this.stateDb.commitDequeue(
+            pair.pair_id,
+            entry.relative_path,
+            entry.id,
+            state !== undefined,
+          );
+          return "synced";
+        }
+        case "conflict": {
+          // No DB mutation — entry stays in queue for Epic 4 resolution.
+          return "conflict";
+        }
+        default: {
+          // Exhaustiveness guard: `outcome` is a literal-union. If a future
+          // refactor adds a new outcome and forgets to handle it here, this
+          // fails compile — never a silent `undefined` return.
+          const _exhaustive: never = outcome;
+          throw new SyncError(`processQueueEntry: unhandled outcome ${_exhaustive}`);
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "unknown";
+      debugLog(
+        `sync-engine: queue_replay_failed pair=${pair.pair_id} entry=${entry.id} path=${entry.relative_path}: ${msg}`,
+      );
+      this.emitEvent({
+        type: "error",
+        payload: {
+          code: "queue_replay_failed",
+          message: msg,
+          pair_id: pair.pair_id,
+          relative_path: entry.relative_path,
+        },
+      });
+      return "failed";
     }
   }
 
@@ -482,7 +830,7 @@ export class SyncEngine {
     }
   }
 
-  private async uploadOne(pair: SyncPair, item: WorkItem & { kind: "upload" }, client: DriveClient): Promise<void> {
+  private async uploadOne(pair: SyncPair, item: WorkItem & { kind: "upload" }, client: DriveClient): Promise<{ node_uid: string }> {
     const localPath = join(pair.local_path, item.relativePath);
     const stream = Readable.toWeb(createReadStream(localPath)) as unknown as ReadableStream<Uint8Array>;
     const body = {
@@ -493,10 +841,11 @@ export class SyncEngine {
     };
     if (item.existingNodeUid) {
       // File already exists remotely — upload a new revision instead of creating a new node.
-      await client.uploadFileRevision(item.existingNodeUid, body);
-    } else {
-      await client.uploadFile(item.remoteFolderId, basename(item.relativePath), body);
+      const result = await client.uploadFileRevision(item.existingNodeUid, body);
+      return { node_uid: result.node_uid };
     }
+    const result = await client.uploadFile(item.remoteFolderId, basename(item.relativePath), body);
+    return { node_uid: result.node_uid };
   }
 
   private async downloadOne(

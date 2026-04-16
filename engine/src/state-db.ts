@@ -239,6 +239,50 @@ export class StateDb {
       .all(pairId) as ChangeQueueEntry[];
   }
 
+  /**
+   * Atomically upsert a `sync_state` row and dequeue a `change_queue` entry.
+   *
+   * Used by `replayQueue` after a successful upload: the two writes must be
+   * committed together so a process crash between them cannot leave the remote
+   * uploaded while the queue entry stays behind (duplicate upload on restart)
+   * or the sync_state row stays while the queue row is gone (phantom orphan).
+   */
+  commitUpload(state: SyncState, queueEntryId: number): void {
+    this.db.transaction(() => {
+      this.upsertSyncState(state);
+      this.dequeue(queueEntryId);
+    })();
+  }
+
+  /**
+   * Atomically delete a `sync_state` row and dequeue a `change_queue` entry.
+   *
+   * Used by `replayQueue` after a successful remote trash: the two writes must
+   * be committed together so a process crash cannot leave the remote trashed
+   * while the state row persists (next replay would conflict-detect) or the
+   * state row gone while the queue row stays (re-trash attempt on restart).
+   */
+  commitTrash(pairId: string, relativePath: string, queueEntryId: number): void {
+    this.db.transaction(() => {
+      this.deleteSyncState(pairId, relativePath);
+      this.dequeue(queueEntryId);
+    })();
+  }
+
+  /**
+   * Atomically delete a `sync_state` row (if present) and dequeue a
+   * `change_queue` entry. Idempotent — used for the both-sides-agree
+   * `dequeue` outcome in `replayQueue`.
+   */
+  commitDequeue(pairId: string, relativePath: string, queueEntryId: number, deleteState: boolean): void {
+    this.db.transaction(() => {
+      if (deleteState) {
+        this.deleteSyncState(pairId, relativePath);
+      }
+      this.dequeue(queueEntryId);
+    })();
+  }
+
   queueSize(pairId: string): number {
     const row = this.db
       .prepare(`SELECT COUNT(*) AS cnt FROM change_queue WHERE pair_id = ?`)

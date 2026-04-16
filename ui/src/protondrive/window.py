@@ -50,6 +50,11 @@ class MainWindow(Adw.ApplicationWindow):
         self._session_data: dict[str, Any] | None = None
         self._sync_pair_rows: dict[str, SyncPairRow] = {}
         self._pairs_data: dict[str, dict] = {}
+        # Set by `on_queue_replay_complete` — non-zero means the footer is
+        # showing "N files need conflict resolution" and must not be reset
+        # to "All synced" by on_sync_complete / on_watcher_status / on_online.
+        # Cleared only by a subsequent clean replay (Story 3-3, AC7).
+        self._conflict_pending_count: int = 0
         self._row_activated_connected: bool = False
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
 
@@ -287,9 +292,61 @@ class MainWindow(Adw.ApplicationWindow):
         """Return all pair rows and footer bar to synced state."""
         for row in self._sync_pair_rows.values():
             row.set_state("synced")
+        # Preserve the conflict-pending footer across online transitions
+        # (Story 3-3, AC7 regression guard).
+        if self._conflict_pending_count > 0:
+            return
         any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
         if not any_syncing:
             self.status_footer_bar.update_all_synced()
+
+    def on_queue_replay_complete(self, payload: dict[str, Any]) -> None:
+        """Handle engine's `queue_replay_complete` push event (Story 3-3 AC7).
+
+        Toast + optional conflict-pending footer per the AC7 decision table:
+
+            synced | skipped | toast           | footer                       |
+            >0     | 0       | "N files synced"| update_all_synced (green)    |
+            >0     | >0      | "N files synced"| set_conflict_pending (amber) |
+            0      | >0      | (none)          | set_conflict_pending (amber) |
+            0      | 0       | (none)          | (no change)                  |
+        """
+        # Defensive: payload may carry an explicit `null` for either field
+        # (empty JSON, bad engine build). `.get(key, 0)` returns None for an
+        # explicit null, and `None > 0` raises TypeError — guard with `or 0`.
+        synced = payload.get("synced") or 0
+        skipped = payload.get("skipped_conflicts") or 0
+
+        # Detect a clean-replay transition out of conflict-pending state. If
+        # we previously held a non-zero count and this replay reports zero
+        # conflicts, the footer's amber "N files need conflict resolution"
+        # label is stale — reset it so the user sees green immediately (AC7
+        # "Flag clearing" rule in Task 6.8).
+        had_pending_before = self._conflict_pending_count > 0
+
+        # Set the state flag FIRST so any concurrent sync_complete event that
+        # arrives after this handler runs respects the conflict-pending guard.
+        self._conflict_pending_count = skipped
+
+        if synced > 0:
+            text = "1 file synced" if synced == 1 else f"{synced} files synced"
+            toast = Adw.Toast.new(text)
+            toast.set_timeout(3)
+            self.toast_overlay.add_toast(toast)
+
+        if skipped > 0:
+            self.status_footer_bar.set_conflict_pending(skipped)
+        elif had_pending_before:
+            # Transitioning from conflict-pending to clean. The amber label
+            # would otherwise linger until the next sync_complete — reset the
+            # footer explicitly. (The regression guard in on_sync_complete no
+            # longer blocks now that _conflict_pending_count is 0.)
+            self.status_footer_bar.update_all_synced()
+        # Green "All synced" for the fresh-replay case (synced>0, skipped==0,
+        # no prior conflict-pending) is handled by the subsequent
+        # sync_complete event via its regression guard (see on_sync_complete
+        # below). AC7 row 1 resolves there — doing it here would flash before
+        # sync_complete.
 
     def on_sync_progress(self, payload: dict[str, Any]) -> None:
         """Update pair row and footer bar when sync is in progress."""
@@ -314,6 +371,16 @@ class MainWindow(Adw.ApplicationWindow):
         row = self._sync_pair_rows.get(pair_id)
         if row is not None and row.state != "offline":  # don't clobber offline state
             row.set_state("synced")
+        # Story 3-3 AC7 regression guard: a non-zero _conflict_pending_count
+        # means the footer is showing "N files need conflict resolution" from
+        # a recent queue_replay_complete and must not be reset here.
+        if self._conflict_pending_count > 0:
+            self.pair_detail_panel.on_sync_complete(payload)
+            if pair_id in self._pairs_data:
+                self._pairs_data[pair_id]["last_synced_text"] = _fmt_relative_time(
+                    payload.get("timestamp", "")
+                )
+            return
         if self._sync_pair_rows and all(r.state == "synced" for r in self._sync_pair_rows.values()):
             self.status_footer_bar.update_all_synced()
         self.pair_detail_panel.on_sync_complete(payload)
@@ -327,6 +394,10 @@ class MainWindow(Adw.ApplicationWindow):
         if status == "initializing":
             self.status_footer_bar.set_initialising()
         elif status == "ready":
+            # Story 3-3 AC7 regression guard: preserve the conflict-pending
+            # footer across watcher 'ready' transitions.
+            if self._conflict_pending_count > 0:
+                return
             any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
             any_offline = any(r.state == "offline" for r in self._sync_pair_rows.values())
             if not any_syncing and not any_offline:

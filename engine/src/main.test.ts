@@ -12,8 +12,16 @@ import {
   encodeMessage,
   writeMessage,
 } from "./ipc.js";
-import { handleCommand, _setDriveClientForTests, _setStateDbForTests, _setServerForTests } from "./main.js";
+import {
+  handleCommand,
+  _setDriveClientForTests,
+  _setStateDbForTests,
+  _setServerForTests,
+  createNetworkMonitorCallback,
+} from "./main.js";
 import { StateDb } from "./state-db.js";
+import { SyncEngine } from "./sync-engine.js";
+import { NetworkMonitor } from "./network-monitor.js";
 
 function tmpSocketPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "main-test-"));
@@ -587,5 +595,123 @@ describe("get_status command", () => {
     const pairs = response!.payload["pairs"] as Array<Record<string, unknown>>;
     expect(pairs.length).toBe(1);
     expect(pairs[0]!["queued_changes"]).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Story 3-3 — createNetworkMonitorCallback wiring tests
+// ---------------------------------------------------------------------------
+describe("createNetworkMonitorCallback (Story 3-3 wiring)", () => {
+  it("forwards every event to the server emitter", () => {
+    const emitted: IpcPushEvent[] = [];
+    const fakeEngine = { replayQueue: mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 })) } as unknown as SyncEngine;
+    const cb = createNetworkMonitorCallback(
+      (e) => emitted.push(e),
+      () => fakeEngine,
+    );
+    cb({ type: "offline", payload: {} });
+    cb({ type: "online", payload: {} });
+    expect(emitted.length).toBe(2);
+    expect(emitted[0]!.type).toBe("offline");
+    expect(emitted[1]!.type).toBe("online");
+  });
+
+  it("triggers engine.replayQueue() ONLY on 'online' events", () => {
+    const emitted: IpcPushEvent[] = [];
+    const replayFn = mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 }));
+    const fakeEngine = { replayQueue: replayFn } as unknown as SyncEngine;
+    const cb = createNetworkMonitorCallback(
+      (e) => emitted.push(e),
+      () => fakeEngine,
+    );
+    cb({ type: "offline", payload: {} });
+    expect(replayFn.mock.calls.length).toBe(0);
+    cb({ type: "online", payload: {} });
+    expect(replayFn.mock.calls.length).toBe(1);
+    cb({ type: "online", payload: {} });
+    expect(replayFn.mock.calls.length).toBe(2);
+  });
+
+  it("emits server event BEFORE invoking replayQueue (ordering guarantee)", () => {
+    const order: string[] = [];
+    const fakeEngine = {
+      replayQueue: mock(async () => {
+        order.push("replay");
+        return { synced: 0, skipped_conflicts: 0, failed: 0 };
+      }),
+    } as unknown as SyncEngine;
+    const cb = createNetworkMonitorCallback(
+      (_e) => order.push("emit"),
+      () => fakeEngine,
+    );
+    cb({ type: "online", payload: {} });
+    // replayQueue is called synchronously from cb but runs async; the first
+    // microtask of an async fn runs up to the first await, which here is the
+    // `return {...}`. Either way, emit happens first in the call sequence.
+    expect(order[0]).toBe("emit");
+    expect(order.includes("replay")).toBe(true);
+  });
+
+  it("first-check online (startup path) does NOT trigger replayQueue (Task 5.3 lock-in)", async () => {
+    // NetworkMonitor starts with isOnline=true (optimistic). The first
+    // runCheck() resolves the real state; if the machine is actually online
+    // the new value equals the old and no event fires — therefore replay must
+    // not run on startup, only on a real offline→online transition.
+    const emitted: IpcPushEvent[] = [];
+    const replayFn = mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 }));
+    const fakeEngine = { replayQueue: replayFn } as unknown as SyncEngine;
+    const cb = createNetworkMonitorCallback(
+      (e) => emitted.push(e),
+      () => fakeEngine,
+    );
+    // checkFn always resolves true → no transition from the optimistic
+    // default, so NetworkMonitor never emits `online`.
+    const monitor = new NetworkMonitor(cb, async () => true);
+    monitor.start();
+    // Wait a few microtasks for runCheck() to complete.
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    monitor.stop();
+
+    expect(emitted.length).toBe(0);
+    expect(replayFn.mock.calls.length).toBe(0);
+  });
+
+  it("emits over real IPC when wired to IpcServer+StateDb+SyncEngine", async () => {
+    // Integration-lite: construct a real IpcServer + StateDb + SyncEngine,
+    // wire the callback, trigger 'online' through the wrapped callback, and
+    // verify a `queue_replay_complete` event lands on the wire.
+    const socketPath = tmpSocketPath();
+    const server = new IpcServer(socketPath, async (command: IpcCommand) => ({
+      type: `${command.type}_result`,
+      id: command.id,
+      payload: {},
+    }));
+    const db = new StateDb(":memory:");
+    const engine = new SyncEngine(db, (e) => server.emitEvent(e));
+    // driveClient null → replayQueue returns zero counts but still emits
+    // queue_replay_complete (AC6).
+    engine.setDriveClient(null);
+
+    await server.start();
+    const client = await connectToSocket(socketPath);
+    const messagesPromise = readMessages(client, 300);
+
+    const cb = createNetworkMonitorCallback(
+      (e) => server.emitEvent(e),
+      () => engine,
+    );
+    cb({ type: "online", payload: {} });
+
+    const messages = await messagesPromise;
+    const types = messages.map((m) => (m as { type: string }).type);
+    // Expect online forwarded over the wire AND queue_replay_complete.
+    expect(types).toContain("online");
+    expect(types).toContain("queue_replay_complete");
+    // Ordering: online BEFORE queue_replay_complete on the wire.
+    expect(types.indexOf("online")).toBeLessThan(types.indexOf("queue_replay_complete"));
+
+    client.end();
+    server.close();
+    db.close();
   });
 });

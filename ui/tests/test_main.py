@@ -88,3 +88,42 @@ class TestOfflineOnlineHandlers:
         app = _make_app()
         app._window = None
         app._on_online({})  # must not raise
+
+
+class TestQueueReplayCompleteHandler:
+    """Story 3-3 — _on_queue_replay_complete forwards payload to window."""
+
+    def test_forwards_payload_to_window(self) -> None:
+        app = _make_app()
+        payload = {"synced": 3, "skipped_conflicts": 0}
+        app._on_queue_replay_complete({"payload": payload})
+        app._window.on_queue_replay_complete.assert_called_once_with(payload)
+
+    def test_forwards_conflict_payload_to_window(self) -> None:
+        app = _make_app()
+        payload = {"synced": 1, "skipped_conflicts": 2}
+        app._on_queue_replay_complete({"payload": payload})
+        app._window.on_queue_replay_complete.assert_called_once_with(payload)
+
+    def test_no_window_is_noop(self) -> None:
+        app = _make_app()
+        app._window = None
+        app._on_queue_replay_complete({"payload": {"synced": 1, "skipped_conflicts": 0}})
+
+    def test_non_dict_payload_is_ignored(self) -> None:
+        app = _make_app()
+        app._on_queue_replay_complete({"payload": None})
+        app._window.on_queue_replay_complete.assert_not_called()
+
+    def test_handler_registered_in_do_startup(self) -> None:
+        """Verify the handler key is 'queue_replay_complete' in do_startup wiring.
+
+        We can't invoke do_startup() (requires a real Adw.Application), but we can
+        inspect the source to ensure the registration line exists for the right key.
+        """
+        import protondrive.main as main_module
+        import inspect
+
+        source = inspect.getsource(main_module.Application.do_startup)
+        assert '"queue_replay_complete"' in source
+        assert "_on_queue_replay_complete" in source
