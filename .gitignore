@@ -38,3 +38,8 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 flatpak/repo/
 **/__pycache__/
+
+# GLib schema compiler output — regenerated from .gschema.xml by meson or
+# glib-compile-schemas on each build; never commit.
+gschemas.compiled
+builddir-flatpak/

@@ -1,172 +1,154 @@
 # ProtonDrive Linux Client — Development Guide
 
-**Date:** 2026-04-05
+**Last Updated:** 2026-04-16
+
+## Architecture at a glance
+
+Two-process desktop application:
+
+- **UI Process** — Python 3.12 + GTK4 + Libadwaita 1.8, Blueprint `.blp` files, Meson build
+- **Sync Engine** — TypeScript + Bun 1.3.11, compiled to a self-contained binary via `bun build --compile`
+- **IPC** — Unix domain socket, 4-byte big-endian length-prefixed JSON framing
+
+See `_bmad-output/project-context.md` for the authoritative rule set (89 rules, agent-critical).
 
 ## Prerequisites
 
-- [Bun](https://bun.sh) ≥ 1.1 (tested with 1.3.11 in CI)
-- Linux (the keychain credential store requires an OS keyring — GNOME Keyring, KWallet, or `secret-service` compatible)
-- A Proton account (for integration tests only)
+| Tool | Version | Install |
+|---|---|---|
+| Python | 3.12 (pinned by GNOME 50 runtime) | system |
+| Bun | 1.3.11 | `curl -fsSL https://bun.sh/install \| bash -s "bun-v1.3.11"` |
+| Meson | ≥1.0 | `sudo dnf install meson` (Fedora) |
+| Blueprint compiler | latest | `sudo dnf install blueprint-compiler` (Fedora) |
+| GNOME Platform/SDK | 50 | `flatpak install --user flathub org.gnome.Platform//50 org.gnome.Sdk//50` |
+| flatpak-builder | any | `sudo dnf install flatpak-builder` (Fedora, packaging only) |
 
-## Installation
+## Initial setup
 
 ```bash
-# Clone the repository
+# Clone and install engine deps
 rtk git clone <repo-url>
 cd ProtonDrive-LinuxClient
+cd engine && rtk bun install && cd ..
 
-# Install dependencies
-rtk bun install
+# Configure the UI build
+meson setup ui/builddir ui
 ```
 
-## Project Structure
+## Local dev — two-terminal launch
 
-See [source-tree-analysis.md](./source-tree-analysis.md) for a fully annotated directory tree.
-
-## Common Development Tasks
-
-### Type-check without building
+Run the engine and UI separately during development so engine stdout is visible.
 
 ```bash
-rtk bunx tsc --noEmit
+# Terminal A — engine
+cd engine
+rtk bun run src/main.ts
+
+# Terminal B — UI
+cd ui
+meson compile -C builddir
+python3 -m protondrive
 ```
 
-### Run unit tests
+The UI auto-discovers `bun` via `GLib.find_program_in_path()` when spawning the engine itself (production path). In the two-terminal flow the UI connects to the already-running engine over its Unix socket.
+
+## Testing
+
+### Engine unit tests
 
 ```bash
-rtk bun test
+cd engine
+rtk bun test                # full unit suite
+rtk bun test src/ipc.test.ts   # single file
+rtk bunx tsc --noEmit          # type-check
 ```
 
-Tests matching `src/**/*.test.ts` run automatically. No setup required.
+- `bun:test` is Jest-compatible — use `mock()` factory (not `mock.fn()`)
+- Mock at the `DriveClient` wrapper boundary — never mock `@protontech/drive-sdk` directly
 
-### Build the binary
+### Engine integration tests (live Proton API)
 
-```bash
-rtk bun build --compile src/cli.ts --outfile dist/protondrive
-```
-
-### Run the CLI locally
+Integration tests live in `engine/src/__integration__/` and require a pre-authenticated session token. Proton's CAPTCHA blocks unattended auth, so the test token is obtained via a manual flow and expires without warning.
 
 ```bash
-./dist/protondrive --help
-./dist/protondrive --version
-./dist/protondrive auth login
-```
-
-### Run end-to-end tests
-
-Requires the binary to be built first:
-
-```bash
-rtk bun build --compile src/cli.ts --outfile dist/protondrive
-rtk bun test src/__e2e__/
-```
-
-### Run integration tests
-
-Requires real Proton account credentials (configure via environment or config file):
-
-```bash
+export PROTON_TEST_TOKEN=...     # session token
+export PROTON_TEST_FOLDER=...    # sandbox folder id
+cd engine
 rtk bun test src/__integration__/
 ```
 
-> **Warning:** Integration tests make live API calls. Do not run against a production account with important data.
+If tests start failing with 401 errors, re-run the manual auth flow.
 
-## TypeScript Rules (Agent-Critical)
+### UI tests (pytest via Meson)
 
-These strict flags are active and affect how you write code:
+```bash
+cd ui
+meson test -C builddir           # preferred — Meson compiles .blp → .ui, schemas, GResource first
+```
+
+> **Important:** Raw `python3 -m pytest` skips Meson's preprocessing steps and breaks any test touching `@Gtk.Template` or `Gio.Settings`. Always route through `meson test`.
+
+Widget tests need an X server; set `CI_SKIP_WIDGET_TESTS=1` to skip them in environments without Xvfb.
+
+## Building the Flatpak
+
+App ID: `io.github.ronki2304.ProtonDriveLinuxClient` (permanent — changing it breaks installed instances)
+
+```bash
+rtk flatpak-builder --user --install --force-clean \
+  builddir-flatpak \
+  flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml
+
+rtk flatpak run io.github.ronki2304.ProtonDriveLinuxClient
+```
+
+The manifest pulls Bun 1.3.11 (aarch64 or x86_64) as a source module and uses `bun build --compile` to produce a self-contained engine binary at `/app/lib/protondrive-engine/dist/engine` — no Bun runtime is shipped.
+
+Supported distros (validated before each release): Fedora 43, Ubuntu 24/25, Bazzite, Arch.
+
+## Key language-specific rules (agent-critical)
+
+### TypeScript (engine)
 
 | Flag | Effect |
-|------|--------|
-| `verbatimModuleSyntax` | Type-only imports **must** use `import type { ... }` |
-| `noUncheckedIndexedAccess` | `arr[0]` returns `T \| undefined` — use `!` only after bounds check |
+|---|---|
+| `verbatimModuleSyntax` | Type-only imports MUST use `import type { ... }` |
+| `noUncheckedIndexedAccess` | `arr[0]` returns `T \| undefined` — use `!` only after a bounds check |
 | `noImplicitOverride` | Class method overrides require explicit `override` keyword |
 
-**Local imports use `.js` extension:**
+- Local imports use `.js` extension: `import { foo } from "./bar.js"` (not `.ts`)
+- JSON imports: `import pkg from "../package.json" with { type: "json" }`
+- Throw typed `EngineError` subclasses only (`SyncError`, `NetworkError`, `IpcError`, `ConfigError`) — never plain `new Error(...)`
+- Engine never writes to stdout/stderr in production (corrupts IPC framing); all output via IPC push events or `PROTONDRIVE_DEBUG=1` log file
 
-```ts
-// Correct
-import { foo } from "./bar.js";
+### Python (UI)
 
-// Wrong — will not compile
-import { foo } from "./bar.ts";
-```
+- Type hints on all public functions, including `__init__` and GTK signal handlers; `from __future__ import annotations` for forward refs
+- No `lambda` in `signal.connect(...)` — causes GObject reference cycles; use bound method references
+- All widget structure in Blueprint `.blp` files — never construct widget trees in Python
+- Blueprint widget IDs are `kebab-case`; GTK auto-maps them to `snake_case` for `Gtk.Template.Child()`
 
-**Type-only imports:**
+## Paths (XDG with Flatpak fallbacks)
 
-```ts
-// Correct
-import type { MyType } from "./types.js";
+| Data | Path |
+|---|---|
+| Config | `$XDG_CONFIG_HOME/protondrive/config.yaml` |
+| State DB | `$XDG_DATA_HOME/protondrive/state.db` (SQLite, WAL mode) |
+| Credentials | libsecret Secret portal (never on disk plaintext) |
+| Window state | `$XDG_STATE_HOME/protondrive/` |
+| IPC socket | `$XDG_RUNTIME_DIR/io.github.ronki2304.ProtonDriveLinuxClient/sync-engine.sock` |
+| Engine logs (debug only) | `$XDG_CACHE_HOME/protondrive/engine.log` |
 
-// Wrong — verbatimModuleSyntax violation
-import { MyType } from "./types.js";
-```
+Always resolve via env var with fallback — never hardcode `~/.config`. Flatpak sandbox paths differ from native; test explicitly in both.
 
-**JSON imports require type assertion:**
+## CI / CD
 
-```ts
-import pkg from "../package.json" with { type: "json" };
-```
+- `.github/workflows/ci.yml` — PR gate: `meson test` (UI) + `rtk bun test` (engine unit). Both must pass.
+- `.github/workflows/release.yml` — on `v*` tag: Flatpak build + GitHub Release.
+- No automated integration tests in CI (Proton CAPTCHA blocks unattended auth).
 
-## Testing Guidelines
+## Git conventions
 
-### Unit tests
-
-- Use `bun test` with `import { test, expect } from "bun:test"`
-- Mock at the `CredentialStore` interface level (not `@napi-rs/keyring`)
-- Mock at the `DriveClient` class level (not `@protontech/drive-sdk` package)
-- Do not place `*.integration.test.ts` files outside `src/__integration__/` — they will run with `bun test`
-
-### Bun built-in APIs
-
-Prefer Bun native APIs over npm equivalents:
-
-| Use | Instead of |
-|-----|-----------|
-| `bun:sqlite` | `better-sqlite3` |
-| `Bun.file()` | `fs.readFile` / `fs.writeFile` |
-| `Bun.$\`cmd\`` | `execa` |
-| `Bun.serve()` | `express` (not applicable here) |
-
-## Dependency Notes
-
-### `@napi-rs/keyring`
-
-- Bundles cleanly into Bun compiled binary (validated with Bun 1.3.11)
-- Requires OS keyring at **runtime** — mock at `CredentialStore` interface in tests
-
-### `openpgp` v6
-
-- Always import from `openpgp` (full bundle)
-- **Never** import from `openpgp/lightweight` — causes bundler issues
-- v6 uses `Uint8Array<ArrayBufferLike>`; the SDK expects `Uint8Array<ArrayBuffer>` — type casts happen only in `src/sdk/openpgp-proxy.ts`
-
-### `bun:sqlite`
-
-- Rows return as `unknown` — always cast to a typed interface after fetch
-- Built-in; no npm package needed
-
-## CI Pipeline
-
-Pull requests trigger `.github/workflows/ci.yml`:
-
-1. Checkout
-2. Install Bun 1.3.11 (`oven-sh/setup-bun@v2`)
-3. `rtk bun install`
-4. `rtk bunx tsc --noEmit`
-5. `rtk bun test`
-
-All steps must pass for a PR to merge.
-
-## Building for Distribution
-
-| Target | Command / Notes |
-|--------|----------------|
-| Binary | `rtk bun build --compile src/cli.ts --outfile dist/protondrive` |
-| AppImage | See `packaging/appimage/` |
-| AUR (Arch) | See `packaging/aur/` (PKGBUILD) |
-| Nix | `nix build` using `flake.nix` |
-
----
-
-_Generated using BMAD Method `document-project` workflow_
+- Solo repo — commit directly to `main`, no feature branches.
+- Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:` — imperative mood, scope optional.
+- `dist/` and `builddir/` are gitignored.
