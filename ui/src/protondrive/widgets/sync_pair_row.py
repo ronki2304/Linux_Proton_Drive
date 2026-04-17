@@ -49,22 +49,43 @@ class SyncPairRow(Gtk.ListBoxRow):
         """Return current sync state ('synced', 'syncing', or 'offline')."""
         return self._state
 
-    def set_state(self, state: str, last_synced_text: str | None = None) -> None:
-        """Update display state: 'synced', 'syncing', or 'offline'."""
+    def set_state(
+        self,
+        state: str,
+        last_synced_text: str | None = None,
+        conflict_count: int = 1,
+    ) -> None:
+        """Update display state: 'synced', 'syncing', 'offline', or 'conflict'."""
         self._state = state
         if state == "syncing":
             self.status_label.set_text("Syncing…")
             self.status_dot.add_css_class("sync-dot-syncing")
             self.status_dot.remove_css_class("sync-dot-offline")
+            self.status_dot.remove_css_class("sync-dot-conflict")
         elif state == "offline":
             text = f"Offline · {last_synced_text}" if last_synced_text else "Offline · never synced"
             self.status_label.set_text(text)
             self.status_dot.add_css_class("sync-dot-offline")
             self.status_dot.remove_css_class("sync-dot-syncing")
+            self.status_dot.remove_css_class("sync-dot-conflict")
+        elif state == "conflict":
+            label = "1 conflict" if conflict_count == 1 else f"{conflict_count} conflicts"
+            self.status_label.set_text(label)
+            self.status_dot.add_css_class("sync-dot-conflict")
+            self.status_dot.remove_css_class("sync-dot-syncing")
+            self.status_dot.remove_css_class("sync-dot-offline")
+            # Accessible label uses singular form per AC2.
+            self.update_property(
+                [Gtk.AccessibleProperty.LABEL],
+                [f"{self._pair_name} \u2014 1 conflict"],
+            )
+            self.status_dot.queue_draw()
+            return  # early return: skip generic _set_accessible_label below
         else:
             self.status_label.set_text("")
             self.status_dot.remove_css_class("sync-dot-syncing")
             self.status_dot.remove_css_class("sync-dot-offline")
+            self.status_dot.remove_css_class("sync-dot-conflict")
         self.status_dot.queue_draw()
         self._set_accessible_label(state)
 
@@ -74,6 +95,8 @@ class SyncPairRow(Gtk.ListBoxRow):
             cr.set_source_rgb(0.11, 0.63, 0.63)  # teal
         elif self._state == "offline":
             cr.set_source_rgb(0.60, 0.60, 0.60)  # grey
+        elif self._state == "conflict":
+            cr.set_source_rgb(0.95, 0.62, 0.14)  # amber — matches StatusFooterBar conflict colour
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2

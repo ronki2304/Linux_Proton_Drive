@@ -268,6 +268,41 @@ class TestStatusFooterBarSetRateLimited:
         bar.footer_label.set_text.assert_called_with("Sync paused \u2014 resuming shortly")
 
 
+class TestStatusFooterBarSetConflicts:
+    """Story 4-4 — set_conflicts() real-time conflict indicator."""
+
+    def test_label_singular(self):
+        bar = _make_bar()
+        bar.set_conflicts(1)
+        bar.footer_label.set_text.assert_called_with("1 conflict needs attention")
+
+    def test_label_plural(self):
+        bar = _make_bar()
+        bar.set_conflicts(3)
+        bar.footer_label.set_text.assert_called_with("3 conflicts need attention")
+
+    def test_dot_state_becomes_conflict(self):
+        bar = _make_bar()
+        bar.set_conflicts(2)
+        assert bar._dot_state == "conflict"
+
+    def test_zero_count_is_no_op(self):
+        bar = _make_bar()
+        bar.set_conflicts(0)
+        bar.footer_label.set_text.assert_not_called()
+
+    def test_accessible_label_set(self):
+        bar = _make_bar()
+        bar.set_conflicts(2)
+        _, values = bar._accessible_label_args
+        assert "conflicts need attention" in values[0]
+
+    def test_announce_called(self):
+        bar = _make_bar()
+        bar.set_conflicts(1)
+        bar.announce.assert_called_once()
+
+
 class TestStatusFooterBarSetInitialising:
     def test_label_text_shows_initialising(self):
         bar = _make_bar()

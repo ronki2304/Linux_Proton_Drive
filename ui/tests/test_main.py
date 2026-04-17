@@ -145,3 +145,32 @@ class TestRateLimitedHandler:
         payload = {"resume_in_seconds": 10}
         app._on_rate_limited(payload)
         app._window.on_rate_limited.assert_called_once_with(payload)
+
+
+class TestConflictDetectedHandler:
+    """Story 4-4 — _on_conflict_detected forwards payload to window."""
+
+    def test_forwards_payload_to_window(self) -> None:
+        app = _make_app()
+        payload = {"pair_id": "p1", "conflict_copy_path": "/tmp/notes.md.conflict-2026-04-17"}
+        app._on_conflict_detected({"payload": payload})
+        app._window.on_conflict_detected.assert_called_once_with(payload)
+
+    def test_no_window_is_noop(self) -> None:
+        app = _make_app()
+        app._window = None
+        app._on_conflict_detected({"payload": {"pair_id": "p1", "conflict_copy_path": "/tmp/x"}})
+        # must not raise
+
+    def test_non_dict_payload_is_ignored(self) -> None:
+        app = _make_app()
+        app._on_conflict_detected({"payload": None})
+        app._window.on_conflict_detected.assert_not_called()
+
+    def test_handler_registered_in_do_startup(self) -> None:
+        import protondrive.main as main_module
+        import inspect
+
+        source = inspect.getsource(main_module.Application.do_startup)
+        assert '"conflict_detected"' in source
+        assert "_on_conflict_detected" in source

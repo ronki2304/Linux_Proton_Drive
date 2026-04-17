@@ -438,6 +438,28 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 - **`hashLocalFile` partial-read race with active writer** — `createReadStream` on a file being actively written may read partial content without error, producing a hash of incomplete data. Conservative path (null hash → isConflict) protects against false "unchanged" but not false "conflict". `engine/src/sync-engine.ts`
 - **`stat(destPath)` after collision download may record coarse mtime** — on ext4/btrfs with 1-second mtime resolution, the mtime stored in `upsertSyncState` after a collision download may not round-trip correctly, causing spurious `localChanged` on next cycle. Pre-existing pattern identical to the regular download path. `engine/src/sync-engine.ts`
 
+## Deferred from: code review of 4-4-in-app-conflict-notification-and-pair-status (2026-04-17)
+
+- Upload `commitUpload` records `local_mtime` as `remote_mtime` — pre-existing; if server assigns a different mtime, hash-verified record may trigger spurious conflict on next cycle [`engine/src/sync-engine.ts`]
+- `newFileCollisionItems` loop uses `rename()` directly; raises EXDEV on cross-filesystem pairs — pre-existing; error caught and `sync_file_error` emitted, pair re-attempts next cycle [`engine/src/sync-engine.ts`]
+- `upsertSyncState` not atomic with preceding `hashLocalFile` — pre-existing pattern; crash between hash compute and DB write causes re-sync on restart, not data loss [`engine/src/sync-engine.ts`]
+- User-moved conflict copy treated as resolved by `os.path.exists` check — design choice per Dev Notes §4; spec intent is "user deletes"; moving is an edge case with no spec guidance [`ui/src/protondrive/window.py`]
+- `_get_pair_name` returns `pair_id` as fallback for root-path local folders (`/`) — pre-existing minor edge case; `os.path.basename("") == ""` → falls back to `pair_id` [`ui/src/protondrive/window.py`]
+
+## Deferred from: code review of 4-3-conflict-copy-creation (2026-04-17)
+
+- `stat()`/`hashLocalFile()` failure after successful download skips `upsertSyncState` — file is re-synced on next cycle; pre-existing pattern in `newFileCollisionItems` loop [`engine/src/sync-engine.ts`]
+- `hashLocalFile()` doesn't distinguish ENOENT vs EACCES on read failure — pre-existing, not introduced by this story [`engine/src/sync-engine.ts`]
+- Same-day conflict copy overwrite — documented in Dev Notes §14 as known MVP limitation; `rename()` atomically replaces earlier conflict copy if two conflicts occur same calendar day [`engine/src/sync-engine.ts`]
+- Error handling style differs between `conflictItems` and `newFileCollisionItems` loops — different design intent (copy+download vs rename+download); not a bug [`engine/src/sync-engine.ts`]
+- Date formatting duplicated in two loop sites — minor code smell, extract to helper if both sites diverge [`engine/src/sync-engine.ts`]
+- Failure test doesn't verify tmp file cleanup — directory EACCES prevents `copyFile` from creating `tmpPath` at all; nothing to clean up in the chmod test scenario [`engine/src/sync-engine.test.ts`]
+- Local file deleted between conflict detection and `copyFile` — ENOENT caught, `sync_file_error` emitted, `continue`; correct per AC5 [`engine/src/sync-engine.ts`]
+- `conflict_detected` emitted before `downloadOne`; no rollback event if download subsequently fails — design choice per spec; conflict copy preserved so user data is safe; UI inconsistency is minor [`engine/src/sync-engine.ts`]
+- `copyFile` fails mid-write, `unlink(tmpPath)` silently fails — best-effort cleanup; zombie tmp file leaves no DB reference and is bounded in size [`engine/src/sync-engine.ts`]
+- `Date.now()` collision producing identical `tmpPath` names under concurrent sync cycles — blocked by `isDraining` guard; theoretical only [`engine/src/sync-engine.ts`]
+- AC6 download-failure-after-copy path has no explicit test — not required by AC9; conflict copy preserves user data, sync_file_error emitted; low test gap [`engine/src/sync-engine.test.ts`]
+
 ## Deferred from: code review of 4-0-pre-epic-4-debt-cleanup (2026-04-17)
 
 - **No test covering non-None captured credentials** — `test_auth_completion.py` assertions for `send_token_refresh` only verify the `None` case for `login_password` and `captured_salts`. A bug that ignores actual credential values (passing empty string or wrong structure) would go undetected. Add a test variant with real non-None values once credential forwarding is exercised.

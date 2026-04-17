@@ -7,7 +7,7 @@ through the widget's internal fields.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from protondrive.widgets.sync_pair_row import SyncPairRow
 
@@ -128,7 +128,7 @@ class TestSyncPairRowOfflineState:
         row = _make_row()
         row._state = "syncing"
         row.set_state("offline")
-        row.status_dot.remove_css_class.assert_called_with("sync-dot-syncing")
+        row.status_dot.remove_css_class.assert_any_call("sync-dot-syncing")
 
     def test_synced_removes_offline_css_class(self):
         row = _make_row()
@@ -152,6 +152,62 @@ class TestSyncPairRowOfflineState:
         row = _make_row()
         row.set_state("offline")
         assert row.state == "offline"
+
+
+class TestSyncPairRowConflictState:
+    def test_set_state_conflict_sets_internal_state(self):
+        row = _make_row()
+        row.set_state("conflict")
+        assert row._state == "conflict"
+
+    def test_set_state_conflict_label_singular(self):
+        row = _make_row()
+        row.set_state("conflict", conflict_count=1)
+        row.status_label.set_text.assert_called_with("1 conflict")
+
+    def test_set_state_conflict_label_plural(self):
+        row = _make_row()
+        row.set_state("conflict", conflict_count=3)
+        row.status_label.set_text.assert_called_with("3 conflicts")
+
+    def test_set_state_conflict_adds_css_class(self):
+        row = _make_row()
+        row.set_state("conflict")
+        row.status_dot.add_css_class.assert_called_with("sync-dot-conflict")
+
+    def test_set_state_conflict_removes_other_css_classes(self):
+        row = _make_row()
+        row.set_state("conflict")
+        removed = [c.args[0] for c in row.status_dot.remove_css_class.call_args_list]
+        assert "sync-dot-syncing" in removed
+        assert "sync-dot-offline" in removed
+
+    def test_set_state_conflict_calls_queue_draw(self):
+        row = _make_row()
+        row.set_state("conflict")
+        row.status_dot.queue_draw.assert_called()
+
+    def test_set_state_conflict_accessible_label_singular(self):
+        row = _make_row(pair_name="Documents")
+        row.set_state("conflict", conflict_count=1)
+        _, values = row._accessible_label_args
+        assert values == ["Documents \u2014 1 conflict"]
+
+    def test_set_state_conflict_accessible_label_always_singular(self):
+        row = _make_row(pair_name="Documents")
+        row.set_state("conflict", conflict_count=5)
+        _, values = row._accessible_label_args
+        # AC2: accessible label is always singular
+        assert values == ["Documents \u2014 1 conflict"]
+
+
+class TestSyncPairRowDrawDot:
+    def test_conflict_colour_is_amber(self):
+        row = _make_row()
+        row._state = "conflict"
+        cr = MagicMock()
+        row._draw_dot(None, cr, 8, 8)
+        cr.set_source_rgb.assert_called_once_with(0.95, 0.62, 0.14)
 
 
 class TestSyncPairRowProperty:

@@ -29,60 +29,71 @@ template $ProtonDrivePairDetailPanel: Adw.Bin {
 
     Gtk.StackPage {
       name: "detail";
-      child: Gtk.ScrolledWindow {
-        propagate-natural-height: true;
-        child: Gtk.Box detail_box {
-          orientation: vertical;
-          spacing: 0;
-          margin-start: 24;
-          margin-end: 24;
-          margin-top: 16;
-          margin-bottom: 16;
+      child: Gtk.Box {
+        orientation: vertical;
 
-          Gtk.Label pair_name_heading {
-            halign: start;
-            styles ["title-3"]
-          }
+        Adw.Banner conflict_banner {
+          button-label: _("Dismiss");
+          revealed: false;
+          styles ["conflict-banner"]
+        }
 
-          Adw.PreferencesGroup paths_group {
-            margin-top: 16;
-
-            Adw.ActionRow local_path_row {
-              title: "Local folder";
-              subtitle: "";
-            }
-
-            Adw.ActionRow remote_path_row {
-              title: "Remote folder";
-              subtitle: "";
-            }
-          }
-
-          Adw.PreferencesGroup sync_status_group {
-            margin-top: 16;
-
-            Adw.ActionRow last_synced_row {
-              title: "Last synced";
-              subtitle: "Never";
-            }
-
-            Adw.ActionRow file_count_row {
-              title: "Files";
-              subtitle: "--";
-            }
-
-            Adw.ActionRow total_size_row {
-              title: "Total size";
-              subtitle: "--";
-            }
-          }
-
-          // progress_slot: SyncProgressCard is appended here programmatically
-          Gtk.Box progress_slot {
+        Gtk.ScrolledWindow {
+          propagate-natural-height: true;
+          vexpand: true;
+          child: Gtk.Box detail_box {
             orientation: vertical;
-            margin-top: 8;
-          }
-        };
+            spacing: 0;
+            margin-start: 24;
+            margin-end: 24;
+            margin-top: 16;
+            margin-bottom: 16;
+
+            Gtk.Label pair_name_heading {
+              halign: start;
+              styles ["title-3"]
+            }
+
+            Adw.PreferencesGroup paths_group {
+              margin-top: 16;
+
+              Adw.ActionRow local_path_row {
+                title: "Local folder";
+                subtitle: "";
+              }
+
+              Adw.ActionRow remote_path_row {
+                title: "Remote folder";
+                subtitle: "";
+              }
+            }
+
+            Adw.PreferencesGroup sync_status_group {
+              margin-top: 16;
+
+              Adw.ActionRow last_synced_row {
+                title: "Last synced";
+                subtitle: "Never";
+              }
+
+              Adw.ActionRow file_count_row {
+                title: "Files";
+                subtitle: "--";
+              }
+
+              Adw.ActionRow total_size_row {
+                title: "Total size";
+                subtitle: "--";
+              }
+            }
+
+            // progress_slot: SyncProgressCard is appended here programmatically
+            Gtk.Box progress_slot {
+              orientation: vertical;
+              margin-top: 8;
+            }
+          };
+        }
       };
     }
   };

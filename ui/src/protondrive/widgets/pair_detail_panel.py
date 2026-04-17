@@ -39,6 +39,7 @@ class PairDetailPanel(Adw.Bin):
     }
 
     detail_stack: Gtk.Stack = Gtk.Template.Child()
+    conflict_banner: Adw.Banner = Gtk.Template.Child()
     setup_btn: Gtk.Button = Gtk.Template.Child()
     pair_name_heading: Gtk.Label = Gtk.Template.Child()
     local_path_row: Adw.ActionRow = Gtk.Template.Child()
@@ -54,6 +55,31 @@ class PairDetailPanel(Adw.Bin):
         self._sync_complete_timer: int | None = None
         self._progress_card: SyncProgressCard | None = None
         self.setup_btn.connect("clicked", lambda _: self.emit("setup-requested"))
+        self.conflict_banner.connect("button-clicked", self._on_conflict_banner_dismissed)
+
+    def _on_conflict_banner_dismissed(self, _banner: Adw.Banner) -> None:
+        """Hide the conflict banner when user clicks Dismiss."""
+        self.conflict_banner.set_revealed(False)
+
+    def set_conflict_state(self, pair_id: str, count: int, pair_name: str) -> None:
+        """Update conflict banner — only if pair_id matches what is currently shown.
+
+        Called from window.py on conflict_detected, sync_complete, and row_activated.
+        The pair_id guard prevents a conflict on pair B from updating the banner
+        while pair A is displayed in the detail pane.
+        """
+        if self._current_pair_id != pair_id:
+            return
+        if count > 0:
+            text = (
+                f"1 conflict in {pair_name}"
+                if count == 1
+                else f"{count} conflicts in {pair_name}"
+            )
+            self.conflict_banner.set_title(text)
+            self.conflict_banner.set_revealed(True)
+        else:
+            self.conflict_banner.set_revealed(False)
 
     def show_no_pairs(self) -> None:
         """Show the 'no pairs' empty state."""
@@ -80,6 +106,7 @@ class PairDetailPanel(Adw.Bin):
         self.last_synced_row.set_subtitle(pair_data.get("last_synced_text", "Never"))
         self.file_count_row.set_subtitle(pair_data.get("file_count_text", "--"))
         self.total_size_row.set_subtitle(pair_data.get("total_size_text", "--"))
+        self.conflict_banner.set_revealed(False)
         self.detail_stack.set_visible_child_name("detail")
 
     def on_sync_progress(self, payload: dict) -> None:

@@ -209,7 +209,7 @@ describe("SyncEngine — delta detection (AC1)", () => {
     expect(downloadFn.mock.calls.length).toBe(0);
   });
 
-  it("both changed (local AND remote) → skip (no upload, no download)", async () => {
+  it("both changed (local AND remote) → conflict copy created, remote downloaded (no upload)", async () => {
     writeLocalFile("file.txt");
 
     // Use a timestamp guaranteed to be older than any file written during this test
@@ -223,20 +223,33 @@ describe("SyncEngine — delta detection (AC1)", () => {
     });
 
     const newRemoteMtime = "2026-04-10T11:00:00.000Z";
+    const downloadFn = mock(async (_uid: string, target: WritableStream<Uint8Array>) => {
+      const writer = target.getWriter();
+      await writer.write(new Uint8Array([1, 2, 3]));
+      await writer.close();
+    });
     mockClient = makeMockClient({
       listRemoteFiles: mock(async () => [
         makeRemoteFile("file.txt", newRemoteMtime), // remote also changed
       ]),
+      downloadFile: downloadFn,
     });
     engine = new SyncEngine(db, (e) => emittedEvents.push(e));
     engine.setDriveClient(mockClient);
 
     await engine.startSyncAll();
 
+    // No upload — conflict, not a local-only change
     const uploadFn = mockClient.uploadFile as ReturnType<typeof mock>;
-    const downloadFn = mockClient.downloadFile as ReturnType<typeof mock>;
     expect(uploadFn.mock.calls.length).toBe(0);
-    expect(downloadFn.mock.calls.length).toBe(0);
+
+    // Remote version downloaded (Story 4-3 behavior)
+    expect(downloadFn.mock.calls.length).toBe(1);
+
+    // Conflict copy created
+    const d = new Date();
+    const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    expect(existsSync(join(tmpDir, `file.txt.conflict-${localDate}`))).toBe(true);
   });
 
   it("new local file only → upload", async () => {
@@ -1621,7 +1634,7 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
     mock.restore();
   });
 
-  it("both mtimes changed → conflict WorkItem logged, no overwrite", async () => {
+  it("both mtimes changed → conflict copy created, conflict_detected emitted, remote downloaded", async () => {
     // Write local file then seed sync_state with an old mtime (well before file was written)
     writeLocalFile("conflict.txt", "local content");
 
@@ -1637,8 +1650,12 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
       content_hash: null,
     });
 
-    const uploadFn   = mock(async () => ({ node_uid: "uid", revision_uid: "rev" }));
-    const downloadFn = mock(async () => {});
+    const uploadFn = mock(async () => ({ node_uid: "uid", revision_uid: "rev" }));
+    const downloadFn = mock(async (_uid: string, target: WritableStream<Uint8Array>) => {
+      const writer = target.getWriter();
+      await writer.write(new Uint8Array([10, 20, 30]));
+      await writer.close();
+    });
 
     mockClient = makeMockClient({
       listRemoteFiles: mock(async () => [
@@ -1653,12 +1670,81 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
 
     await engine.startSyncAll();
 
-    // Neither upload nor download should have been called
-    expect(uploadFn.mock.calls.length).toBe(0);
-    expect(downloadFn.mock.calls.length).toBe(0);
+    // Conflict copy must exist (preserving local "local content")
+    const d = new Date();
+    const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    expect(existsSync(join(tmpDir, `conflict.txt.conflict-${localDate}`))).toBe(true);
 
-    // Local file must be untouched
-    expect(readFileSync(join(tmpDir, "conflict.txt"), "utf8")).toBe("local content");
+    // conflict_detected event emitted
+    const conflictEvent = emittedEvents.find((e) => e.type === "conflict_detected");
+    expect(conflictEvent).toBeTruthy();
+    expect((conflictEvent!.payload as Record<string, unknown>).local_path).toBe(join(tmpDir, "conflict.txt"));
+    expect((conflictEvent!.payload as Record<string, unknown>).conflict_copy_path).toBe(join(tmpDir, `conflict.txt.conflict-${localDate}`));
+
+    // Remote version was downloaded to original path
+    expect(downloadFn.mock.calls.length).toBe(1);
+
+    // Upload NOT called (conflict, not an upload)
+    expect(uploadFn.mock.calls.length).toBe(0);
+
+    // sync_state updated (remote version now tracked)
+    const state = db.getSyncState(PAIR_ID, "conflict.txt");
+    expect(state).toBeTruthy();
+    expect(state!.remote_mtime).toBe(newRemoteMtime);
+    expect(state!.content_hash).not.toBeNull(); // hash populated by Story 4-3
+  });
+
+  it("conflict copy creation fails → sync_file_error emitted, no download", async () => {
+    writeLocalFile("conflict.txt", "local content");
+
+    const storedLocalMtime  = "2020-01-01T00:00:00.000Z";
+    const storedRemoteMtime = "2020-01-01T00:00:00.000Z";
+    const newRemoteMtime    = "2026-04-10T12:00:00.000Z";
+
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "conflict.txt",
+      local_mtime: storedLocalMtime,
+      remote_mtime: storedRemoteMtime,
+      content_hash: null,
+    });
+
+    const downloadFn = mock(async (_uid: string, target: WritableStream<Uint8Array>) => {
+      const writer = target.getWriter();
+      await writer.write(new Uint8Array([10, 20, 30]));
+      await writer.close();
+    });
+
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("conflict.txt", newRemoteMtime),
+      ]),
+      downloadFile: downloadFn,
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    // Make tmpDir non-writable so copyFile to tmp fails
+    chmodSync(tmpDir, 0o555);
+    try {
+      await engine.startSyncAll();
+    } finally {
+      chmodSync(tmpDir, 0o755);
+    }
+
+    // sync_file_error emitted
+    const errorEvent = emittedEvents.find((e) => e.type === "error");
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent!.payload as Record<string, unknown>).code).toBe("sync_file_error");
+    expect(typeof (errorEvent!.payload as Record<string, unknown>).message).toBe("string");
+    expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+
+    // conflict_detected NOT emitted
+    const conflictEvent = emittedEvents.find((e) => e.type === "conflict_detected");
+    expect(conflictEvent).toBeUndefined();
+
+    // downloadFile NOT called
+    expect(downloadFn.mock.calls.length).toBe(0);
   });
 
   it("same-second + same hash → no conflict, file treated as unchanged", async () => {

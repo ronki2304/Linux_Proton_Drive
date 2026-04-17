@@ -19,6 +19,7 @@ def _make_panel() -> PairDetailPanel:
     panel._sync_complete_timer = None
     panel._progress_card = None
     panel.detail_stack = MagicMock()
+    panel.conflict_banner = MagicMock()
     panel.setup_btn = MagicMock()
     panel.pair_name_heading = MagicMock()
     panel.local_path_row = MagicMock()
@@ -299,6 +300,53 @@ class TestOnSyncCompleteTimeout:
         panel._on_sync_complete_timeout()
         assert panel._progress_card is None
         panel.progress_slot.remove.assert_called_once_with(mock_card)
+
+
+# ---------------------------------------------------------------------------
+# PairDetailPanel conflict banner (Story 4-4)
+# ---------------------------------------------------------------------------
+
+class TestPairDetailPanelConflictBanner:
+    def test_set_conflict_state_reveals_banner_for_current_pair(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_conflict_state("p1", 1, "Documents")
+        panel.conflict_banner.set_revealed.assert_called_with(True)
+
+    def test_set_conflict_state_ignored_for_other_pair(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_conflict_state("p2", 1, "Photos")  # different pair
+        panel.conflict_banner.set_revealed.assert_not_called()
+
+    def test_set_conflict_state_title_singular(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_conflict_state("p1", 1, "Documents")
+        panel.conflict_banner.set_title.assert_called_with("1 conflict in Documents")
+
+    def test_set_conflict_state_title_plural(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_conflict_state("p1", 3, "Photos")
+        panel.conflict_banner.set_title.assert_called_with("3 conflicts in Photos")
+
+    def test_set_conflict_state_zero_hides_banner(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_conflict_state("p1", 0, "Documents")
+        panel.conflict_banner.set_revealed.assert_called_with(False)
+
+    def test_on_conflict_banner_dismissed_hides_banner(self):
+        panel = _make_panel()
+        panel._on_conflict_banner_dismissed(panel.conflict_banner)
+        panel.conflict_banner.set_revealed.assert_called_with(False)
+
+    def test_show_pair_resets_banner(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.show_pair({"pair_id": "p2", "local_path": "/home/u/Photos"})
+        panel.conflict_banner.set_revealed.assert_called_with(False)
 
 
 # ---------------------------------------------------------------------------

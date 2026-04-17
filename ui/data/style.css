@@ -6,3 +6,9 @@
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
+
+/* Conflict banner — amber accent (Story 4-4) */
+.conflict-banner {
+  background-color: alpha(#f0a020, 0.15);
+  border-bottom: 1px solid alpha(#f0a020, 0.4);
+}

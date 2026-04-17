@@ -61,6 +61,24 @@ class StatusFooterBar(Gtk.Box):
         # polite live-region announcement required for offline state change (AC5)
         self.announce(text, Gtk.AccessibleAnnouncementPriority.LOW)
 
+    def set_conflicts(self, count: int) -> None:
+        """Show N-conflict indicator from real-time conflict_detected events (Story 4-4).
+
+        Distinct from set_conflict_pending (Story 3-3 queue-replay path).
+        Non-positive count: guard same as set_conflict_pending.
+        """
+        if count <= 0:
+            return
+        text = (
+            "1 conflict needs attention"
+            if count == 1
+            else f"{count} conflicts need attention"
+        )
+        self.footer_label.set_text(text)
+        self._set_dot_state("conflict")
+        self.update_property([Gtk.AccessibleProperty.LABEL], [text])
+        self.announce(text, Gtk.AccessibleAnnouncementPriority.LOW)
+
     def set_conflict_pending(self, count: int) -> None:
         """Show pending-conflict indicator after queue replay (Story 3-3 AC7).
 

@@ -1,4 +1,4 @@
-import { readdir, stat, rename, unlink, mkdir } from "node:fs/promises";
+import { readdir, stat, rename, unlink, mkdir, copyFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { join, relative, dirname, basename } from "node:path";
 import { createReadStream, createWriteStream } from "node:fs";
@@ -259,9 +259,78 @@ export class SyncEngine {
       this.stateDb.deleteSyncState(pair.pair_id, item.relativePath);
     }
 
-    // Story 4-1: log detected conflicts — Story 4-3 adds conflict copy creation and conflict_detected event
+    // ── Execute conflict items (copy local version → conflict copy, download remote version) ──
     for (const item of conflictItems) {
-      debugLog(`sync-engine: conflict detected for ${item.relativePath} (both sides changed — Story 4-3 will handle copy creation)`);
+      const localFilePath = join(pair.local_path, item.relativePath);
+      const d = new Date();
+      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      // Ensure uniqueness: a second conflict on the same file within the same
+      // calendar day would otherwise silently overwrite the first copy.
+      let conflictCopyPath = `${localFilePath}.conflict-${date}`;
+      {
+        let n = 2;
+        let candidate = conflictCopyPath;
+        while (true) {
+          try {
+            await stat(candidate);
+            // Path exists — try next counter suffix.
+            candidate = `${localFilePath}.conflict-${date}-${n}`;
+            n++;
+          } catch {
+            conflictCopyPath = candidate;
+            break;
+          }
+        }
+      }
+      const tmpPath = `${conflictCopyPath}.protondrive-tmp-${Date.now()}`;
+      try {
+        await copyFile(localFilePath, tmpPath);
+        await rename(tmpPath, conflictCopyPath);
+      } catch (err) {
+        try { await unlink(tmpPath); } catch { /* already gone */ }
+        const msg = err instanceof Error ? err.message : String(err);
+        debugLog(`sync-engine: conflict copy creation failed for ${item.relativePath}: ${msg}`);
+        this.emitEvent({
+          type: "error",
+          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+        });
+        continue;
+      }
+      this.emitEvent({
+        type: "conflict_detected",
+        payload: {
+          pair_id: pair.pair_id,
+          local_path: localFilePath,
+          conflict_copy_path: conflictCopyPath,
+        },
+      });
+      try {
+        const downloadItem: WorkItem & { kind: "download" } = {
+          kind: "download",
+          relativePath: item.relativePath,
+          nodeUid: item.remoteNodeId,
+          size: item.remoteSize,
+          remoteMtime: item.remoteMtime,
+        };
+        await this.downloadOne(pair, downloadItem, client);
+        const destPath = join(pair.local_path, item.relativePath);
+        const s = await stat(destPath);
+        const hash = await this.hashLocalFile(destPath);
+        this.stateDb.upsertSyncState({
+          pair_id: pair.pair_id,
+          relative_path: item.relativePath,
+          local_mtime: s.mtime.toISOString(),
+          remote_mtime: item.remoteMtime,
+          content_hash: hash,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        debugLog(`sync-engine: conflict download failed for ${item.relativePath}: ${msg}`);
+        this.emitEvent({
+          type: "error",
+          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+        });
+      }
     }
 
     // ── Execute new_file_collision items (rename local → conflict copy, download remote) ──
@@ -300,12 +369,13 @@ export class SyncEngine {
         await this.downloadOne(pair, downloadItem, client);
         const destPath = join(pair.local_path, item.relativePath);
         const s = await stat(destPath);
+        const hash = await this.hashLocalFile(destPath);
         this.stateDb.upsertSyncState({
           pair_id: pair.pair_id,
           relative_path: item.relativePath,
           local_mtime: s.mtime.toISOString(),
           remote_mtime: item.remoteMtime,
-          content_hash: null,
+          content_hash: hash,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -366,12 +436,13 @@ export class SyncEngine {
         await this.downloadOne(pair, item as WorkItem & { kind: "download" }, client);
         const destPath = join(pair.local_path, item.relativePath);
         const s = await stat(destPath);
+        const hash = await this.hashLocalFile(destPath);
         this.stateDb.upsertSyncState({
           pair_id: pair.pair_id,
           relative_path: item.relativePath,
           local_mtime: s.mtime.toISOString(),
           remote_mtime: (item as WorkItem & { kind: "download" }).remoteMtime,
-          content_hash: null,
+          content_hash: hash,
         });
         filesDone++;
         bytesDone += item.size;
@@ -673,13 +744,15 @@ export class SyncEngine {
           // Commit atomically — crashing between upsert and dequeue would
           // leave the remote uploaded but the queue entry behind, producing a
           // duplicate upload on restart.
+          const uploadedPath = join(pair.local_path, entry.relative_path);
+          const hash = await this.hashLocalFile(uploadedPath);
           this.stateDb.commitUpload(
             {
               pair_id: pair.pair_id,
               relative_path: entry.relative_path,
               local_mtime: workItem.localMtime,
               remote_mtime: workItem.localMtime,
-              content_hash: null,
+              content_hash: hash,
             },
             entry.id,
           );

@@ -10,7 +10,7 @@ import yaml
 gi.require_version("Adw", "1")
 gi.require_version("Gtk", "4.0")
 
-from gi.repository import Adw, Gio, GLib
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from protondrive.credential_store import CredentialManager
 from protondrive.engine import EngineClient
@@ -53,6 +53,17 @@ class Application(Adw.Application):
     def do_startup(self) -> None:
         Adw.Application.do_startup(self)
 
+        # Load application CSS (amber dot animation, conflict banner styling).
+        css_provider = Gtk.CssProvider()
+        css_provider.load_from_resource(
+            "/io/github/ronki2304/ProtonDriveLinuxClient/style.css"
+        )
+        Gtk.StyleContext.add_provider_for_display(
+            Gdk.Display.get_default(),
+            css_provider,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
         style_manager = Adw.StyleManager.get_default()
         style_manager.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         if hasattr(style_manager, "set_accent_color") and hasattr(Adw, "AccentColor"):
@@ -72,6 +83,7 @@ class Application(Adw.Application):
         self._engine.on_event("online", self._on_online)
         self._engine.on_event("queue_replay_complete", self._on_queue_replay_complete)
         self._engine.on_event("rate_limited", self._on_rate_limited)
+        self._engine.on_event("conflict_detected", self._on_conflict_detected)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -195,6 +207,13 @@ class Application(Adw.Application):
     def _on_rate_limited(self, payload: dict[str, Any]) -> None:
         if self._window is not None:
             self._window.on_rate_limited(payload)
+
+    def _on_conflict_detected(self, message: dict[str, Any]) -> None:
+        payload = message.get("payload", {})
+        if not isinstance(payload, dict):
+            return
+        if self._window is not None:
+            self._window.on_conflict_detected(payload)
 
     def _start_validation_timeout(self) -> None:
         """Start timeout for token validation response (NFR1)."""

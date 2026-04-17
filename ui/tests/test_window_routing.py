@@ -23,6 +23,7 @@ def _make_window() -> MainWindow:
     win._sync_pair_rows = {}
     win._pairs_data = {}
     win._conflict_pending_count = 0
+    win._conflict_copies_by_pair = {}
     win._row_activated_connected = False
     win._settings = MagicMock()
     return win
@@ -429,3 +430,167 @@ class TestOnRateLimited:
         win = _make_window()
         win.on_rate_limited({"resume_in_seconds": 0})
         win.status_footer_bar.set_rate_limited.assert_called_once_with(5)
+
+
+# ---------------------------------------------------------------------------
+# Story 4-4 — on_conflict_detected, on_sync_complete resolution, clear_session
+# ---------------------------------------------------------------------------
+
+class TestOnConflictDetected:
+    """Story 4-4 AC1–3: conflict tracking, row/panel/footer updates."""
+
+    def test_valid_path_adds_to_tracking(self):
+        win = _make_window()
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        assert win._conflict_copies_by_pair == {"p1": ["/tmp/a.conflict"]}
+
+    def test_empty_path_returns_early(self):
+        win = _make_window()
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": ""})
+        assert win._conflict_copies_by_pair == {}
+        win.status_footer_bar.set_conflicts.assert_not_called()
+
+    def test_duplicate_path_not_added_twice(self):
+        win = _make_window()
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        assert len(win._conflict_copies_by_pair["p1"]) == 1
+
+    def test_two_conflicts_same_pair_increments_count(self):
+        win = _make_window()
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/b.conflict"})
+        win.status_footer_bar.set_conflicts.assert_called_with(2)
+
+    def test_footer_set_conflicts_called(self):
+        win = _make_window()
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        win.status_footer_bar.set_conflicts.assert_called_once_with(1)
+
+    def test_row_set_state_conflict_called(self):
+        win = _make_window()
+        row = _make_row(state="synced")
+        win._sync_pair_rows["p1"] = row
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        row.set_state.assert_called_once_with("conflict", conflict_count=1)
+
+    def test_offline_row_not_overridden(self):
+        win = _make_window()
+        row = _make_row(state="offline")
+        win._sync_pair_rows["p1"] = row
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        row.set_state.assert_not_called()
+
+    def test_panel_set_conflict_state_called(self):
+        win = _make_window()
+        win._pairs_data = {"p1": {"pair_id": "p1", "local_path": "/home/u/Docs"}}
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        win.pair_detail_panel.set_conflict_state.assert_called_once_with("p1", 1, "Docs")
+
+
+class TestOnSyncProgressConflictPriority:
+    """Story 4-4 AC4: Conflict > Syncing footer priority."""
+
+    def test_footer_not_updated_to_syncing_when_conflicts_active(self):
+        win = _make_window()
+        win._conflict_copies_by_pair = {"p1": ["/tmp/a.conflict"]}
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win.on_sync_progress({"pair_id": "p1", "pair_name": "Docs", "files_done": 1, "files_total": 5})
+        win.status_footer_bar.set_syncing.assert_not_called()
+
+    def test_row_still_set_to_syncing_even_when_conflicts_active(self):
+        win = _make_window()
+        win._conflict_copies_by_pair = {"p1": ["/tmp/a.conflict"]}
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win.on_sync_progress({"pair_id": "p1", "pair_name": "Docs", "files_done": 1, "files_total": 5})
+        row.set_state.assert_called_once_with("syncing")
+
+
+class TestOnSyncCompleteResolution:
+    """Story 4-4 AC5: conflict resolution detection on sync_complete."""
+
+    def test_missing_conflict_copy_clears_tracking(self):
+        win = _make_window()
+        win._conflict_copies_by_pair = {"p1": ["/tmp/gone.conflict"]}
+        with patch("protondrive.window.os.path.exists", return_value=False):
+            win.on_sync_complete({"pair_id": "p1"})
+        assert "p1" not in win._conflict_copies_by_pair
+
+    def test_present_conflict_copy_stays_tracked(self):
+        win = _make_window()
+        win._conflict_copies_by_pair = {"p1": ["/tmp/still_here.conflict"]}
+        with patch("protondrive.window.os.path.exists", return_value=True):
+            win.on_sync_complete({"pair_id": "p1"})
+        assert win._conflict_copies_by_pair == {"p1": ["/tmp/still_here.conflict"]}
+
+    def test_row_reverts_to_synced_after_resolution(self):
+        win = _make_window()
+        row = _make_row(state="conflict")
+        win._sync_pair_rows["p1"] = row
+        win._conflict_copies_by_pair = {"p1": ["/tmp/gone.conflict"]}
+        with patch("protondrive.window.os.path.exists", return_value=False):
+            win.on_sync_complete({"pair_id": "p1"})
+        row.set_state.assert_called_with("synced")
+
+    def test_row_stays_conflict_if_copies_remain(self):
+        win = _make_window()
+        row = _make_row(state="conflict")
+        win._sync_pair_rows["p1"] = row
+        win._conflict_copies_by_pair = {"p1": ["/tmp/still.conflict"]}
+        with patch("protondrive.window.os.path.exists", return_value=True):
+            win.on_sync_complete({"pair_id": "p1"})
+        row.set_state.assert_called_with("conflict", conflict_count=1)
+
+    def test_footer_calls_update_all_synced_after_full_resolution(self):
+        win = _make_window()
+        row = _make_row(state="conflict")
+        win._sync_pair_rows["p1"] = row
+
+        def _set_state(*args, **kwargs):
+            row.state = args[0] if args else kwargs.get("state", "synced")
+        row.set_state.side_effect = _set_state
+
+        win._conflict_copies_by_pair = {"p1": ["/tmp/gone.conflict"]}
+        with patch("protondrive.window.os.path.exists", return_value=False):
+            win.on_sync_complete({"pair_id": "p1"})
+        win.status_footer_bar.update_all_synced.assert_called_once()
+
+    def test_footer_calls_set_conflicts_when_copies_remain(self):
+        win = _make_window()
+        win._conflict_copies_by_pair = {"p1": ["/tmp/still.conflict"]}
+        with patch("protondrive.window.os.path.exists", return_value=True):
+            win.on_sync_complete({"pair_id": "p1"})
+        win.status_footer_bar.set_conflicts.assert_called_with(1)
+
+
+class TestClearSessionResetsConflicts:
+    """Story 4-4 AC6: clear_session resets conflict state."""
+
+    def test_clear_session_resets_conflict_copies_by_pair(self):
+        win = _make_window()
+        win._conflict_copies_by_pair = {"p1": ["/tmp/a.conflict"]}
+        win._session_data = {}
+        win.clear_session()
+        assert win._conflict_copies_by_pair == {}
+
+
+class TestOnlineWatcherGuardsWithConflicts:
+    """Story 4-4: on_online / on_watcher_status guards also check active conflicts."""
+
+    def test_on_online_preserves_footer_when_active_conflicts(self):
+        win = _make_window()
+        win._conflict_pending_count = 0
+        win._conflict_copies_by_pair = {"p1": ["/tmp/a.conflict"]}
+        win._sync_pair_rows["p1"] = _make_row(state="offline")
+        win.on_online()
+        win.status_footer_bar.update_all_synced.assert_not_called()
+
+    def test_on_watcher_status_ready_preserves_footer_when_active_conflicts(self):
+        win = _make_window()
+        win._conflict_pending_count = 0
+        win._conflict_copies_by_pair = {"p1": ["/tmp/a.conflict"]}
+        win._sync_pair_rows["p1"] = _make_row(state="synced")
+        win.on_watcher_status("ready")
+        win.status_footer_bar.update_all_synced.assert_not_called()

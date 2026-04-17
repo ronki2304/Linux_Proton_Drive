@@ -55,6 +55,9 @@ class MainWindow(Adw.ApplicationWindow):
         # to "All synced" by on_sync_complete / on_watcher_status / on_online.
         # Cleared only by a subsequent clean replay (Story 3-3, AC7).
         self._conflict_pending_count: int = 0
+        # Maps pair_id → list of conflict copy absolute paths (Story 4-4).
+        # Populated by on_conflict_detected; resolved in on_sync_complete.
+        self._conflict_copies_by_pair: dict[str, list[str]] = {}
         self._row_activated_connected: bool = False
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
 
@@ -137,8 +140,52 @@ class MainWindow(Adw.ApplicationWindow):
         self._session_data = None
         self._sync_pair_rows = {}
         self._pairs_data = {}
+        self._conflict_copies_by_pair = {}
         self._row_activated_connected = False
         self.pair_detail_panel.show_no_pairs()
+        self.status_footer_bar.update_all_synced()
+
+    def _total_active_conflicts(self) -> int:
+        """Total conflict copy count across all pairs."""
+        return sum(len(v) for v in self._conflict_copies_by_pair.values())
+
+    def _get_pair_name(self, pair_id: str) -> str:
+        """Return display name for pair_id, falling back to pair_id itself."""
+        row = self._sync_pair_rows.get(pair_id)
+        if row is not None:
+            return row.pair_name
+        data = self._pairs_data.get(pair_id, {})
+        local_path = data.get("local_path", "")
+        return os.path.basename(local_path.rstrip("/")) or pair_id
+
+    def on_conflict_detected(self, payload: dict[str, Any]) -> None:
+        """Handle engine's conflict_detected push event (Story 4-4 AC1–3)."""
+        pair_id = payload.get("pair_id", "")
+        conflict_copy_path = payload.get("conflict_copy_path", "")
+
+        # Guard: malformed payload missing pair_id or path would corrupt tracking.
+        if not pair_id or not conflict_copy_path:
+            return
+
+        # Track the new conflict copy (deduplicated by path).
+        copies = self._conflict_copies_by_pair.setdefault(pair_id, [])
+        if conflict_copy_path not in copies:
+            copies.append(conflict_copy_path)
+
+        count = len(copies)
+        pair_name = self._get_pair_name(pair_id)
+
+        # Update sidebar row.
+        row = self._sync_pair_rows.get(pair_id)
+        if row is not None and row.state != "offline":
+            row.set_state("conflict", conflict_count=count)
+
+        # Update detail panel banner — only if this pair is currently shown
+        # (set_conflict_state guards internally via _current_pair_id).
+        self.pair_detail_panel.set_conflict_state(pair_id, count, pair_name)
+
+        # Update footer: conflict > syncing priority (AC4).
+        self.status_footer_bar.set_conflicts(self._total_active_conflicts())
 
     def _on_setup_requested(self, widget: object) -> None:
         """Handle setup-requested signal from PairDetailPanel."""
@@ -278,7 +325,10 @@ class MainWindow(Adw.ApplicationWindow):
         """Handle pair row selection — route to pair detail in content area."""
         pair_id = row.pair_id
         pair_data = self._pairs_data.get(pair_id, {})
-        self.pair_detail_panel.show_pair(pair_data)
+        self.pair_detail_panel.show_pair(pair_data)  # resets banner to hidden
+        # Immediately restore banner if this pair has active conflicts.
+        conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
+        self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
         self.nav_split_view.set_show_content(True)
 
     def on_offline(self) -> None:
@@ -290,11 +340,15 @@ class MainWindow(Adw.ApplicationWindow):
 
     def on_online(self) -> None:
         """Return all pair rows and footer bar to synced state."""
-        for row in self._sync_pair_rows.values():
-            row.set_state("synced")
+        for pair_id, row in self._sync_pair_rows.items():
+            pair_conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
+            if pair_conflict_count > 0:
+                row.set_state("conflict", conflict_count=pair_conflict_count)
+            else:
+                row.set_state("synced")
         # Preserve the conflict-pending footer across online transitions
         # (Story 3-3, AC7 regression guard).
-        if self._conflict_pending_count > 0:
+        if self._conflict_pending_count > 0 or self._total_active_conflicts() > 0:
             return
         any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
         if not any_syncing:
@@ -365,7 +419,9 @@ class MainWindow(Adw.ApplicationWindow):
             pair_name = row.pair_name
         files_done = payload.get("files_done", 0)
         files_total = payload.get("files_total", 0)
-        self.status_footer_bar.set_syncing(pair_name, files_done, files_total)
+        # Conflict > Syncing: only update footer to "syncing" if no active conflicts.
+        if self._total_active_conflicts() == 0:
+            self.status_footer_bar.set_syncing(pair_name, files_done, files_total)
         if pair_id in self._pairs_data and files_total > 0:
             self._pairs_data[pair_id]["file_count_text"] = f"{files_total} files"
             self._pairs_data[pair_id]["total_size_text"] = _fmt_bytes(payload.get("bytes_total", 0))
@@ -374,26 +430,49 @@ class MainWindow(Adw.ApplicationWindow):
     def on_sync_complete(self, payload: dict[str, Any]) -> None:
         """Update pair row and footer bar when sync completes."""
         pair_id = payload.get("pair_id", "")
+
+        # ── Resolution detection (AC5): check which tracked conflict copies
+        # for this pair have been deleted since the last sync cycle. ──
+        if pair_id in self._conflict_copies_by_pair:
+            still_present = [
+                p for p in self._conflict_copies_by_pair[pair_id]
+                if os.path.exists(p)
+            ]
+            self._conflict_copies_by_pair[pair_id] = still_present
+            if not still_present:
+                del self._conflict_copies_by_pair[pair_id]
+
+        # Determine post-sync state for this pair's row.
+        pair_conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         row = self._sync_pair_rows.get(pair_id)
-        if row is not None and row.state != "offline":  # don't clobber offline state
-            row.set_state("synced")
-        # Story 3-3 AC7 regression guard: a non-zero _conflict_pending_count
-        # means the footer is showing "N files need conflict resolution" from
-        # a recent queue_replay_complete and must not be reset here.
-        if self._conflict_pending_count > 0:
-            self.pair_detail_panel.on_sync_complete(payload)
-            if pair_id in self._pairs_data:
-                self._pairs_data[pair_id]["last_synced_text"] = _fmt_relative_time(
-                    payload.get("timestamp", "")
-                )
-            return
-        if self._sync_pair_rows and all(r.state == "synced" for r in self._sync_pair_rows.values()):
-            self.status_footer_bar.update_all_synced()
+        if row is not None and row.state != "offline":
+            if pair_conflict_count > 0:
+                row.set_state("conflict", conflict_count=pair_conflict_count)
+            else:
+                row.set_state("synced")
+
+        # Update detail panel banner (guards internally via pair_id).
+        self.pair_detail_panel.set_conflict_state(
+            pair_id, pair_conflict_count, self._get_pair_name(pair_id)
+        )
+
         self.pair_detail_panel.on_sync_complete(payload)
         if pair_id in self._pairs_data:
             self._pairs_data[pair_id]["last_synced_text"] = _fmt_relative_time(
                 payload.get("timestamp", "")
             )
+
+        # Footer update — Conflict > _conflict_pending > all-synced.
+        total_conflicts = self._total_active_conflicts()
+        if total_conflicts > 0:
+            self.status_footer_bar.set_conflicts(total_conflicts)
+            return
+        if self._conflict_pending_count > 0:
+            return
+        if self._sync_pair_rows and all(
+            r.state == "synced" for r in self._sync_pair_rows.values()
+        ):
+            self.status_footer_bar.update_all_synced()
 
     def on_watcher_status(self, status: str) -> None:
         """React to watcher_status events forwarded by Application."""
@@ -402,7 +481,7 @@ class MainWindow(Adw.ApplicationWindow):
         elif status == "ready":
             # Story 3-3 AC7 regression guard: preserve the conflict-pending
             # footer across watcher 'ready' transitions.
-            if self._conflict_pending_count > 0:
+            if self._conflict_pending_count > 0 or self._total_active_conflicts() > 0:
                 return
             any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
             any_offline = any(r.state == "offline" for r in self._sync_pair_rows.values())
