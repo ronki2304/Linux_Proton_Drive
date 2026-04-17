@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-17  # 4-0 review complete, certified done
+last_updated: 2026-04-17  # 4-2 code review complete → done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -93,9 +93,9 @@ development_status:
   # Epic 4: Conflict Detection & Resolution
   epic-4: in-progress
   4-0-pre-epic-4-debt-cleanup: done
-  4-0b-deletion-propagation: backlog
-  4-1-conflict-detection-existing-files: backlog
-  4-2-new-file-collision-detection: backlog
+  4-0b-deletion-propagation: done
+  4-1-conflict-detection-existing-files: done
+  4-2-new-file-collision-detection: done
   4-3-conflict-copy-creation: backlog
   4-4-in-app-conflict-notification-and-pair-status: backlog
   4-5-desktop-notification-for-conflicts: backlog

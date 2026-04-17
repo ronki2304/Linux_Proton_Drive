@@ -1,12 +1,14 @@
 import { readdir, stat, rename, unlink, mkdir } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join, relative, dirname, basename } from "node:path";
 import { createReadStream, createWriteStream } from "node:fs";
 import { Readable, Writable } from "node:stream";
 import type { IpcPushEvent } from "./ipc.js";
 import type { DriveClient, RemoteFile } from "./sdk.js";
-import type { ChangeQueueEntry, StateDb, SyncPair } from "./state-db.js";
+import type { ChangeQueueEntry, StateDb, SyncPair, SyncState } from "./state-db.js";
 import { listConfigPairs, type ConfigPair } from "./config.js";
 import { NetworkError, RateLimitError, SyncError } from "./errors.js";
+import { detectConflict } from "./conflict.js";
 import { debugLog } from "./debug-log.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -44,6 +46,23 @@ type WorkItem =
       nodeUid: string;
       size: number;
       remoteMtime: string;
+    }
+  | { kind: "delete_local"; relativePath: string }
+  | { kind: "trash_remote"; relativePath: string; remoteNodeId: string }
+  | { kind: "clear_state"; relativePath: string }
+  | {
+      kind: "conflict";
+      relativePath: string;
+      remoteNodeId: string;   // needed by Story 4-3 to download winning version
+      remoteMtime: string;    // needed by Story 4-3 for sync_state update
+      remoteSize: number;     // needed by Story 4-3 for progress reporting
+    }
+  | {
+      kind: "new_file_collision";
+      relativePath: string;
+      remoteNodeId: string;
+      remoteMtime: string;
+      remoteSize: number;
     };
 
 // ── SyncEngine ───────────────────────────────────────────────────────────────
@@ -222,20 +241,118 @@ export class SyncEngine {
       await mkdir(localDir, { recursive: true });
     }
 
-    const workItems = this.computeWorkList(pair, localFiles, remoteFiles, remoteFolders, syncStates);
+    const workItems = await this.computeWorkList(pair, localFiles, remoteFiles, remoteFolders, syncStates);
     process.stderr.write(`[ENGINE] reconcilePair: ${workItems.length} item(s) (localFiles=${localFiles.size} remoteFiles=${remoteFiles.size})\n`);
 
-    const downloadItems = workItems.filter((w) => w.kind === "download");
-    const uploadItems = workItems.filter((w) => w.kind === "upload");
+    const deleteLocalItems  = workItems.filter((w): w is WorkItem & { kind: "delete_local" }  => w.kind === "delete_local");
+    const trashRemoteItems  = workItems.filter((w): w is WorkItem & { kind: "trash_remote" }  => w.kind === "trash_remote");
+    const clearStateItems   = workItems.filter((w): w is WorkItem & { kind: "clear_state" }   => w.kind === "clear_state");
+    const downloadItems     = workItems.filter((w): w is WorkItem & { kind: "download" }      => w.kind === "download");
+    const uploadItems       = workItems.filter((w): w is WorkItem & { kind: "upload" }        => w.kind === "upload");
+    const conflictItems          = workItems.filter((w): w is WorkItem & { kind: "conflict" }           => w.kind === "conflict");
+    const newFileCollisionItems  = workItems.filter((w): w is WorkItem & { kind: "new_file_collision" } => w.kind === "new_file_collision");
+
+    const bytesTotal = [...downloadItems, ...uploadItems].reduce((a, w) => a + w.size, 0);
+
+    // Execute clear_state items (no I/O)
+    for (const item of clearStateItems) {
+      this.stateDb.deleteSyncState(pair.pair_id, item.relativePath);
+    }
+
+    // Story 4-1: log detected conflicts — Story 4-3 adds conflict copy creation and conflict_detected event
+    for (const item of conflictItems) {
+      debugLog(`sync-engine: conflict detected for ${item.relativePath} (both sides changed — Story 4-3 will handle copy creation)`);
+    }
+
+    // ── Execute new_file_collision items (rename local → conflict copy, download remote) ──
+    for (const item of newFileCollisionItems) {
+      const localFilePath = join(pair.local_path, item.relativePath);
+      const d = new Date();
+      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const conflictCopyPath = `${localFilePath}.conflict-${date}`;
+      try {
+        await rename(localFilePath, conflictCopyPath);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        debugLog(`sync-engine: collision rename failed for ${item.relativePath}: ${msg}`);
+        this.emitEvent({
+          type: "error",
+          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+        });
+        continue;
+      }
+      this.emitEvent({
+        type: "conflict_detected",
+        payload: {
+          pair_id: pair.pair_id,
+          local_path: localFilePath,
+          conflict_copy_path: conflictCopyPath,
+        },
+      });
+      try {
+        const downloadItem: WorkItem & { kind: "download" } = {
+          kind: "download",
+          relativePath: item.relativePath,
+          nodeUid: item.remoteNodeId,
+          size: item.remoteSize,
+          remoteMtime: item.remoteMtime,
+        };
+        await this.downloadOne(pair, downloadItem, client);
+        const destPath = join(pair.local_path, item.relativePath);
+        const s = await stat(destPath);
+        this.stateDb.upsertSyncState({
+          pair_id: pair.pair_id,
+          relative_path: item.relativePath,
+          local_mtime: s.mtime.toISOString(),
+          remote_mtime: item.remoteMtime,
+          content_hash: null,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        debugLog(`sync-engine: collision download failed for ${item.relativePath}: ${msg}`);
+        this.emitEvent({
+          type: "error",
+          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+        });
+      }
+    }
+
+    // Execute delete_local items (ENOENT = already gone = success)
+    for (const item of deleteLocalItems) {
+      try {
+        await unlink(join(pair.local_path, item.relativePath));
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== "ENOENT") {
+          const msg = err instanceof Error ? err.message : "unknown";
+          debugLog(`sync-engine: delete_local failed for ${item.relativePath}: ${msg}`);
+          this.emitEvent({ type: "error", payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id } });
+          continue;  // keep sync_state so next cycle retries
+        }
+      }
+      this.stateDb.deleteSyncState(pair.pair_id, item.relativePath);
+    }
+
+    // Execute trash_remote items (withBackoff for rate limiting)
+    for (const item of trashRemoteItems) {
+      try {
+        await this.withBackoff(() => client.trashNode(item.remoteNodeId));
+        this.stateDb.deleteSyncState(pair.pair_id, item.relativePath);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        debugLog(`sync-engine: trash_remote failed for ${item.relativePath}: ${msg}`);
+        this.emitEvent({ type: "error", payload: { code: "sync_cycle_error", message: msg, pair_id: pair.pair_id } });
+        // sync_state intentionally preserved — retry on next cycle
+      }
+    }
 
     // Emit initial sync_progress covering downloads (AC7 — files_done: 0 before transfers)
-    const bytesTotal = workItems.reduce((a, w) => a + w.size, 0);
     this.emitEvent({
       type: "sync_progress",
       payload: {
         pair_id: pair.pair_id,
         files_done: 0,
-        files_total: workItems.length,
+        files_total: downloadItems.length + uploadItems.length,
         bytes_done: 0,
         bytes_total: bytesTotal,
       },
@@ -263,7 +380,7 @@ export class SyncEngine {
           payload: {
             pair_id: pair.pair_id,
             files_done: filesDone,
-            files_total: workItems.length,
+            files_total: downloadItems.length + uploadItems.length,
             bytes_done: bytesDone,
             bytes_total: bytesTotal,
           },
@@ -666,6 +783,18 @@ export class SyncEngine {
     return resolvedId;
   }
 
+  private async hashLocalFile(fullPath: string): Promise<string | null> {
+    try {
+      const hash = createHash("sha256");
+      for await (const chunk of createReadStream(fullPath)) {
+        hash.update(chunk as Buffer);
+      }
+      return hash.digest("hex");
+    } catch {
+      return null; // unreadable → null → detectConflict treats as conflict (conservative)
+    }
+  }
+
   private async walkLocalTree(localPath: string): Promise<{
     files: Map<string, LocalFile>;
     dirs: Set<string>;
@@ -729,13 +858,13 @@ export class SyncEngine {
     return { files: fileMap, folders: folderMap };
   }
 
-  private computeWorkList(
+  private async computeWorkList(
     pair: SyncPair,
     localFiles: Map<string, LocalFile>,
     remoteFiles: Map<string, RemoteFile>,
     remoteFolders: Map<string, string>,
-    syncStates: Map<string, { local_mtime: string; remote_mtime: string }>,
-  ): WorkItem[] {
+    syncStates: Map<string, SyncState>,
+  ): Promise<WorkItem[]> {
     const workItems: WorkItem[] = [];
 
     // Process local files
@@ -746,16 +875,44 @@ export class SyncEngine {
       if (remote) {
         // File exists both locally and remotely
         if (!state) {
-          // Both exist but no sync state → conflict, skip (Epic 4)
-          debugLog(`sync-engine: skipping conflict (no sync_state) for ${relPath}`);
+          // New-file collision: local and remote both exist with no prior sync record (Story 4-2)
+          workItems.push({
+            kind: "new_file_collision",
+            relativePath: relPath,
+            remoteNodeId: remote.id,
+            remoteMtime: remote.remote_mtime,
+            remoteSize: remote.size,
+          });
           continue;
         }
         const localChanged = local.mtime !== state.local_mtime;
         const remoteChanged = remote.remote_mtime !== state.remote_mtime;
 
         if (localChanged && remoteChanged) {
-          // Both changed → conflict, skip (Epic 4)
-          debugLog(`sync-engine: skipping both-changed conflict for ${relPath}`);
+          // Conflict detection (Story 4-1).
+          // Only compute local hash for same-second ambiguity (performance guard).
+          const localSameSecond  = local.mtime.slice(0, 19) === state.local_mtime.slice(0, 19);
+          const remoteSameSecond = remote.remote_mtime.slice(0, 19) === state.remote_mtime.slice(0, 19);
+          let currentLocalHash: string | null = null;
+          if (localSameSecond && remoteSameSecond) {
+            currentLocalHash = await this.hashLocalFile(join(pair.local_path, relPath));
+          }
+          const result = detectConflict(
+            local.mtime, state.local_mtime,
+            remote.remote_mtime, state.remote_mtime,
+            state.content_hash,
+            currentLocalHash,
+          );
+          if (result.isConflict) {
+            workItems.push({
+              kind: "conflict",
+              relativePath: relPath,
+              remoteNodeId: remote.id,
+              remoteMtime: remote.remote_mtime,
+              remoteSize: remote.size,
+            });
+          }
+          // If no conflict (same-second + same hash): file is effectively unchanged; skip.
           continue;
         }
         if (localChanged) {
@@ -787,21 +944,26 @@ export class SyncEngine {
         }
         // else: unchanged — skip
       } else {
-        // Local-only: new file → upload
-        const parentDir = dirname(relPath);
-        const remoteFolderId =
-          parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
-        if (!remoteFolderId) {
-          process.stderr.write(`[ENGINE] skip upload ${relPath} — parentDir="${parentDir}" not in remoteFolders\n`);
-          continue;
+        if (state) {
+          // Remote was deleted — remove local copy (AC2 of 4-0b)
+          workItems.push({ kind: "delete_local", relativePath: relPath });
+        } else {
+          // Truly new local file → upload
+          const parentDir = dirname(relPath);
+          const remoteFolderId =
+            parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
+          if (!remoteFolderId) {
+            process.stderr.write(`[ENGINE] skip upload ${relPath} — parentDir="${parentDir}" not in remoteFolders\n`);
+            continue;
+          }
+          workItems.push({
+            kind: "upload",
+            relativePath: relPath,
+            remoteFolderId,
+            size: local.size,
+            localMtime: local.mtime,
+          });
         }
-        workItems.push({
-          kind: "upload",
-          relativePath: relPath,
-          remoteFolderId,
-          size: local.size,
-          localMtime: local.mtime,
-        });
       }
     }
 
@@ -811,8 +973,8 @@ export class SyncEngine {
 
       const state = syncStates.get(relPath);
       if (state) {
-        // Had sync state but local file is gone — don't re-download
-        // (deletion handling is out of scope for 2.5)
+        // Local was deleted — trash the remote (AC1 of 4-0b)
+        workItems.push({ kind: "trash_remote", relativePath: relPath, remoteNodeId: remote.id });
         continue;
       }
 
@@ -824,6 +986,13 @@ export class SyncEngine {
         size: remote.size,
         remoteMtime: remote.remote_mtime,
       });
+    }
+
+    // Both-sides-deleted: sync_state present but neither local nor remote has the path
+    for (const relPath of syncStates.keys()) {
+      if (!localFiles.has(relPath) && !remoteFiles.has(relPath)) {
+        workItems.push({ kind: "clear_state", relativePath: relPath });
+      }
     }
 
     return workItems;
