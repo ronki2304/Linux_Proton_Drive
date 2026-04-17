@@ -1,6 +1,6 @@
 # Story 2.12: Unified Queue Drainer Refactor
 
-Status: backlog
+Status: done
 
 **Cross-epic tech debt.** Identified during Story 3-3 review on 2026-04-15. This story does not add user-visible functionality — it refactors Epic 2's sync engine core to collapse two pathways (`startSyncAll` tree-walk and `replayQueue` queue-drain) into a single unified drainer.
 
@@ -96,7 +96,7 @@ These are starter ACs. When this story is activated, run `bmad-create-story` to 
 **Given** a backlog of queued entries exists at refactor time
 **When** the refactor ships
 **Then** all Story 3-3 acceptance criteria (AC1–AC9) continue to pass via the new `drainQueue()` method
-**And** all 18+ Story 3-3 tests still pass (possibly renamed or relocated)
+**And** all Story 3-3 tests still pass — see `sync-engine.test.ts` `SyncEngine — replayQueue` describe block (17 tests as of Story 3-3) — possibly renamed or relocated
 
 ### AC6 — Story 2-5 regression suite passes
 
@@ -133,11 +133,20 @@ These are starter ACs. When this story is activated, run `bmad-create-story` to 
 - Extract `startSyncAll`'s discovery phase (walkLocalTree + walkRemoteTree + computeWorkList) into a new `reconcileAndEnqueue()` method
 - Call it on cold start / post-auth / manual force-sync
 - Delete `startSyncAll`'s execution phase entirely — execution is now `drainQueue()`
+- **Download handling (explicit decision):** The `change_queue` schema only supports `created | modified | deleted` (upload/delete change types). Remote-only changes (files needing download) are **NOT** enqueued in this story. The reconciliation walker executes downloads directly, preserving `processOne`'s download branch. Full download-queue unification is deferred to a follow-on story. This is Option B: partial unification. Do NOT attempt to add a `download_needed` change type or schema migration in this story — that is out of scope.
+- **Cold-start pair restoration:** `startSyncAll` contains this logic at `engine/src/main.ts` (inside the `_activateSession` path) and at the top of `startSyncAll()` itself: it compares `getConfigPairs()` against `stateDb.listPairs()` and calls `stateDb.insertPair()` for any pair present in config but missing from SQLite. The reconciliation walker **must** preserve this insertion logic — it is the cold-start recovery path for fresh installs and SQLite wipes. Extract it to run before the walk.
+- **`Semaphore` and `executeWorkList` retirement:** After Phase 3, `executeWorkList`, `processOne`, and the `Semaphore` class are dead code. Delete them. Only `uploadOne` and `downloadOne` (called from `processQueueEntry` and the reconciliation walker respectively) survive.
 
-**Phase 4 — Simplify the busy lock:**
+**Phase 4 — Wire `drainQueue()` into `main.ts`:**
+- `startSyncAll` has **three call sites** in `engine/src/main.ts` (lines ~236, ~241, ~556/565). Replace each with `void syncEngine?.drainQueue()` (fire-and-forget, same pattern as the `online` → `replayQueue` wrapper from Story 3-3).
+- The `FileWatcher` is constructed with `onChangesDetected: async (_pairId) => { await syncEngine!.startSyncAll(); }`. After Phase 2 the watcher always enqueues, so this becomes `async (_pairId) => { void syncEngine?.drainQueue(); }`.
+- **`onNetworkFailure()` must be called from `drainQueue()`:** `startSyncAll → syncPair` calls `this.onNetworkFailure()` when `isFetchFailure(err)` is true — this triggers the `NetworkMonitor` to re-evaluate and cascades to an `offline` event. `replayQueue()` does NOT do this (entries are marked `failed` and processing continues). After Phase 4, `drainQueue()` is the only sync path, so it must call `this.onNetworkFailure()` when `isFetchFailure(err)` is true inside the per-entry error catch. Without this, mid-upload network failures will NOT trigger the offline transition — the UI stays in "Syncing…" indefinitely. Add this call alongside the existing `debugLog` + `failed` return in `processQueueEntry`'s catch block.
+- Add an AC7 smoke-test step: validate that a mid-upload network drop triggers the offline UI transition (not just a silent `failed` count).
+
+**Phase 5 — Simplify the busy lock:**
 - Replace `busy: 'idle'|'sync'|'replay'` enum with `isDraining: boolean`
-- Remove `replayPending` flag (not needed — drain is idempotent)
-- Clean up tests
+- Remove `replayPending` flag (not needed — drain is idempotent, a new trigger while draining will naturally process everything when the current drain completes)
+- Do not begin Phase 5 until all tests are passing with Phases 1–4 complete — the enum references are spread across call sites and tests; confirming green before simplifying the lock avoids chasing a moving target.
 
 ### Risk Mitigations
 
@@ -177,6 +186,74 @@ When this story ships, run a **dedicated mini-retrospective** (not folded into a
 - Whether the reconciliation walker concept scales to remote change detection (future Epic 5 work)
 
 These are Epic-2-flavoured learnings but happening post-Epic-3 (at least), so they don't belong in Epic 2's retrospective (which shipped 2026-04-12). Standalone retro is the right container.
+
+---
+
+## Tasks / Subtasks
+
+- [x] Task 1: Phase 1 — Rename `replayQueue` → `drainQueue`
+  - [x] 1.1: Rename `replayQueue()` → `drainQueue()` in `engine/src/sync-engine.ts`; update both self-calls in `finally` blocks
+  - [x] 1.2: Update `engine/src/main.ts` network monitor callback: `replayQueue()` → `drainQueue()`
+  - [x] 1.3: Update `engine/src/sync-engine.test.ts`: rename describe block + all `engine.replayQueue()` calls → `engine.drainQueue()`
+
+- [x] Task 2: Phase 2 — FileWatcher always-enqueue
+  - [x] 2.1: Modify `engine/src/watcher.ts` watch callback: always call `queueFileChange()`; if online also call `scheduleSync()`
+  - [x] 2.2: Update `engine/src/watcher.test.ts` online path test: enqueueChange now called AND onChanges called
+
+- [x] Task 3: Phase 3 — `reconcileAndEnqueue()` + thin `startSyncAll` wrapper
+  - [x] 3.1: Create `reconcileAndEnqueue()` in `engine/src/sync-engine.ts`: cold-start pair restore + per-pair resolve remote_id + walk trees + create folders + enqueue uploads (skip if already queued) + execute downloads directly
+  - [x] 3.2: Replace `startSyncAll()` body with thin wrapper calling `reconcileAndEnqueue()` then `drainQueue()`; delete `syncPair()`, `executeWorkList()`, `processOne()`, `Semaphore`
+  - [x] 3.3: Update 2-5 tests in `engine/src/sync-engine.test.ts`: concurrency cap test → assert sequential downloads (maxConcurrent ≤ 1); all other scenarios still pass via thin wrapper
+
+- [x] Task 4: Phase 4 — `onNetworkFailure()` in `drainQueue` + update `main.ts` watcher callback
+  - [x] 4.1: In `processQueueEntry` catch block, call `this.onNetworkFailure()` when `isFetchFailure(err)` is true; add test verifying this
+  - [x] 4.2: Update `engine/src/main.ts` watcher `onChangesDetected` callback (both in `_activateSession` and `add_pair`): `startSyncAll()` → `drainQueue()`
+
+- [x] Task 5: Phase 5 — Simplify busy lock to `isDraining` boolean
+  - [x] 5.1: Replace `busy: 'idle'|'sync'|'replay'` with `isDraining: boolean`; remove `replayPending` flag; update `drainQueue()` guard
+  - [x] 5.2: Rewrite re-entrancy tests 4.15, 4.16, 4.17 for simplified lock (no `replayPending` — bounced calls return zero, no auto-retry)
+
+### Review Findings
+
+- [x] [Review][Decision] startSyncAll doesn't short-circuit after reconcile signals network failure — fixed: reconcileAndEnqueue() returns bool, startSyncAll skips drainQueue() on network failure [engine/src/sync-engine.ts:100-111]
+- [x] [Review][Patch] No retry when reconcile enqueues during concurrent drain — fixed: startSyncAll schedules setTimeout(drainQueue,0) when isDraining at call time [engine/src/sync-engine.ts:100-111]
+- [x] [Review][Patch] Double sync_complete per pair on cold start — fixed: reconcilePair gates sync_complete on uploadItems.length===0; drainQueue now calls updateLastSynced alongside sync_complete [engine/src/sync-engine.ts:298-307,414-419]
+- [x] [Review][Defer] remote_id resolved in-memory but not persisted to SQLite [engine/src/sync-engine.ts:167] — deferred, pre-existing (same pattern in deleted syncPair)
+- [x] [Review][Defer] drainQueue() return value (synced/failed counts) discarded at watcher call sites [engine/src/main.ts:241,556] — deferred, pre-existing (same as old replayQueue pattern)
+
+---
+
+## Dev Agent Record
+
+### Implementation Plan
+
+Executed the 5-phase migration as documented in the Implementation Guidance section.
+
+### Debug Log
+
+**Phase 3 (tests 4.15/4.16)**: Old tests assumed `startSyncAll` held `busy='sync'` which caused concurrent `drainQueue()` calls to bounce. With the thin wrapper, `reconcileAndEnqueue()` has no busy guard, so old concurrent-drainQueue test assumptions were wrong. Rewrote 4.15/4.16 to test concurrent `drainQueue()` calls directly.
+
+**Phase 5 (replayPending removal)**: Removing `replayPending` means callers that relied on auto-retry after bounce must call `drainQueue()` again themselves if they need the work processed. The watcher's debounce loop and the online-event callback in `main.ts` already handle this naturally — they call `drainQueue()` as a fire-and-forget trigger each time an event arrives, so any missed drain is caught on the next event.
+
+### Completion Notes
+
+All 5 phases shipped. 206 tests, 0 failures. AC1–AC7 pass. Semaphore class, `syncPair()`, `executeWorkList()`, `processOne()`, `busy` enum, and `replayPending` flag all deleted. `isDraining` boolean replaces the enum. `drainQueue()` is the single consumer for all three producer paths.
+
+---
+
+## File List
+
+- `engine/src/sync-engine.ts` — Major rewrite: `reconcileAndEnqueue()`, thin `startSyncAll()`, `drainQueue()`, `isDraining` flag, `onNetworkFailure()` in catch; deleted `Semaphore`, `syncPair()`, `executeWorkList()`, `processOne()`, `busy` enum, `replayPending`
+- `engine/src/sync-engine.test.ts` — Renamed drainQueue describe; added tests 4.15–4.18; rewrote 4.15–4.17 for simplified lock; 2-5 tests preserved via thin wrapper
+- `engine/src/main.ts` — `replayQueue` → `drainQueue` in NetworkMonitor callback; `startSyncAll` → `drainQueue` in both FileWatcher `onChangesDetected` callbacks
+- `engine/src/watcher.ts` — Always-enqueue: `queueFileChange()` called regardless of online state; `scheduleSync()` only when online
+- `engine/src/watcher.test.ts` — Online path test updated: enqueueChange now called AND onChanges triggered
+
+---
+
+## Change Log
+
+- 2026-04-17: All 5 phases implemented by Amelia. Story → review.
 
 ---
 

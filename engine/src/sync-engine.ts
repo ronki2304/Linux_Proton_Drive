@@ -46,45 +46,13 @@ type WorkItem =
       remoteMtime: string;
     };
 
-// ── Semaphore ────────────────────────────────────────────────────────────────
-
-class Semaphore {
-  private count: number;
-  private readonly queue: Array<() => void> = [];
-
-  constructor(limit: number) {
-    this.count = limit;
-  }
-
-  acquire(): Promise<() => void> {
-    return new Promise((resolve) => {
-      const tryAcquire = () => {
-        if (this.count > 0) {
-          this.count--;
-          resolve(() => {
-            this.count++;
-            const next = this.queue.shift();
-            if (next) next();
-          });
-        } else {
-          this.queue.push(tryAcquire);
-        }
-      };
-      tryAcquire();
-    });
-  }
-}
-
 // ── SyncEngine ───────────────────────────────────────────────────────────────
 
 export class SyncEngine {
   private driveClient: DriveClient | null = null;
-  // Unified state-machine for sync pathways. `startSyncAll` and `replayQueue`
-  // are mutually exclusive: if one is running, the other bounces and sets
-  // `replayPending` so the drain runs once after the current operation
-  // completes. See Story 3-3 Task 2.2 for rationale.
-  private busy: "idle" | "sync" | "replay" = "idle";
-  private replayPending = false;
+  // Re-entrancy guard. True while a drainQueue() call is in flight; bounced
+  // concurrent calls return zero counts immediately. See AC4 (Story 2-12).
+  private isDraining = false;
 
   constructor(
     private readonly stateDb: StateDb,
@@ -128,93 +96,244 @@ export class SyncEngine {
     this.driveClient = client;
   }
 
+  /** Thin wrapper: reconcile then drain. Called on cold start, post-auth, and add_pair. */
   async startSyncAll(): Promise<void> {
-    if (this.busy !== "idle") return; // re-entrancy guard (F1)
-    this.busy = "sync";
-    process.stderr.write("[ENGINE] startSyncAll: begin\n");
-    try {
-      // Cold-start: restore pairs in config but missing from SQLite (AC5)
-      const configPairs = this.getConfigPairs();
-      const dbPairIds = new Set(this.stateDb.listPairs().map((p) => p.pair_id));
-      for (const cp of configPairs) {
-        if (!dbPairIds.has(cp.pair_id)) {
-          this.stateDb.insertPair({
-            pair_id: cp.pair_id,
-            local_path: cp.local_path,
-            remote_path: cp.remote_path,
-            remote_id: "",
-            created_at: cp.created_at ?? new Date().toISOString(),
-            last_synced_at: null,
-          });
-        }
-      }
-
-      const pairs = this.stateDb.listPairs();
-      process.stderr.write(`[ENGINE] startSyncAll: ${pairs.length} pair(s)\n`);
-      // Sync all pairs sequentially; per-pair errors do not abort siblings
-      for (const pair of pairs) {
-        try {
-          await this.syncPair(pair);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : "unknown";
-          // A fetch failure means the network dropped mid-sync. Trigger an
-          // immediate NetworkMonitor re-check so isCurrentlyOnline transitions
-          // to false and the watcher starts queuing instead of scheduling sync.
-          // Don't emit sync_cycle_error — the offline event from NetworkMonitor
-          // is the correct signal for the UI to act on.
-          if (isFetchFailure(err)) {
-            process.stderr.write(`[ENGINE] sync aborted — network failure detected, forcing connectivity check\n`);
-            this.onNetworkFailure();
-            break;
-          }
-          process.stderr.write(`[ENGINE] sync_cycle_error pair=${pair.pair_id.slice(-8)}: ${msg}\n`);
-          this.emitEvent({
-            type: "error",
-            payload: { code: "sync_cycle_error", message: msg, pair_id: pair.pair_id },
-          });
-        }
-      }
-    } finally {
-      process.stderr.write("[ENGINE] startSyncAll: done\n");
-      this.busy = "idle";
-      if (this.replayPending) {
-        this.replayPending = false;
-        // Fire-and-forget drain — any error is already handled inside
-        // replayQueue's per-entry try/catch and emitted as an error push event.
-        void this.replayQueue();
+    const networkFailed = await this.reconcileAndEnqueue();
+    if (!networkFailed) {
+      if (this.isDraining) {
+        // A concurrent drain is in flight — it may not have seen items just
+        // enqueued by reconcile. Schedule a one-shot retry so those entries
+        // are processed once the current drain releases the lock.
+        setTimeout(() => { void this.drainQueue(); }, 0);
+      } else {
+        await this.drainQueue();
       }
     }
   }
 
   /**
-   * Replay the persisted `change_queue` entries after an offline→online
-   * transition. Processes per-entry against a one-shot remote snapshot per
-   * pair and tallies `{synced, skipped_conflicts, failed}`.
+   * Discovery phase. Walks local + remote trees for each pair, creates
+   * missing folders in both directions, enqueues uploads to `change_queue`,
+   * and executes downloads directly. Called by `startSyncAll`.
    *
-   * Re-entrancy: if another sync pathway (`startSyncAll` or another in-flight
-   * `replayQueue`) holds the busy lock, the call sets `replayPending` and
-   * returns zero counts; the drain runs exactly once after the current
-   * operation releases busy. See Task 2.2/2.2a in Story 3-3.
+   * Returns `true` if a network failure was detected (caller should skip
+   * drainQueue — the NetworkMonitor will trigger a fresh drain on reconnect).
+   *
+   * Cold-start: pairs present in config.yaml but absent from SQLite are
+   * inserted before walking, preserving the fresh-install recovery path.
+   *
+   * Download handling: downloads are executed inline (not via queue) because
+   * `change_queue` only supports `created|modified|deleted` change types.
+   * Full download-queue unification is deferred to a follow-on story.
+   */
+  async reconcileAndEnqueue(): Promise<boolean> {
+    const client = this.driveClient;
+    if (!client) return false;
+
+    // Cold-start: restore pairs in config but missing from SQLite (AC5)
+    const configPairs = this.getConfigPairs();
+    const dbPairIds = new Set(this.stateDb.listPairs().map((p) => p.pair_id));
+    for (const cp of configPairs) {
+      if (!dbPairIds.has(cp.pair_id)) {
+        this.stateDb.insertPair({
+          pair_id: cp.pair_id,
+          local_path: cp.local_path,
+          remote_path: cp.remote_path,
+          remote_id: "",
+          created_at: cp.created_at ?? new Date().toISOString(),
+          last_synced_at: null,
+        });
+      }
+    }
+
+    const pairs = this.stateDb.listPairs();
+    process.stderr.write(`[ENGINE] reconcileAndEnqueue: ${pairs.length} pair(s)\n`);
+    for (let pairObj of pairs) {
+      try {
+        await this.reconcilePair(pairObj, client);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        if (isFetchFailure(err)) {
+          process.stderr.write(`[ENGINE] reconcile aborted — network failure detected, forcing connectivity check\n`);
+          this.onNetworkFailure();
+          return true;
+        }
+        process.stderr.write(`[ENGINE] sync_cycle_error pair=${pairObj.pair_id.slice(-8)}: ${msg}\n`);
+        this.emitEvent({
+          type: "error",
+          payload: { code: "sync_cycle_error", message: msg, pair_id: pairObj.pair_id },
+        });
+      }
+    }
+    return false;
+  }
+
+  /** Per-pair reconciliation: resolve remote_id, walk trees, create folders,
+   *  enqueue uploads, execute downloads. */
+  private async reconcilePair(pair: SyncPair, client: DriveClient): Promise<void> {
+    // Resolve remote_id if empty (AC6 from Story 2-5)
+    if (pair.remote_id === "") {
+      try {
+        process.stderr.write(`[ENGINE] resolving remote_id for pair=${pair.pair_id.slice(-8)} remote_path=${pair.remote_path}\n`);
+        const resolvedId = await this.resolveRemoteId(pair, client);
+        process.stderr.write(`[ENGINE] resolved remote_id=${resolvedId.slice(-8)} for pair=${pair.pair_id.slice(-8)}\n`);
+        pair = { ...pair, remote_id: resolvedId };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        process.stderr.write(`[ENGINE] remote_path_not_found pair=${pair.pair_id.slice(-8)}: ${msg}\n`);
+        this.emitEvent({
+          type: "error",
+          payload: { code: "remote_path_not_found", message: msg, pair_id: pair.pair_id },
+        });
+        return;
+      }
+    }
+
+    const { files: localFiles, dirs: localDirs } = await this.walkLocalTree(pair.local_path);
+    const { files: remoteFiles, folders: remoteFolders } = await this.walkRemoteTree(
+      pair.remote_id,
+      "",
+      client,
+    );
+    const syncStates = new Map(
+      this.stateDb.listSyncStates(pair.pair_id).map((s) => [s.relative_path, s]),
+    );
+
+    // ── Local dirs → remote ──────────────────────────────────────────────────
+    const allLocalDirs = new Set(localDirs);
+    for (const relPath of localFiles.keys()) {
+      let d = dirname(relPath);
+      while (d !== ".") { allLocalDirs.add(d); d = dirname(d); }
+    }
+    for (const localDir of [...allLocalDirs].sort()) {
+      if (!remoteFolders.has(localDir)) {
+        const parentDir = dirname(localDir);
+        const parentId = parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
+        if (parentId) {
+          const newId = await client.createRemoteFolder(parentId, basename(localDir));
+          remoteFolders.set(localDir, newId);
+        }
+      }
+    }
+
+    // ── Remote dirs → local ──────────────────────────────────────────────────
+    for (const relDir of [...remoteFolders.keys()].sort()) {
+      const localDir = join(pair.local_path, relDir);
+      await mkdir(localDir, { recursive: true });
+    }
+
+    const workItems = this.computeWorkList(pair, localFiles, remoteFiles, remoteFolders, syncStates);
+    process.stderr.write(`[ENGINE] reconcilePair: ${workItems.length} item(s) (localFiles=${localFiles.size} remoteFiles=${remoteFiles.size})\n`);
+
+    const downloadItems = workItems.filter((w) => w.kind === "download");
+    const uploadItems = workItems.filter((w) => w.kind === "upload");
+
+    // Emit initial sync_progress covering downloads (AC7 — files_done: 0 before transfers)
+    const bytesTotal = workItems.reduce((a, w) => a + w.size, 0);
+    this.emitEvent({
+      type: "sync_progress",
+      payload: {
+        pair_id: pair.pair_id,
+        files_done: 0,
+        files_total: workItems.length,
+        bytes_done: 0,
+        bytes_total: bytesTotal,
+      },
+    });
+
+    // ── Execute downloads directly ───────────────────────────────────────────
+    let filesDone = 0;
+    let bytesDone = 0;
+    for (const item of downloadItems) {
+      try {
+        await this.downloadOne(pair, item as WorkItem & { kind: "download" }, client);
+        const destPath = join(pair.local_path, item.relativePath);
+        const s = await stat(destPath);
+        this.stateDb.upsertSyncState({
+          pair_id: pair.pair_id,
+          relative_path: item.relativePath,
+          local_mtime: s.mtime.toISOString(),
+          remote_mtime: (item as WorkItem & { kind: "download" }).remoteMtime,
+          content_hash: null,
+        });
+        filesDone++;
+        bytesDone += item.size;
+        this.emitEvent({
+          type: "sync_progress",
+          payload: {
+            pair_id: pair.pair_id,
+            files_done: filesDone,
+            files_total: workItems.length,
+            bytes_done: bytesDone,
+            bytes_total: bytesTotal,
+          },
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : "unknown";
+        process.stderr.write(`[ENGINE] sync_file_error ${item.relativePath}: ${msg}\n`);
+        this.emitEvent({
+          type: "error",
+          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+        });
+      }
+    }
+
+    // ── Enqueue uploads (skip already-queued paths to avoid duplicates) ──────
+    const existingQueued = new Set(
+      this.stateDb.listQueue(pair.pair_id).map((e) => e.relative_path),
+    );
+    for (const item of uploadItems) {
+      if (!existingQueued.has(item.relativePath)) {
+        const isModification = syncStates.has(item.relativePath);
+        this.stateDb.enqueue({
+          pair_id: pair.pair_id,
+          relative_path: item.relativePath,
+          change_type: isModification ? "modified" : "created",
+          queued_at: new Date().toISOString(),
+        });
+        existingQueued.add(item.relativePath);
+      }
+    }
+
+    // Persist last_synced_at. Only emit sync_complete now if there are no
+    // pending uploads — drainQueue will emit it (and update last_synced_at
+    // again) once those uploads are processed, avoiding a double emission.
+    const completedAt = new Date().toISOString();
+    this.stateDb.updateLastSynced(pair.pair_id, completedAt);
+    if (uploadItems.length === 0) {
+      this.emitEvent({
+        type: "sync_complete",
+        payload: { pair_id: pair.pair_id, timestamp: completedAt },
+      });
+    }
+  }
+
+  /**
+   * Drain the persisted `change_queue` entries. Called after an offline→online
+   * transition, after watcher events (Phase 2+), or as the upload execution
+   * step of `startSyncAll`. Processes per-entry against a one-shot remote
+   * snapshot per pair and tallies `{synced, skipped_conflicts, failed}`.
+   *
+   * Re-entrancy: if another in-flight `drainQueue` holds the lock, the call
+   * returns zero counts immediately. Callers that need retry-after-drain
+   * semantics should call drainQueue() again from their own trigger (e.g. the
+   * watcher debounce or the online-event callback). See AC4 (Story 2-12).
    *
    * Emission ordering (AC6a):
    *  1. Per-entry `sync_progress` events during upload/trash
    *  2. `queue_replay_complete` fired BEFORE any final `sync_complete`
    *  3. Per-pair `sync_complete` only for pairs with ≥1 successful entry
    */
-  async replayQueue(): Promise<{
+  async drainQueue(): Promise<{
     synced: number;
     skipped_conflicts: number;
     failed: number;
   }> {
-    // Re-entrancy guard — bounce if another pathway is active. The pending
-    // flag is one-shot: repeat calls during busy all collapse to a single
-    // drain pass after busy clears (which is correct — one pass handles all
-    // queued entries).
-    if (this.busy !== "idle") {
-      this.replayPending = true;
+    // Re-entrancy guard — bounce immediately if already draining.
+    if (this.isDraining) {
       return { synced: 0, skipped_conflicts: 0, failed: 0 };
     }
-    this.busy = "replay";
+    this.isDraining = true;
 
     let synced = 0;
     let skipped_conflicts = 0;
@@ -306,22 +425,14 @@ export class SyncEngine {
         payload: { synced, skipped_conflicts },
       });
       for (const pair_id of pairsWithSuccess) {
+        const timestamp = new Date().toISOString();
+        this.stateDb.updateLastSynced(pair_id, timestamp);
         this.emitEvent({
           type: "sync_complete",
-          payload: { pair_id, timestamp: new Date().toISOString() },
+          payload: { pair_id, timestamp },
         });
       }
-      this.busy = "idle";
-      // Drain a one-shot replayPending flag: if an `online` event (or any
-      // other trigger) fired during this replay's execution, the top-of-method
-      // busy-check flipped replayPending to true instead of running. Drain it
-      // exactly once here so the queued intent isn't lost. The drained call
-      // itself processes whatever is now in the queue — if the queue is empty
-      // it still emits a zero-count queue_replay_complete per AC6.
-      if (this.replayPending) {
-        this.replayPending = false;
-        void this.replayQueue();
-      }
+      this.isDraining = false;
     }
 
     return { synced, skipped_conflicts, failed };
@@ -519,96 +630,13 @@ export class SyncEngine {
           relative_path: entry.relative_path,
         },
       });
+      // Network failure mid-drain: trigger offline transition so the UI
+      // reflects the connectivity loss (mirrors reconcileAndEnqueue behaviour).
+      if (isFetchFailure(err)) {
+        this.onNetworkFailure();
+      }
       return "failed";
     }
-  }
-
-  private async syncPair(pair: SyncPair): Promise<void> {
-    // Snapshot driveClient at cycle start — prevents null-dereference mid-flight
-    // if setDriveClient(null) is called during an active Promise.all. (F8)
-    const client = this.driveClient;
-    if (!client) return;
-
-    // Resolve remote_id if empty (AC6)
-    if (pair.remote_id === "") {
-      try {
-        process.stderr.write(`[ENGINE] resolving remote_id for pair=${pair.pair_id.slice(-8)} remote_path=${pair.remote_path}\n`);
-        const resolvedId = await this.resolveRemoteId(pair, client);
-        process.stderr.write(`[ENGINE] resolved remote_id=${resolvedId.slice(-8)} for pair=${pair.pair_id.slice(-8)}\n`);
-        // Update the in-memory pair for this cycle
-        pair = { ...pair, remote_id: resolvedId };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : "unknown";
-        process.stderr.write(`[ENGINE] remote_path_not_found pair=${pair.pair_id.slice(-8)}: ${msg}\n`);
-        this.emitEvent({
-          type: "error",
-          payload: { code: "remote_path_not_found", message: msg, pair_id: pair.pair_id },
-        });
-        return;
-      }
-    }
-
-    const { files: localFiles, dirs: localDirs } = await this.walkLocalTree(pair.local_path);
-    const { files: remoteFiles, folders: remoteFolders } = await this.walkRemoteTree(
-      pair.remote_id,
-      "",
-      client,
-    );
-    const syncStates = new Map(
-      this.stateDb.listSyncStates(pair.pair_id).map((s) => [s.relative_path, s]),
-    );
-
-    // ── Local dirs → remote ──────────────────────────────────────────────────
-    // Collect all local dirs (both from explicit dir entries and as parents of
-    // files). Sort so parents are created before children.
-    const allLocalDirs = new Set(localDirs);
-    for (const relPath of localFiles.keys()) {
-      let d = dirname(relPath);
-      while (d !== ".") { allLocalDirs.add(d); d = dirname(d); }
-    }
-    for (const localDir of [...allLocalDirs].sort()) {
-      if (!remoteFolders.has(localDir)) {
-        const parentDir = dirname(localDir);
-        const parentId = parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
-        if (parentId) {
-          const newId = await client.createRemoteFolder(parentId, basename(localDir));
-          remoteFolders.set(localDir, newId);
-        }
-      }
-    }
-
-    // ── Remote dirs → local ──────────────────────────────────────────────────
-    // Create any remote directories that don't exist locally yet.
-    for (const relDir of [...remoteFolders.keys()].sort()) {
-      const localDir = join(pair.local_path, relDir);
-      await mkdir(localDir, { recursive: true });
-    }
-
-    const workItems = this.computeWorkList(pair, localFiles, remoteFiles, remoteFolders, syncStates);
-    process.stderr.write(`[ENGINE] workList: ${workItems.length} items (localFiles=${localFiles.size} remoteFiles=${remoteFiles.size} remoteFolders=${remoteFolders.size})\n`);
-
-    // Emit initial sync_progress (AC7)
-    const bytesTotal = workItems.reduce((a, w) => a + w.size, 0);
-    this.emitEvent({
-      type: "sync_progress",
-      payload: {
-        pair_id: pair.pair_id,
-        files_done: 0,
-        files_total: workItems.length,
-        bytes_done: 0,
-        bytes_total: bytesTotal,
-      },
-    });
-
-    await this.executeWorkList(pair, workItems, client);
-
-    // Persist and emit sync_complete (AC7)
-    const completedAt = new Date().toISOString();
-    this.stateDb.updateLastSynced(pair.pair_id, completedAt);
-    this.emitEvent({
-      type: "sync_complete",
-      payload: { pair_id: pair.pair_id, timestamp: completedAt },
-    });
   }
 
   private async resolveRemoteId(pair: SyncPair, client: DriveClient): Promise<string> {
@@ -799,88 +827,6 @@ export class SyncEngine {
     }
 
     return workItems;
-  }
-
-  private async executeWorkList(pair: SyncPair, workItems: WorkItem[], client: DriveClient): Promise<void> {
-    const sem = new Semaphore(3);
-    let filesDone = 0;
-    let bytesDone = 0;
-    const bytesTotal = workItems.reduce((a, w) => a + w.size, 0);
-
-    await Promise.all(
-      workItems.map((item) =>
-        this.processOne(pair, item, sem, client, () => {
-          filesDone++;
-          bytesDone += item.size;
-          this.emitEvent({
-            type: "sync_progress",
-            payload: {
-              pair_id: pair.pair_id,
-              files_done: filesDone,
-              files_total: workItems.length,
-              bytes_done: bytesDone,
-              bytes_total: bytesTotal,
-            },
-          });
-        }),
-      ),
-    );
-  }
-
-  private async processOne(
-    pair: SyncPair,
-    item: WorkItem,
-    sem: Semaphore,
-    client: DriveClient,
-    onComplete: () => void,
-  ): Promise<void> {
-    const release = await sem.acquire();
-    try {
-      if (item.kind === "upload") {
-        await this.uploadOne(pair, item, client);
-      } else {
-        await this.downloadOne(pair, item, client);
-      }
-
-      // Determine post-transfer mtimes for state persistence
-      const destPath = join(pair.local_path, item.relativePath);
-      let localMtime: string;
-      let remoteMtime: string;
-
-      if (item.kind === "upload") {
-        // For uploads: remote_mtime = localMtime because the SDK stores
-        // body.modificationTime as activeRevision.claimedModificationTime.
-        // Using any other value would cause an infinite sync loop.
-        localMtime = item.localMtime;
-        remoteMtime = item.localMtime;
-      } else {
-        // For downloads: stat the file after rename
-        const s = await stat(destPath);
-        localMtime = s.mtime.toISOString();
-        remoteMtime = item.remoteMtime;
-      }
-
-      // 1. Write sync state first — durable before progress counter increments (AC3)
-      this.stateDb.upsertSyncState({
-        pair_id: pair.pair_id,
-        relative_path: item.relativePath,
-        local_mtime: localMtime,
-        remote_mtime: remoteMtime,
-        content_hash: null,
-      });
-
-      // 2. Then emit progress
-      onComplete();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "unknown";
-      process.stderr.write(`[ENGINE] sync_file_error ${item.relativePath}: ${msg}\n`);
-      this.emitEvent({
-        type: "error",
-        payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
-      });
-    } finally {
-      release();
-    }
   }
 
   private async uploadOne(pair: SyncPair, item: WorkItem & { kind: "upload" }, client: DriveClient): Promise<{ node_uid: string }> {

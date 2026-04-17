@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-17  # 3-4 done: rate limit handling & UI — clean review, 2 defers
+last_updated: 2026-04-17  # 2-12 done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -78,20 +78,22 @@ development_status:
   # Cross-epic tech debt identified during Story 3-3 review (2026-04-15).
   # Epic 2 stays 'done'; 2-12 is post-retro tech debt with its own standalone retrospective when picked up.
   # Precursor: 3-3 must be done first. Full context in deferred-work.md and 2-12-unified-queue-drainer-refactor.md
-  2-12-unified-queue-drainer-refactor: backlog
+  2-12-unified-queue-drainer-refactor: done
 
   # Epic 3: Offline Resilience & Network Handling
-  epic-3: in-progress
+  epic-3: done
   3-0a-bun-runtime-migration: done
   3-0b-targeted-debt-fixes: done
   3-1-offline-detection-and-ui-indicators: done
   3-2-offline-change-queue-persistent: done
   3-3-queue-replay-and-auto-resume-on-reconnect: done
   3-4-rate-limit-handling-and-ui: done
-  epic-3-retrospective: optional
+  epic-3-retrospective: done
 
   # Epic 4: Conflict Detection & Resolution
   epic-4: backlog
+  4-0-pre-epic-4-debt-cleanup: backlog
+  4-0b-deletion-propagation: backlog
   4-1-conflict-detection-existing-files: backlog
   4-2-new-file-collision-detection: backlog
   4-3-conflict-copy-creation: backlog

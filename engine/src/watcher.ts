@@ -50,9 +50,11 @@ export class FileWatcher {
       try {
         const watcher = this.watchFn(dir, (evt, filename) => {
           if (filename === null || filename === "") return;
-          if (!this.isOnline()) {
-            this.queueFileChange(pair, dir, evt ?? "change", filename);
-          } else {
+          // Always enqueue the change regardless of online state (AC2 — Story 2-12).
+          // When online, also schedule a drain so queued entries are processed
+          // immediately rather than waiting for the next reconnect.
+          this.queueFileChange(pair, dir, evt ?? "change", filename);
+          if (this.isOnline()) {
             this.scheduleSync(pair.pair_id);
           }
         });

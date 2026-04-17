@@ -405,3 +405,9 @@ If Path B is ever picked up, it becomes its own epic ("Alternative Auth Flow & A
 
 Live with intermittent renderer crashes during auth-flow testing on the aarch64 VM. Keep the two graphics env vars in the flatpak override. When auth-flow work is actively painful, revisit Path A as a small dev-quality story.
 
+
+
+## Deferred from: code review of 2-12-unified-queue-drainer-refactor (2026-04-17)
+
+- **remote_id resolved in-memory but not persisted to SQLite** — reconcilePair() resolves an empty remote_id via resolveRemoteId() and stores it in a local variable, but never writes the resolved value back to the DB. Every cold start re-resolves remote_id. Pre-existing pattern from deleted syncPair(); not a regression.
+- **drainQueue() return value discarded at watcher call sites** — watcher-triggered drainQueue() calls use `void`, so synced/failed counts are never surfaced to any observability layer for those code paths. Pre-existing pattern (same as old `void replayQueue()`). Consider logging or emitting counts in a follow-on observability story.

@@ -604,7 +604,7 @@ describe("get_status command", () => {
 describe("createNetworkMonitorCallback (Story 3-3 wiring)", () => {
   it("forwards every event to the server emitter", () => {
     const emitted: IpcPushEvent[] = [];
-    const fakeEngine = { replayQueue: mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 })) } as unknown as SyncEngine;
+    const fakeEngine = { drainQueue: mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 })) } as unknown as SyncEngine;
     const cb = createNetworkMonitorCallback(
       (e) => emitted.push(e),
       () => fakeEngine,
@@ -616,27 +616,27 @@ describe("createNetworkMonitorCallback (Story 3-3 wiring)", () => {
     expect(emitted[1]!.type).toBe("online");
   });
 
-  it("triggers engine.replayQueue() ONLY on 'online' events", () => {
+  it("triggers engine.drainQueue() ONLY on 'online' events", () => {
     const emitted: IpcPushEvent[] = [];
-    const replayFn = mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 }));
-    const fakeEngine = { replayQueue: replayFn } as unknown as SyncEngine;
+    const drainFn = mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 }));
+    const fakeEngine = { drainQueue: drainFn } as unknown as SyncEngine;
     const cb = createNetworkMonitorCallback(
       (e) => emitted.push(e),
       () => fakeEngine,
     );
     cb({ type: "offline", payload: {} });
-    expect(replayFn.mock.calls.length).toBe(0);
+    expect(drainFn.mock.calls.length).toBe(0);
     cb({ type: "online", payload: {} });
-    expect(replayFn.mock.calls.length).toBe(1);
+    expect(drainFn.mock.calls.length).toBe(1);
     cb({ type: "online", payload: {} });
-    expect(replayFn.mock.calls.length).toBe(2);
+    expect(drainFn.mock.calls.length).toBe(2);
   });
 
-  it("emits server event BEFORE invoking replayQueue (ordering guarantee)", () => {
+  it("emits server event BEFORE invoking drainQueue (ordering guarantee)", () => {
     const order: string[] = [];
     const fakeEngine = {
-      replayQueue: mock(async () => {
-        order.push("replay");
+      drainQueue: mock(async () => {
+        order.push("drain");
         return { synced: 0, skipped_conflicts: 0, failed: 0 };
       }),
     } as unknown as SyncEngine;
@@ -645,21 +645,21 @@ describe("createNetworkMonitorCallback (Story 3-3 wiring)", () => {
       () => fakeEngine,
     );
     cb({ type: "online", payload: {} });
-    // replayQueue is called synchronously from cb but runs async; the first
+    // drainQueue is called synchronously from cb but runs async; the first
     // microtask of an async fn runs up to the first await, which here is the
     // `return {...}`. Either way, emit happens first in the call sequence.
     expect(order[0]).toBe("emit");
-    expect(order.includes("replay")).toBe(true);
+    expect(order.includes("drain")).toBe(true);
   });
 
-  it("first-check online (startup path) does NOT trigger replayQueue (Task 5.3 lock-in)", async () => {
+  it("first-check online (startup path) does NOT trigger drainQueue (Task 5.3 lock-in)", async () => {
     // NetworkMonitor starts with isOnline=true (optimistic). The first
     // runCheck() resolves the real state; if the machine is actually online
-    // the new value equals the old and no event fires — therefore replay must
+    // the new value equals the old and no event fires — therefore drain must
     // not run on startup, only on a real offline→online transition.
     const emitted: IpcPushEvent[] = [];
-    const replayFn = mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 }));
-    const fakeEngine = { replayQueue: replayFn } as unknown as SyncEngine;
+    const drainFn = mock(async () => ({ synced: 0, skipped_conflicts: 0, failed: 0 }));
+    const fakeEngine = { drainQueue: drainFn } as unknown as SyncEngine;
     const cb = createNetworkMonitorCallback(
       (e) => emitted.push(e),
       () => fakeEngine,
@@ -673,7 +673,7 @@ describe("createNetworkMonitorCallback (Story 3-3 wiring)", () => {
     monitor.stop();
 
     expect(emitted.length).toBe(0);
-    expect(replayFn.mock.calls.length).toBe(0);
+    expect(drainFn.mock.calls.length).toBe(0);
   });
 
   it("emits over real IPC when wired to IpcServer+StateDb+SyncEngine", async () => {
@@ -688,7 +688,7 @@ describe("createNetworkMonitorCallback (Story 3-3 wiring)", () => {
     }));
     const db = new StateDb(":memory:");
     const engine = new SyncEngine(db, (e) => server.emitEvent(e));
-    // driveClient null → replayQueue returns zero counts but still emits
+    // driveClient null → drainQueue returns zero counts but still emits
     // queue_replay_complete (AC6).
     engine.setDriveClient(null);
 

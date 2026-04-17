@@ -215,7 +215,7 @@ export function createNetworkMonitorCallback(
   return (event) => {
     emitToServer(event);
     if (event.type === "online") {
-      void getSyncEngine()?.replayQueue();
+      void getSyncEngine()?.drainQueue();
     }
   };
 }
@@ -238,7 +238,7 @@ function _activateSession(
   fileWatcher = new FileWatcher(
     stateDb!.listPairs(),
     async (_pairId) => {
-      await syncEngine!.startSyncAll();
+      void syncEngine?.drainQueue();
     },
     (e) => server.emitEvent(e),
     undefined,   // watchFn: use default
@@ -553,7 +553,7 @@ export async function handleCommand(
       fileWatcher = new FileWatcher(
         stateDb.listPairs(),
         async (_pairId) => {
-          await syncEngine!.startSyncAll();
+          void syncEngine?.drainQueue();
         },
         (e) => server.emitEvent(e),
         undefined,   // watchFn: use default

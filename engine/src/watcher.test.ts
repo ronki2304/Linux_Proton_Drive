@@ -360,8 +360,8 @@ describe("FileWatcher — offline change queue", () => {
     mock.restore();
   });
 
-  // 3.2 — online path: enqueueChange NOT called
-  it("online: 'change' event → onChanges called, enqueueChange NOT called", async () => {
+  // 3.2 — online path: enqueueChange IS called AND onChanges triggered (Story 2-12 always-enqueue)
+  it("online: 'change' event → enqueueChange called AND onChanges triggered", async () => {
     const mockWatcher = makeMockWatcher();
     const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => mockWatcher);
     const onChanges = mock(async (_pairId: string) => {});
@@ -383,8 +383,10 @@ describe("FileWatcher — offline change queue", () => {
     listener("change", "file.txt");
 
     await new Promise<void>((resolve) => setTimeout(resolve, 20));
+    // Online: both enqueue the change AND schedule a drain
+    expect(enqueueCalls.length).toBe(1);
+    expect(enqueueCalls[0]!.change_type).toBe("modified");
     expect(onChanges.mock.calls.length).toBe(1);
-    expect(enqueueCalls.length).toBe(0);
 
     fw.stop();
   });
