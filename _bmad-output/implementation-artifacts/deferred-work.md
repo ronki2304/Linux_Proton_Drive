@@ -255,6 +255,11 @@ Items that directly affect Epic 2 stability. Must be resolved before starting Ep
 - **W5** — `_setNetworkMonitorForTests` doesn't stop previous monitor before replacing (`engine/src/main.ts:196`): if a test sets a monitor, starts it, then calls `_setNetworkMonitorForTests` again without stopping the first, the old timer leaks. Tests are responsible for calling `monitor.stop()` in `afterEach`; this is the established project pattern.
 - **W6** — Test "emits online after offline" first-monitor block is dead code (`engine/src/network-monitor.test.ts:40-50`): the first monitor is started, verified offline, and stopped — but this duplicates the "emits offline immediately" test. The actual scenario (offline→online transition) is in `monitor2`. Low severity cleanup opportunity.
 
+## Deferred from: code review of 3-4-rate-limit-handling-and-ui (2026-04-17)
+
+- Unreachable `throw new SyncError("withBackoff: exhausted retries")` at bottom of `withBackoff()` [engine/src/sync-engine.ts] — loop always returns or throws before reaching it; added to satisfy TypeScript's control-flow analysis. Could be replaced with a `/* c8 ignore next */` pragma or removed once TypeScript narrows the exhaustive case.
+- Non-numeric `resume_in_seconds` guard in `on_rate_limited` [ui/src/protondrive/window.py:353-354] — `or 0` guards None, but a string or object value would raise TypeError when compared `> 0`; trusted internal engine→UI boundary makes this effectively unreachable; a `isinstance(resume_in, (int, float))` guard would make it robust to engine bugs.
+
 ---
 
 ## Cross-Epic Tech Debt — Story 2-12: Unified Queue Drainer Refactor

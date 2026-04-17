@@ -1,6 +1,6 @@
 # Story 3.4: Rate Limit Handling & UI
 
-Status: review
+Status: done
 
 ## Story
 
@@ -549,3 +549,10 @@ None — clean implementation, no debugging needed.
 - `ui/tests/test_window_routing.py` — `TestOnRateLimited` (3 tests)
 - `_bmad-output/implementation-artifacts/sprint-status.yaml` — status: in-progress → review
 - `_bmad-output/implementation-artifacts/3-4-rate-limit-handling-and-ui.md` — all tasks checked, dev record filled
+
+---
+
+### Review Findings
+
+- [x] [Review][Defer] Unreachable `throw new SyncError("withBackoff: exhausted retries")` [engine/src/sync-engine.ts] — deferred, pre-existing; loop always returns or throws before reaching it; added to satisfy TypeScript's control-flow analysis
+- [x] [Review][Defer] Non-numeric `resume_in_seconds` guard in `on_rate_limited` [ui/src/protondrive/window.py:353-354] — deferred, pre-existing pattern; `or 0` guards None but a string/object value would raise TypeError; trusted internal engine→UI boundary makes this effectively unreachable
