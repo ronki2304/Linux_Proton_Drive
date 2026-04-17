@@ -52,6 +52,21 @@ export class NetworkMonitor {
     return this.isOnline;
   }
 
+  /**
+   * Cancel the pending poll timer and run a connectivity check immediately.
+   * Called when a sync operation fails with a network error so that the
+   * offline state is detected and emitted without waiting up to 30 seconds
+   * for the next scheduled poll.
+   */
+  forceCheck(): void {
+    if (this.stopped) return;
+    if (this.timer !== undefined) {
+      clearTimeout(this.timer);
+      this.timer = undefined;
+    }
+    void this.runCheck();
+  }
+
   private schedule(): void {
     if (this.stopped) return;
     const delay = this.isOnline ? 30_000 : 5_000;

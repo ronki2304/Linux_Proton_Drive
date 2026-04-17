@@ -57,7 +57,7 @@ class StatusFooterBar(Gtk.Box):
         self._set_dot_state("offline")
         self.update_property([Gtk.AccessibleProperty.LABEL], [text])
         # polite live-region announcement required for offline state change (AC5)
-        self.announce(text, Gtk.AccessibleAnnouncementPriority.POLITE)
+        self.announce(text, Gtk.AccessibleAnnouncementPriority.LOW)
 
     def set_conflict_pending(self, count: int) -> None:
         """Show pending-conflict indicator after queue replay (Story 3-3 AC7).
@@ -77,7 +77,7 @@ class StatusFooterBar(Gtk.Box):
         self.footer_label.set_text(text)
         self._set_dot_state("conflict")
         self.update_property([Gtk.AccessibleProperty.LABEL], [text])
-        self.announce(text, Gtk.AccessibleAnnouncementPriority.POLITE)
+        self.announce(text, Gtk.AccessibleAnnouncementPriority.LOW)
 
     def _set_dot_state(self, state: str) -> None:
         """Update dot colour and CSS class.

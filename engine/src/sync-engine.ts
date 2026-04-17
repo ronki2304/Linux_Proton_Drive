@@ -6,8 +6,19 @@ import type { IpcPushEvent } from "./ipc.js";
 import type { DriveClient, RemoteFile } from "./sdk.js";
 import type { ChangeQueueEntry, StateDb, SyncPair } from "./state-db.js";
 import { listConfigPairs, type ConfigPair } from "./config.js";
-import { SyncError } from "./errors.js";
+import { NetworkError, SyncError } from "./errors.js";
 import { debugLog } from "./debug-log.js";
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** True when the error is a network-level fetch failure from undici or our own NetworkError. */
+function isFetchFailure(err: unknown): boolean {
+  if (err instanceof NetworkError) return true;
+  // Use .name check (not instanceof) — Bun --compile can produce cross-realm
+  // TypeErrors from bundled undici where instanceof TypeError is false.
+  if (err instanceof Error && err.name === "TypeError" && err.message === "fetch failed") return true;
+  return false;
+}
 
 // ── Internal types ───────────────────────────────────────────────────────────
 
@@ -79,6 +90,7 @@ export class SyncEngine {
     private readonly stateDb: StateDb,
     private readonly emitEvent: (event: IpcPushEvent) => void,
     private readonly getConfigPairs: () => ConfigPair[] = listConfigPairs,
+    private readonly onNetworkFailure: () => void = () => {},
   ) {}
 
   setDriveClient(client: DriveClient | null): void {
@@ -114,6 +126,16 @@ export class SyncEngine {
           await this.syncPair(pair);
         } catch (err) {
           const msg = err instanceof Error ? err.message : "unknown";
+          // A fetch failure means the network dropped mid-sync. Trigger an
+          // immediate NetworkMonitor re-check so isCurrentlyOnline transitions
+          // to false and the watcher starts queuing instead of scheduling sync.
+          // Don't emit sync_cycle_error — the offline event from NetworkMonitor
+          // is the correct signal for the UI to act on.
+          if (isFetchFailure(err)) {
+            process.stderr.write(`[ENGINE] sync aborted — network failure detected, forcing connectivity check\n`);
+            this.onNetworkFailure();
+            break;
+          }
           process.stderr.write(`[ENGINE] sync_cycle_error pair=${pair.pair_id.slice(-8)}: ${msg}\n`);
           this.emitEvent({
             type: "error",

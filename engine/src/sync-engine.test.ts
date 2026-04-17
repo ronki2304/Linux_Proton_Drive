@@ -379,6 +379,41 @@ describe("SyncEngine — remote_id resolution (AC6)", () => {
     expect(errorEvent).toBeTruthy();
     expect((errorEvent!.payload as Record<string, unknown>)["pair_id"]).toBe(PAIR_ID);
   });
+
+  it("fetch failure → onNetworkFailure called, sync_cycle_error NOT emitted", async () => {
+    // Simulates the user going offline mid-session: the SDK throws a
+    // 'TypeError: fetch failed' (undici network error). The engine must call
+    // onNetworkFailure() so the NetworkMonitor re-checks immediately, and must
+    // NOT emit a sync_cycle_error (which would confuse the UI).
+    db.insertPair({
+      pair_id: PAIR_ID,
+      local_path: tmpDir,
+      remote_path: "/Documents",
+      remote_id: "some-remote-id",
+      created_at: "2026-04-10T00:00:00.000Z",
+      last_synced_at: null,
+    });
+
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    });
+
+    let networkFailureCalled = false;
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e), undefined, () => {
+      networkFailureCalled = true;
+    });
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    expect(networkFailureCalled).toBe(true);
+    const syncCycleErrors = emittedEvents.filter(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>)["code"] === "sync_cycle_error",
+    );
+    expect(syncCycleErrors.length).toBe(0);
+  });
 });
 
 describe("SyncEngine — sync_progress and sync_complete events (AC7)", () => {

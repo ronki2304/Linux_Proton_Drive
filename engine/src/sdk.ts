@@ -171,6 +171,15 @@ function mapSdkError(err: unknown): never {
   if (err instanceof AbortError) throw err;
 
   // Network family.
+  // undici throws TypeError('fetch failed') when the TCP connection is
+  // refused or the interface is down — classify it as NetworkError so the
+  // engine can distinguish it from genuine SDK bugs.
+  // undici throws TypeError('fetch failed') on network-level failures. We
+  // check `.name` rather than `instanceof TypeError` because Bun's --compile
+  // bundler can produce a cross-realm TypeError where instanceof is false.
+  if (err instanceof Error && err.name === "TypeError" && err.message === "fetch failed") {
+    throw new NetworkError("Network unavailable", { cause: err });
+  }
   if (err instanceof ConnectionError) {
     throw new NetworkError("Network unavailable", { cause: err });
   }

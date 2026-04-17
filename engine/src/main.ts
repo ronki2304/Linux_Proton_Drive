@@ -602,8 +602,9 @@ export async function handleCommand(
 }
 
 async function main(): Promise<void> {
+  process.stderr.write(`[ENGINE] BUILD 2026-04-17-v5 started\n`);
   stateDb = new StateDb();
-  syncEngine = new SyncEngine(stateDb, (e) => server.emitEvent(e));
+  syncEngine = new SyncEngine(stateDb, (e) => server.emitEvent(e), undefined, () => networkMonitor?.forceCheck());
   const socketPath = resolveSocketPath();
   server = new IpcServer(socketPath, handleCommand);
   // Wrap the emit callback so an `online` transition triggers queue replay in
