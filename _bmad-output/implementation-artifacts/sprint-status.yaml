@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-16  # 3-3 done (code review patches applied)
+last_updated: 2026-04-17  # 3-3 bugs fixed: forceCheck on network failure, AccessibleAnnouncementPriority.POLITE→LOW; smoke tested bare metal
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
