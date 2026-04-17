@@ -6,7 +6,7 @@ import type { IpcPushEvent } from "./ipc.js";
 import type { DriveClient, RemoteFile } from "./sdk.js";
 import type { ChangeQueueEntry, StateDb, SyncPair } from "./state-db.js";
 import { listConfigPairs, type ConfigPair } from "./config.js";
-import { NetworkError, SyncError } from "./errors.js";
+import { NetworkError, RateLimitError, SyncError } from "./errors.js";
 import { debugLog } from "./debug-log.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -91,7 +91,38 @@ export class SyncEngine {
     private readonly emitEvent: (event: IpcPushEvent) => void,
     private readonly getConfigPairs: () => ConfigPair[] = listConfigPairs,
     private readonly onNetworkFailure: () => void = () => {},
+    private readonly sleepMs: (ms: number) => Promise<void> =
+      (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
   ) {}
+
+  /**
+   * Retry `fn` with exponential backoff on RateLimitError.
+   * Emits `rate_limited` push event before each sleep.
+   * Max 5 attempts (attempts 0–4); re-throws on the 5th failure.
+   * Sleep duration: min(2^attempt, 30) seconds.
+   */
+  private async withBackoff<T>(fn: () => Promise<T>): Promise<T> {
+    const MAX_RETRIES = 5;
+    const MAX_BACKOFF_S = 30;
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        if (err instanceof RateLimitError && attempt < MAX_RETRIES - 1) {
+          const resumeIn = Math.min(Math.pow(2, attempt), MAX_BACKOFF_S);
+          this.emitEvent({
+            type: "rate_limited",
+            payload: { resume_in_seconds: resumeIn },
+          });
+          await this.sleepMs(resumeIn * 1000);
+          continue;
+        }
+        throw err;
+      }
+    }
+    // Unreachable (loop always returns or throws), but TypeScript needs this.
+    throw new SyncError("withBackoff: exhausted retries");
+  }
 
   setDriveClient(client: DriveClient | null): void {
     this.driveClient = client;
@@ -439,7 +470,7 @@ export class SyncEngine {
         }
         case "trashNode": {
           // remote is guaranteed defined by the decision table for this cell.
-          await client.trashNode(remote!.id);
+          await this.withBackoff(() => client.trashNode(remote!.id));
           // Atomic — crashing between deleteSyncState and dequeue would leave
           // the remote trashed, the sync_state row gone, and the queue entry
           // behind; next replay would hit (undefined, undefined, deleted) and
@@ -863,10 +894,10 @@ export class SyncEngine {
     };
     if (item.existingNodeUid) {
       // File already exists remotely — upload a new revision instead of creating a new node.
-      const result = await client.uploadFileRevision(item.existingNodeUid, body);
+      const result = await this.withBackoff(() => client.uploadFileRevision(item.existingNodeUid!, body));
       return { node_uid: result.node_uid };
     }
-    const result = await client.uploadFile(item.remoteFolderId, basename(item.relativePath), body);
+    const result = await this.withBackoff(() => client.uploadFile(item.remoteFolderId, basename(item.relativePath), body));
     return { node_uid: result.node_uid };
   }
 
@@ -881,7 +912,7 @@ export class SyncEngine {
     const nodeWritable = createWriteStream(tmpPath);
     const writableStream = Writable.toWeb(nodeWritable) as WritableStream<Uint8Array>;
     try {
-      await client.downloadFile(item.nodeUid, writableStream);
+      await this.withBackoff(() => client.downloadFile(item.nodeUid, writableStream));
       // Explicitly end and flush — the SDK writes all chunks but does not
       // guarantee it closes the WritableStream, so nodeWritable.close/finish
       // may never fire if we just wait passively.

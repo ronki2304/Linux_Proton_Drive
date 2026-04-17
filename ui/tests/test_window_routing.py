@@ -406,3 +406,26 @@ class TestConflictPendingRegressionGuards:
         row.set_state.side_effect = _set_state
         win.on_online()
         win.status_footer_bar.update_all_synced.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Story 3-4 — on_rate_limited
+# ---------------------------------------------------------------------------
+
+class TestOnRateLimited:
+    """on_rate_limited routes to status_footer_bar.set_rate_limited (AC4)."""
+
+    def test_normal_payload_calls_set_rate_limited(self):
+        win = _make_window()
+        win.on_rate_limited({"resume_in_seconds": 5})
+        win.status_footer_bar.set_rate_limited.assert_called_once_with(5)
+
+    def test_none_resume_in_uses_safe_default(self):
+        win = _make_window()
+        win.on_rate_limited({"resume_in_seconds": None})
+        win.status_footer_bar.set_rate_limited.assert_called_once_with(5)
+
+    def test_zero_resume_in_uses_safe_default(self):
+        win = _make_window()
+        win.on_rate_limited({"resume_in_seconds": 0})
+        win.status_footer_bar.set_rate_limited.assert_called_once_with(5)

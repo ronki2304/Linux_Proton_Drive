@@ -348,6 +348,12 @@ class MainWindow(Adw.ApplicationWindow):
         # below). AC7 row 1 resolves there — doing it here would flash before
         # sync_complete.
 
+    def on_rate_limited(self, payload: dict[str, Any]) -> None:
+        """Handle engine's `rate_limited` push event (Story 3-4 AC4)."""
+        resume_in = (payload.get("resume_in_seconds") or 0)
+        resume_in = int(resume_in) if resume_in > 0 else 5  # safe default
+        self.status_footer_bar.set_rate_limited(resume_in)
+
     def on_sync_progress(self, payload: dict[str, Any]) -> None:
         """Update pair row and footer bar when sync is in progress."""
         pair_id = payload.get("pair_id", "")

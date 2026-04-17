@@ -67,7 +67,7 @@ import * as openpgp from "openpgp";
 
 import bcrypt from "bcryptjs";
 
-import { EngineError, NetworkError, SyncError } from "./errors.js";
+import { EngineError, NetworkError, RateLimitError, SyncError } from "./errors.js";
 import { debugLog } from "./debug-log.js";
 
 // ---------------------------------------------------------------------------
@@ -184,7 +184,7 @@ function mapSdkError(err: unknown): never {
     throw new NetworkError("Network unavailable", { cause: err });
   }
   if (err instanceof RateLimitedError) {
-    throw new NetworkError("Rate limited", { cause: err });
+    throw new RateLimitError("Rate limited", { cause: err });
   }
   if (err instanceof ServerError) {
     throw new NetworkError(`API error: ${err.message}`, { cause: err });

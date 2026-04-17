@@ -21,6 +21,13 @@ export class NetworkError extends EngineError {
   }
 }
 
+export class RateLimitError extends EngineError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "RateLimitError";
+  }
+}
+
 export class IpcError extends EngineError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);

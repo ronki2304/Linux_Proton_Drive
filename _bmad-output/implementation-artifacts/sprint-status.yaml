@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-17  # 3-3 bugs fixed: forceCheck on network failure, AccessibleAnnouncementPriority.POLITE→LOW; smoke tested bare metal
+last_updated: 2026-04-17  # 3-4 story created: rate limit handling & UI
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -87,7 +87,7 @@ development_status:
   3-1-offline-detection-and-ui-indicators: done
   3-2-offline-change-queue-persistent: done
   3-3-queue-replay-and-auto-resume-on-reconnect: done
-  3-4-rate-limit-handling-and-ui: backlog
+  3-4-rate-limit-handling-and-ui: review
   epic-3-retrospective: optional
 
   # Epic 4: Conflict Detection & Resolution

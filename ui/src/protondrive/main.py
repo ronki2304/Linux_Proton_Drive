@@ -71,6 +71,7 @@ class Application(Adw.Application):
         self._engine.on_event("offline", self._on_offline)
         self._engine.on_event("online", self._on_online)
         self._engine.on_event("queue_replay_complete", self._on_queue_replay_complete)
+        self._engine.on_event("rate_limited", self._on_rate_limited)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -190,6 +191,10 @@ class Application(Adw.Application):
             return
         if self._window is not None:
             self._window.on_queue_replay_complete(payload)
+
+    def _on_rate_limited(self, payload: dict[str, Any]) -> None:
+        if self._window is not None:
+            self._window.on_rate_limited(payload)
 
     def _start_validation_timeout(self) -> None:
         """Start timeout for token validation response (NFR1)."""

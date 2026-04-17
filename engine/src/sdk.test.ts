@@ -12,7 +12,7 @@ import {
   type UploadBody,
   type AccountInfo,
 } from "./sdk.js";
-import { EngineError, NetworkError, SyncError } from "./errors.js";
+import { EngineError, NetworkError, RateLimitError, SyncError } from "./errors.js";
 
 describe("SDK boundary enforcement", () => {
   const srcDir = path.resolve(import.meta.dirname!, ".");
@@ -583,7 +583,7 @@ describe("DriveClient.downloadFile", () => {
 describe("DriveClient SDK error mapping", () => {
   async function expectMapping(
     throwError: Error,
-    expectedClass: typeof SyncError | typeof NetworkError,
+    expectedClass: typeof SyncError | typeof NetworkError | typeof RateLimitError,
     expectedMessageMatcher: RegExp,
   ): Promise<void> {
     const sdk = makeFakeSdk({
@@ -609,8 +609,23 @@ describe("DriveClient SDK error mapping", () => {
     await expectMapping(sdkErrorFactoriesForTests.connection(), NetworkError, /Network unavailable/);
   });
 
-  it("RateLimitedError → NetworkError('Rate limited') (subclass before parent)", async () => {
-    await expectMapping(sdkErrorFactoriesForTests.rateLimited(), NetworkError, /Rate limited/);
+  it("RateLimitedError → RateLimitError('Rate limited') (not NetworkError)", async () => {
+    const sdkErr = sdkErrorFactoriesForTests.rateLimited();
+    const sdk = makeFakeSdk({
+      getMyFilesRootFolder: mock(async () => { throw sdkErr; }),
+    });
+    const client = new DriveClient(sdk);
+    let captured: unknown;
+    try {
+      await client.listRemoteFolders(null);
+      expect(true).toBe(false);
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).toBeInstanceOf(RateLimitError);
+    expect((captured as Error).message).toMatch(/Rate limited/);
+    expect(captured instanceof NetworkError).toBe(false);
+    expect((captured as Error & { cause?: unknown }).cause).toBe(sdkErr);
   });
 
   it("ServerError → NetworkError('API error: ...')", async () => {

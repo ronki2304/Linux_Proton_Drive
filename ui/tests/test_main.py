@@ -127,3 +127,21 @@ class TestQueueReplayCompleteHandler:
         source = inspect.getsource(main_module.Application.do_startup)
         assert '"queue_replay_complete"' in source
         assert "_on_queue_replay_complete" in source
+
+
+class TestRateLimitedHandler:
+    """Story 3-4 — _on_rate_limited forwards payload to window."""
+
+    def test_handler_registered_in_do_startup(self) -> None:
+        import protondrive.main as main_module
+        import inspect
+
+        source = inspect.getsource(main_module.Application.do_startup)
+        assert '"rate_limited"' in source
+        assert "_on_rate_limited" in source
+
+    def test_forwards_payload_to_window(self) -> None:
+        app = _make_app()
+        payload = {"resume_in_seconds": 10}
+        app._on_rate_limited(payload)
+        app._window.on_rate_limited.assert_called_once_with(payload)

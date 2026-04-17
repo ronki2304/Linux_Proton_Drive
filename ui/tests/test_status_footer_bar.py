@@ -15,6 +15,8 @@ def _make_bar() -> StatusFooterBar:
     """Construct a StatusFooterBar without invoking GTK __init__."""
     bar = object.__new__(StatusFooterBar)
     bar._dot_state = "synced"
+    bar._rate_limit_remaining = 0
+    bar._rate_limit_source_id = None
 
     bar.footer_dot = MagicMock()
     bar.footer_label = MagicMock()
@@ -177,6 +179,93 @@ class TestStatusFooterBarSetConflictPending:
         bar.set_conflict_pending(4)
         _, values = bar._accessible_label_args
         assert values == ["4 files need conflict resolution"]
+
+
+class TestStatusFooterBarSetRateLimited:
+    """Story 3-4 — set_rate_limited(), countdown timer, and dot color."""
+
+    def test_label_text_shows_resume_in_5s(self):
+        bar = _make_bar()
+        bar.set_rate_limited(5)
+        bar.footer_label.set_text.assert_called_with("Sync paused \u2014 resuming in 5s")
+
+    def test_label_text_shows_resume_in_1s(self):
+        bar = _make_bar()
+        bar.set_rate_limited(1)
+        bar.footer_label.set_text.assert_called_with("Sync paused \u2014 resuming in 1s")
+
+    def test_dot_state_becomes_rate_limited(self):
+        bar = _make_bar()
+        bar.set_rate_limited(5)
+        assert bar._dot_state == "rate_limited"
+
+    def test_glib_timeout_add_called_with_1000ms(self):
+        from gi.repository import GLib
+        orig_timeout_add = GLib.timeout_add
+        try:
+            GLib.timeout_add = MagicMock(return_value=42)
+            bar = _make_bar()
+            bar.set_rate_limited(5)
+            GLib.timeout_add.assert_called_once_with(1000, bar._on_rate_limit_tick)
+        finally:
+            GLib.timeout_add = orig_timeout_add
+
+    def test_announce_called_with_rate_limited_text(self):
+        from gi.repository import Gtk
+        bar = _make_bar()
+        bar.announce = MagicMock()
+        bar.set_rate_limited(5)
+        bar.announce.assert_called_once_with(
+            "Sync paused \u2014 resuming in 5s",
+            Gtk.AccessibleAnnouncementPriority.LOW,
+        )
+
+    def test_second_call_cancels_first_timer(self):
+        from gi.repository import GLib
+        orig_timeout_add = GLib.timeout_add
+        orig_source_remove = GLib.source_remove
+        try:
+            GLib.timeout_add = MagicMock(side_effect=[42, 99])
+            GLib.source_remove = MagicMock()
+            bar = _make_bar()
+            bar.set_rate_limited(5)
+            bar.set_rate_limited(3)
+            GLib.source_remove.assert_called_once_with(42)
+        finally:
+            GLib.timeout_add = orig_timeout_add
+            GLib.source_remove = orig_source_remove
+
+    def test_dot_draw_renders_teal_in_rate_limited_state(self):
+        bar = _make_bar()
+        bar._dot_state = "rate_limited"
+        cr = MagicMock()
+        bar._on_dot_draw(MagicMock(), cr, 10, 10)
+        cr.set_source_rgb.assert_called_with(0.11, 0.63, 0.63)
+
+    def test_tick_when_state_not_rate_limited_returns_source_remove(self):
+        from gi.repository import GLib
+        bar = _make_bar()
+        bar._dot_state = "synced"
+        result = bar._on_rate_limit_tick()
+        assert result == GLib.SOURCE_REMOVE
+
+    def test_tick_with_2s_remaining_returns_source_continue_and_updates_label(self):
+        from gi.repository import GLib
+        bar = _make_bar()
+        bar._dot_state = "rate_limited"
+        bar._rate_limit_remaining = 2
+        result = bar._on_rate_limit_tick()
+        assert result == GLib.SOURCE_CONTINUE
+        bar.footer_label.set_text.assert_called_with("Sync paused \u2014 resuming in 1s")
+
+    def test_tick_with_0s_remaining_returns_source_remove_and_shows_resuming_shortly(self):
+        from gi.repository import GLib
+        bar = _make_bar()
+        bar._dot_state = "rate_limited"
+        bar._rate_limit_remaining = 1  # will be decremented to 0
+        result = bar._on_rate_limit_tick()
+        assert result == GLib.SOURCE_REMOVE
+        bar.footer_label.set_text.assert_called_with("Sync paused \u2014 resuming shortly")
 
 
 class TestStatusFooterBarSetInitialising:

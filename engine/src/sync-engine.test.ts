@@ -17,6 +17,7 @@ import { SyncEngine } from "./sync-engine.js";
 import type { DriveClient, RemoteFile } from "./sdk.js";
 import type { IpcPushEvent } from "./ipc.js";
 import type { ConfigPair } from "./config.js";
+import { RateLimitError, SyncError } from "./errors.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1223,5 +1224,160 @@ describe("SyncEngine — replayQueue", () => {
     expect(progress.length).toBe(2);
     expect((progress[0]!.payload as Record<string, unknown>).files_done).toBe(1);
     expect((progress[1]!.payload as Record<string, unknown>).files_done).toBe(2);
+  });
+
+  it("4.3 rate limit on upload during replay → retries, emits rate_limited, entry dequeued", async () => {
+    writeLocalFile("rl.txt");
+    const remoteMtime = "2026-04-10T10:00:00.000Z";
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "rl.txt",
+      local_mtime: "2026-04-10T09:00:00.000Z",
+      remote_mtime: remoteMtime,
+      content_hash: null,
+    });
+    enqueue("rl.txt", "modified");
+
+    let uploadAttempt = 0;
+    const noopSleep = mock(async (_ms: number) => {});
+    mockClient = makeReplayClient({
+      listRemoteFiles: mock(async () => [makeRemoteFile("rl.txt", remoteMtime)]),
+      uploadFileRevision: mock(async () => {
+        if (uploadAttempt++ === 0) throw new RateLimitError("rate limited");
+        return { node_uid: "uid-rl", revision_uid: "rev-1" };
+      }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e), () => [{ pair_id: PAIR_ID, local_path: tmpDir, remote_path: "/Documents", created_at: "2026-04-10T00:00:00.000Z" }], () => {}, noopSleep);
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.replayQueue();
+
+    const rateLimitedEvents = emittedEvents.filter((e) => e.type === "rate_limited");
+    expect(rateLimitedEvents.length).toBe(1);
+    expect(result.synced).toBe(1);
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Story 3-4 — withBackoff tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("SyncEngine — withBackoff", () => {
+  let sleepSpy: ReturnType<typeof mock>;
+  let backoffEngine: SyncEngine;
+  let backoffEvents: IpcPushEvent[];
+
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    backoffEvents = [];
+    sleepSpy = mock(async (_ms: number) => {});
+    backoffEngine = new SyncEngine(
+      db,
+      (e) => backoffEvents.push(e),
+      () => [],
+      () => {},
+      sleepSpy,
+    );
+  });
+
+  afterEach(() => {
+    db.close();
+    mock.restore();
+  });
+
+  it("no rate limit → calls fn once, returns result", async () => {
+    let callCount = 0;
+    const fn = mock(async () => { callCount++; return "ok"; });
+    // Access private method via cast
+    const result = await (backoffEngine as unknown as { withBackoff: <T>(fn: () => Promise<T>) => Promise<T> }).withBackoff(fn);
+    expect(result).toBe("ok");
+    expect(fn.mock.calls.length).toBe(1);
+    expect(backoffEvents.filter((e) => e.type === "rate_limited").length).toBe(0);
+  });
+
+  it("one rate limit then success → retries, emits event, returns result", async () => {
+    let attempt = 0;
+    const fn = mock(async () => {
+      if (attempt++ === 0) throw new RateLimitError("rate limited");
+      return "ok";
+    });
+    const result = await (backoffEngine as unknown as { withBackoff: <T>(fn: () => Promise<T>) => Promise<T> }).withBackoff(fn);
+    expect(result).toBe("ok");
+    expect(fn.mock.calls.length).toBe(2);
+    const rateLimitedEvents = backoffEvents.filter((e) => e.type === "rate_limited");
+    expect(rateLimitedEvents.length).toBe(1);
+    expect((rateLimitedEvents[0]!.payload as Record<string, unknown>).resume_in_seconds).toBe(1);
+    expect((sleepSpy.mock.calls[0] as [number])[0]).toBe(1000);
+  });
+
+  it("two rate limits then success → correct backoff schedule", async () => {
+    let attempt = 0;
+    const fn = mock(async () => {
+      if (attempt++ < 2) throw new RateLimitError("rate limited");
+      return "ok";
+    });
+    await (backoffEngine as unknown as { withBackoff: <T>(fn: () => Promise<T>) => Promise<T> }).withBackoff(fn);
+    const rateLimitedEvents = backoffEvents.filter((e) => e.type === "rate_limited");
+    expect(rateLimitedEvents.length).toBe(2);
+    expect((rateLimitedEvents[0]!.payload as Record<string, unknown>).resume_in_seconds).toBe(1); // 2^0
+    expect((rateLimitedEvents[1]!.payload as Record<string, unknown>).resume_in_seconds).toBe(2); // 2^1
+    expect((sleepSpy.mock.calls[0] as [number])[0]).toBe(1000);
+    expect((sleepSpy.mock.calls[1] as [number])[0]).toBe(2000);
+  });
+
+  it("rate limit capped at 30s — attempt 4 uses min(2^4,30)=16", async () => {
+    // 5 failures total: attempts 0,1,2,3 retry (4 sleeps); attempt 4 re-throws
+    let attempt = 0;
+    const fn = mock(async () => {
+      attempt++;
+      throw new RateLimitError("rate limited");
+    });
+    let threw = false;
+    try {
+      await (backoffEngine as unknown as { withBackoff: <T>(fn: () => Promise<T>) => Promise<T> }).withBackoff(fn);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+    expect(fn.mock.calls.length).toBe(5);
+    const rateLimitedEvents = backoffEvents.filter((e) => e.type === "rate_limited");
+    // 4 events (retries 0-3); 5th failure re-throws without emitting
+    expect(rateLimitedEvents.length).toBe(4);
+    const resumeTimes = rateLimitedEvents.map(
+      (e) => (e.payload as Record<string, unknown>).resume_in_seconds,
+    );
+    expect(resumeTimes).toEqual([1, 2, 4, 8]); // 2^0, 2^1, 2^2, 2^3
+    const sleepTimes = (sleepSpy.mock.calls as [number][]).map(([ms]) => ms);
+    expect(sleepTimes).toEqual([1000, 2000, 4000, 8000]);
+  });
+
+  it("max retries exhausted → re-throws RateLimitError on 5th failure", async () => {
+    const fn = mock(async () => { throw new RateLimitError("always rate limited"); });
+    let caughtErr: unknown;
+    try {
+      await (backoffEngine as unknown as { withBackoff: <T>(fn: () => Promise<T>) => Promise<T> }).withBackoff(fn);
+    } catch (err) {
+      caughtErr = err;
+    }
+    expect(fn.mock.calls.length).toBe(5);
+    expect(caughtErr).toBeInstanceOf(RateLimitError);
+    const rateLimitedEvents = backoffEvents.filter((e) => e.type === "rate_limited");
+    expect(rateLimitedEvents.length).toBe(4); // 4 retries, not 5
+  });
+
+  it("non-RateLimitError passes through immediately", async () => {
+    const syncErr = new SyncError("something else");
+    const fn = mock(async () => { throw syncErr; });
+    let caughtErr: unknown;
+    try {
+      await (backoffEngine as unknown as { withBackoff: <T>(fn: () => Promise<T>) => Promise<T> }).withBackoff(fn);
+    } catch (err) {
+      caughtErr = err;
+    }
+    expect(fn.mock.calls.length).toBe(1);
+    expect(caughtErr).toBe(syncErr);
+    expect(backoffEvents.filter((e) => e.type === "rate_limited").length).toBe(0);
+    expect(sleepSpy.mock.calls.length).toBe(0);
   });
 });

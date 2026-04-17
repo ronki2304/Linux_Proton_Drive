@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from gi.repository import Gtk
+from gi.repository import GLib, Gtk
 
 
 @Gtk.Template(resource_path="/io/github/ronki2304/ProtonDriveLinuxClient/ui/status-footer-bar.ui")
@@ -19,6 +19,8 @@ class StatusFooterBar(Gtk.Box):
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
         self._dot_state = "synced"
+        self._rate_limit_remaining: int = 0
+        self._rate_limit_source_id: int | None = None
         self.footer_dot.set_draw_func(self._on_dot_draw)
         self.footer_label.set_text("All synced")
 
@@ -79,6 +81,42 @@ class StatusFooterBar(Gtk.Box):
         self.update_property([Gtk.AccessibleProperty.LABEL], [text])
         self.announce(text, Gtk.AccessibleAnnouncementPriority.LOW)
 
+    def set_rate_limited(self, resume_in: int) -> None:
+        """Show rate-limited state with countdown. Not an error — a temporary pause."""
+        # Cancel any active countdown before starting a new one.
+        if self._rate_limit_source_id is not None:
+            GLib.source_remove(self._rate_limit_source_id)
+            self._rate_limit_source_id = None
+
+        self._rate_limit_remaining = max(1, resume_in)
+        text = f"Sync paused \u2014 resuming in {self._rate_limit_remaining}s"
+        self.footer_label.set_text(text)
+        self._set_dot_state("rate_limited")
+        self.update_property([Gtk.AccessibleProperty.LABEL], [text])
+        self.announce(text, Gtk.AccessibleAnnouncementPriority.LOW)
+        self._rate_limit_source_id = GLib.timeout_add(1000, self._on_rate_limit_tick)
+
+    def _on_rate_limit_tick(self) -> bool:
+        """GLib.timeout_add callback — fires every 1s during rate-limit countdown."""
+        # If state changed (sync resumed, went offline, etc.), stop the timer.
+        if self._dot_state != "rate_limited":
+            self._rate_limit_source_id = None
+            return GLib.SOURCE_REMOVE
+        self._rate_limit_remaining -= 1
+        if self._rate_limit_remaining <= 0:
+            # Countdown elapsed — show static text until engine sends sync_progress.
+            self.footer_label.set_text("Sync paused \u2014 resuming shortly")
+            self.update_property(
+                [Gtk.AccessibleProperty.LABEL],
+                ["Sync paused \u2014 resuming shortly"],
+            )
+            self._rate_limit_source_id = None
+            return GLib.SOURCE_REMOVE
+        text = f"Sync paused \u2014 resuming in {self._rate_limit_remaining}s"
+        self.footer_label.set_text(text)
+        self.update_property([Gtk.AccessibleProperty.LABEL], [text])
+        return GLib.SOURCE_CONTINUE
+
     def _set_dot_state(self, state: str) -> None:
         """Update dot colour and CSS class.
 
@@ -111,6 +149,8 @@ class StatusFooterBar(Gtk.Box):
             cr.set_source_rgb(0.60, 0.60, 0.60)  # grey
         elif self._dot_state == "conflict":
             cr.set_source_rgb(0.95, 0.62, 0.14)  # amber (UX-DR)
+        elif self._dot_state == "rate_limited":
+            cr.set_source_rgb(0.11, 0.63, 0.63)  # teal — same as "syncing" (not an error)
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2
