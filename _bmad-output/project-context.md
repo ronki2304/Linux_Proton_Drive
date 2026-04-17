@@ -109,6 +109,7 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Cold-start** — pair present in YAML config but absent from SQLite = fresh full sync; engine never crashes on missing DB state
 - **SQLite WAL mode mandatory in init** — `PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;` prevents corruption on crash
 - **SQLite schema versioning** — `PRAGMA user_version` for tracking; ordered integer migrations; never destructive (add columns only in v1)
+- **DB atomicity** — Compound DB operations (upsert+dequeue, delete+dequeue) must use `db.transaction()`; two separate writes with a crash between them = corrupt state
 - **Atomic file writes for downloads** — write to `<path>.protondrive-tmp-<timestamp>` then `rename()` on success; `unlink()` tmp on failure; never write directly to destination
 - **Conflict copy suffix appends after extension** — `notes.md` → `notes.md.conflict-2026-04-01`, not `notes.conflict-2026-04-01.md`
 - **Engine stderr → `/dev/null` in production** — debug mode via `PROTONDRIVE_DEBUG=1` env var writes to `$XDG_CACHE_HOME/protondrive/engine.log` with size cap; engine code must never rely on stderr reaching anyone; all errors flow through IPC push events
@@ -193,6 +194,7 @@ Blueprint `kebab-case` IDs (e.g., `status-label`) auto-convert to `snake_case` i
 - **No comments on obvious code** — only add comments where logic is non-evident; the `sdk.ts` boundary comment is the canonical exception (it enforces the SDK import rule)
 - **Timestamps as ISO 8601 TEXT in SQLite** — never INTEGER epoch; conflict copy suffix uses `YYYY-MM-DD` local date
 - **No linter configured** — follow the naming table and existing patterns; do not install or configure ESLint, ruff, or flake8 unless explicitly asked
+- **Resource lifecycle** — Every opened resource (socket, timer, file handle) must have a corresponding close/stop/destroy on all exit paths including error paths
 
 #### Error Handling
 

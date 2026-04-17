@@ -186,8 +186,12 @@ export class StateDb {
   upsertSyncState(state: SyncState): void {
     this.db
       .prepare(
-        `INSERT OR REPLACE INTO sync_state (pair_id, relative_path, local_mtime, remote_mtime, content_hash)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO sync_state (pair_id, relative_path, local_mtime, remote_mtime, content_hash)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(pair_id, relative_path) DO UPDATE SET
+           local_mtime   = excluded.local_mtime,
+           remote_mtime  = excluded.remote_mtime,
+           content_hash  = excluded.content_hash`
       )
       .run(state.pair_id, state.relative_path, state.local_mtime, state.remote_mtime, state.content_hash);
   }

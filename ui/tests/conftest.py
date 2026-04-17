@@ -86,10 +86,15 @@ def _build_gi_mocks() -> dict[str, MagicMock]:
     gtk.ListBoxRow = _FakeWidget
 
     # Enum-ish constants accessed at protondrive class-body or test-method time.
+    # Use simple objects so that ``event.value_nick`` (used in debug prints) works.
+    class _LoadEventVal:
+        def __init__(self, nick: str) -> None:
+            self.value_nick = nick
+
     webkit.LoadEvent = MagicMock()
-    webkit.LoadEvent.COMMITTED = "COMMITTED"
-    webkit.LoadEvent.FINISHED = "FINISHED"
-    webkit.LoadEvent.STARTED = "STARTED"
+    webkit.LoadEvent.COMMITTED = _LoadEventVal("committed")
+    webkit.LoadEvent.FINISHED = _LoadEventVal("finished")
+    webkit.LoadEvent.STARTED = _LoadEventVal("started")
 
     gtk.License = MagicMock()
     gtk.License.MIT_X11 = "MIT_X11"

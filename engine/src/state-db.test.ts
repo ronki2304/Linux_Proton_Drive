@@ -318,6 +318,14 @@ describe("StateDb — sync_state CRUD and updatePairRemoteId", () => {
     expect(states[2]!.relative_path).toBe("z.txt");
   });
 
+  it("upsertSyncState preserves rowid across updates", () => {
+    db.upsertSyncState({ pair_id: "p1", relative_path: "a.txt", local_mtime: "2026-01-01T00:00:00.000Z", remote_mtime: "2026-01-01T00:00:00.000Z", content_hash: null });
+    const before = (db as any)["db"].prepare("SELECT rowid FROM sync_state WHERE pair_id = 'p1' AND relative_path = 'a.txt'").get() as { rowid: number };
+    db.upsertSyncState({ pair_id: "p1", relative_path: "a.txt", local_mtime: "2026-01-02T00:00:00.000Z", remote_mtime: "2026-01-02T00:00:00.000Z", content_hash: "abc" });
+    const after = (db as any)["db"].prepare("SELECT rowid FROM sync_state WHERE pair_id = 'p1' AND relative_path = 'a.txt'").get() as { rowid: number };
+    expect(before.rowid).toBe(after.rowid);
+  });
+
   it("deleteSyncState removes the record", () => {
     db.upsertSyncState({ pair_id: "p1", relative_path: "del.txt", local_mtime: "2026-04-10T10:00:00.000Z", remote_mtime: "2026-04-10T10:00:00.000Z", content_hash: null });
     expect(db.getSyncState("p1", "del.txt") !== undefined).toBeTruthy();

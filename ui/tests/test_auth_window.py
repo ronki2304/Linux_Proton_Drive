@@ -44,7 +44,7 @@ class TestAuthFlowOrdering:
         original_server_cls = _mod.AuthCallbackServer
         original_webview_cls = _mod.WebKit.WebView
         _mod.AuthCallbackServer = lambda: mock_server
-        _mod.WebKit.WebView = lambda: mock_webview
+        _mod.WebKit.WebView = lambda *args, **kwargs: mock_webview
 
         try:
             window = object.__new__(_mod.AuthWindow)
@@ -52,6 +52,10 @@ class TestAuthFlowOrdering:
             window._webview = None
             window._auth_start_url = None
             window._completed = False
+            window._cookie_poll_id = None
+            window._last_token_sent = None
+            window._last_send_time = 0.0
+            window._RESEND_INTERVAL_S = 8.0
             window.url_label = MagicMock()
             window.webview_container = MagicMock()
             window.error_banner = MagicMock()
@@ -71,6 +75,10 @@ def _make_window():
     window._webview = MagicMock()
     window._auth_start_url = "http://127.0.0.1:12345/auth-start"
     window._completed = False
+    window._cookie_poll_id = None
+    window._last_token_sent = None
+    window._last_send_time = 0.0
+    window._RESEND_INTERVAL_S = 8.0
     window.url_label = MagicMock()
     window.webview_container = MagicMock()
     window.error_banner = MagicMock()
@@ -79,26 +87,28 @@ def _make_window():
 
 
 class TestWebViewCleanup:
+    """mark_auth_complete() tears down the WebView; _on_token_received() only emits."""
 
     def test_try_close_called(self) -> None:
         w = _make_window()
         wv = w._webview
-        w._on_token_received("tok")
+        w.mark_auth_complete()
         wv.try_close.assert_called_once()
 
     def test_webview_set_to_none(self) -> None:
         w = _make_window()
-        w._on_token_received("tok")
+        w.mark_auth_complete()
         assert w._webview is None
 
     def test_auth_server_stopped(self) -> None:
         w = _make_window()
         srv = w._auth_server
-        w._on_token_received("tok")
+        w.mark_auth_complete()
         srv.stop.assert_called_once()
         assert w._auth_server is None
 
     def test_auth_completed_emitted(self) -> None:
+        """_on_token_received still emits the signal (dedup state pre-cleared)."""
         w = _make_window()
         w._on_token_received("my-token")
         w.emit.assert_called_once_with("auth-completed", "my-token")
@@ -106,7 +116,7 @@ class TestWebViewCleanup:
     def test_webview_removed_from_container(self) -> None:
         w = _make_window()
         wv = w._webview
-        w._on_token_received("tok")
+        w.mark_auth_complete()
         w.webview_container.remove.assert_called_once_with(wv)
 
 
@@ -204,32 +214,30 @@ class TestStory20CredentialErrorFlow:
 
 
 class TestStory20WebviewSessionClearing:
-    """AC8 — WebKit network session must be cleared before close."""
+    """New design: cookies intentionally preserved — no session clearing on token receipt.
 
-    def test_token_received_clears_website_data_before_try_close(self) -> None:
+    Design decision (Story 2-11 / auth-flow refactor): WebKit cookies are kept alive so
+    returning users are not re-prompted for credentials on every launch.  The old AC8
+    ("clear session before close") was superseded when key-password derivation moved
+    session persistence to be an explicit design goal.  Teardown (mark_auth_complete /
+    cleanup) closes the WebView but does NOT wipe the network session.
+    """
+
+    def test_token_received_does_not_clear_website_data(self) -> None:
+        """_on_token_received must NOT clear cookies — they must persist for session reuse."""
         w = _make_window()
         wv = w._webview
-        # Build a fresh data_manager mock to assert against.
         data_manager = MagicMock()
         wv.get_network_session.return_value.get_website_data_manager.return_value = (
             data_manager
         )
 
-        # Track relative call order via side_effects so we can assert that
-        # data was cleared BEFORE the WebView was closed.
-        call_order: list[str] = []
-        data_manager.clear.side_effect = lambda *a, **k: call_order.append("clear")
-        wv.try_close.side_effect = lambda: call_order.append("try_close")
-
         w._on_token_received("tok")
 
-        data_manager.clear.assert_called_once()
-        wv.try_close.assert_called_once()
-        assert call_order == ["clear", "try_close"], (
-            f"clear must be called BEFORE try_close, got {call_order}"
-        )
+        data_manager.clear.assert_not_called()
 
-    def test_cleanup_clears_website_data(self) -> None:
+    def test_cleanup_does_not_clear_website_data(self) -> None:
+        """cleanup() / _teardown_webview must NOT clear cookies."""
         w = _make_window()
         data_manager = MagicMock()
         w._webview.get_network_session.return_value.get_website_data_manager.return_value = (
@@ -238,15 +246,15 @@ class TestStory20WebviewSessionClearing:
 
         w.cleanup()
 
-        data_manager.clear.assert_called_once()
+        data_manager.clear.assert_not_called()
 
-    def test_cleanup_and_token_received_use_same_helper(self) -> None:
-        """DRY: both paths route through _teardown_webview."""
+    def test_mark_auth_complete_and_cleanup_both_use_teardown_webview(self) -> None:
+        """DRY: mark_auth_complete() and cleanup() both route through _teardown_webview."""
         import inspect
 
-        token_src = inspect.getsource(_mod.AuthWindow._on_token_received)
+        mark_src = inspect.getsource(_mod.AuthWindow.mark_auth_complete)
         cleanup_src = inspect.getsource(_mod.AuthWindow.cleanup)
-        assert "_teardown_webview" in token_src
+        assert "_teardown_webview" in mark_src
         assert "_teardown_webview" in cleanup_src
 
     def test_clear_session_falls_back_to_webview_data_manager(self) -> None:

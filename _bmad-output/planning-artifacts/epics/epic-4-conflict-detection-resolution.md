@@ -2,6 +2,71 @@
 
 User's files are never silently overwritten. Conflicts create date-stamped copies, trigger both in-app and desktop notifications, and are discoverable via the conflict log with "Reveal in Files." Both file versions are always preserved.
 
+## Story 4.0: Pre-Epic-4 Debt Cleanup
+
+As a developer,
+I want all critical action items from the Epic 3 retrospective resolved before starting Epic 4 feature work,
+So that conflict detection starts on a clean, reliable foundation.
+
+**Acceptance Criteria:**
+
+**Given** 29 pre-existing auth test failures in `ui/tests/` (present since Story 3-0b, carried through all of Epic 3)
+**When** Story 4-0 ships
+**Then** `meson test -C builddir` passes with zero pre-existing failures in `test_auth_completion.py`, `test_auth_window.py`, `test_credential_store.py`, `test_main_routing.py`
+**And** all 29 failures are fixed (not skipped or marked xfail unless genuinely untestable)
+
+**Given** the resource lifecycle gap identified in the Epic 3 retrospective (Action Item 2)
+**When** `project-context.md` is updated
+**Then** the following rule is added under the Code Quality section: "Every opened resource (socket, timer, file handle) must have a corresponding close/stop/destroy on all exit paths including error paths"
+
+**Given** the DB atomicity gap identified in the Epic 3 retrospective (Action Item 3)
+**When** `project-context.md` is updated
+**Then** the following rule is added under the Code Quality section: "Compound DB operations (upsert+dequeue, delete+dequeue) must use `db.transaction()`"
+
+**Given** `upsertSyncState` uses `INSERT OR REPLACE` which resets `rowid` (deferred from Story 2-5)
+**When** Story 4-0 ships
+**Then** `upsertSyncState` is rewritten to use `INSERT ... ON CONFLICT DO UPDATE SET` for all fields, preserving `rowid` for any future foreign-key dependents in Epic 4
+
+**Given** this is a Story 0 debt cleanup
+**When** the story ships
+**Then** no new user-facing functionality is added — only test fixes, project-context.md rule additions, and the `upsertSyncState` fix
+
+---
+
+## Story 4.0b: Deletion Propagation
+
+As a user,
+I want deleted files to be propagated across the sync boundary — local deletions trashed on Proton Drive, remote deletions removed locally,
+So that my sync pairs stay consistent and deletions don't silently stall.
+
+**Acceptance Criteria:**
+
+**Given** a local file has been deleted and its `last_synced_at` is non-null (was previously synced)
+**When** a sync cycle runs
+**Then** the engine calls `trashNode` on the corresponding remote node via the SDK
+**And** the `sync_state` entry is removed on success
+
+**Given** a remote file is absent from the remote tree and its `sync_state` entry has a non-null `last_synced_at` (was previously synced)
+**When** a sync cycle runs
+**Then** the engine deletes the local copy
+**And** the `sync_state` entry is removed on success
+
+**Given** a file is absent both locally and remotely since last sync (both-sides-deleted)
+**When** a sync cycle runs
+**Then** the engine removes the `sync_state` entry — no conflict copy, no error, no user notification
+
+**Given** a new local file has no `sync_state` entry (never previously synced) and has been deleted before the engine saw it
+**When** a sync cycle runs
+**Then** no `trashNode` call is made — never-synced deletions are silently skipped
+
+**Given** unit tests for deletion propagation
+**When** running `bun test`
+**Then** tests cover: local→remote deletion, remote→local deletion, both-sides-deleted (no-op), never-synced local deletion (no remote call), `trashNode` SDK error handling
+
+**Note:** This story is engine-only. No new UI events or IPC changes are required — deletions are silent from the user's perspective (no conflict copy, no notification).
+
+---
+
 ## Story 4.1: Conflict Detection (Existing Files)
 
 As a user,

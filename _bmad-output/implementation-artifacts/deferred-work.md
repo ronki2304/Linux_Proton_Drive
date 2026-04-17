@@ -411,3 +411,10 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 - **remote_id resolved in-memory but not persisted to SQLite** — reconcilePair() resolves an empty remote_id via resolveRemoteId() and stores it in a local variable, but never writes the resolved value back to the DB. Every cold start re-resolves remote_id. Pre-existing pattern from deleted syncPair(); not a regression.
 - **drainQueue() return value discarded at watcher call sites** — watcher-triggered drainQueue() calls use `void`, so synced/failed counts are never surfaced to any observability layer for those code paths. Pre-existing pattern (same as old `void replayQueue()`). Consider logging or emitting counts in a follow-on observability story.
+
+
+## Deferred from: code review of 4-0-pre-epic-4-debt-cleanup (2026-04-17)
+
+- **No test covering non-None captured credentials** — `test_auth_completion.py` assertions for `send_token_refresh` only verify the `None` case for `login_password` and `captured_salts`. A bug that ignores actual credential values (passing empty string or wrong structure) would go undetected. Add a test variant with real non-None values once credential forwarding is exercised.
+- **`_LoadEventVal.value_nick` uses lowercase vs production enum behavior** — `conftest.py` sets `COMMITTED = _LoadEventVal("committed")` (lowercase) while the old mock used `"COMMITTED"` (uppercase). If any production code compares `event.value_nick` by case-sensitive string, this will silently fail in tests. Verify `auth_window.py` never does string-equality on `value_nick`.
+- **`_make_window()` missing `_completed = False` initialization** — The test fixture in `test_auth_window.py` does not set `_completed`. If any test invokes code paths that read `self._completed` (e.g., `_poll_for_auth_cookie`), the result is AttributeError or silent wrong-path behavior. Low risk today but will bite if polling tests are added.

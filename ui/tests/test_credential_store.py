@@ -244,7 +244,7 @@ class TestSecretPortalStoreKeyPassword:
     """Test libsecret backend key password methods."""
 
     def setup_method(self) -> None:
-        _secret_mock.reset_mock()
+        _secret_mock.reset_mock(side_effect=True)
         _glib_mock.reset_mock(side_effect=True)
         SecretPortalStore._schema = None
 

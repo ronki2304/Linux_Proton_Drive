@@ -24,6 +24,7 @@ def _make_application() -> _main_mod.Application:
     app._window = MagicMock()
     app._token_validation_timer_id = None
     app._cached_session_data = None
+    app._pending_key_unlock_dialog = None
     return app
 
 
