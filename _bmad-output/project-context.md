@@ -31,6 +31,11 @@ _This file contains critical rules and patterns that AI agents must follow when 
 - **Runtime:** Bun 1.3.11 — dev via system `bun`; Flatpak via `bun build --compile` self-contained binary (no Bun needed at runtime). CLAUDE.md Bun defaults apply to the engine.
 - **Language:** TypeScript ^5, ES2022 target, `module: "ESNext"`, `moduleResolution: "Bundler"`
 - **Drive SDK:** `@protontech/drive-sdk` ^0.14.3 — pre-release, treat every bump as breaking; version-pinned until V1
+- **Auth approach validated** — Proton SDK team confirmed (GitHub issue closed 2026-04-16) that
+  embedded WebKitGTK auth browser + localhost callback (`http://127.0.0.1:44925/callback`) is the
+  canonical approach for desktop clients. SDK team's own CLI will use the same pattern. GitHub issue
+  closed as completed 2026-04-16. No change needed to current `auth_window.py` + Story 1-7 localhost
+  server design.
 - **PGP:** `openpgp` ^6.3.0 — full bundle only, never `openpgp/lightweight`; confined to `engine/src/sdk.ts`; v6 `Uint8Array<ArrayBufferLike>` ↔ SDK `Uint8Array<ArrayBuffer>` casts required at boundary
 - **State DB:** `bun:sqlite` — built-in, no native compilation; WAL mode via `db.exec("PRAGMA journal_mode=WAL")`; rows return plain objects but always type via interface for safety
 - **Testing:** `bun:test` (`describe`/`it`/`expect`) — `mock()` factory (not `mock.fn()`); run with `bun test`
@@ -122,19 +127,21 @@ SDK returns 401 → engine emits `token_expired` with `{queued_changes}` count �
 
 #### Test Commands (exact invocations)
 
-- **UI tests:** `meson test -C builddir` — Meson compiles Blueprint `.blp` → `.ui`, GSettings schemas, and GResource bundle before running pytest; raw `python -m pytest` skips these steps and breaks any test touching `@Gtk.Template` or `Gio.Settings`
+- **UI tests (local):** two-step — `meson compile -C builddir` (compiles Blueprint/GSettings/GResource), then `.venv/bin/pytest ui/tests/` — **NEVER run `meson test -C builddir` locally** — it saturates the host CPU and freezes the developer's machine; applies to foreground AND background execution
+- **UI tests (CI only):** `meson test -C builddir` — reserved for CI where CPU impact is acceptable
 - **Engine unit:** `bun test` (run from `engine/` or project root)
 - **Engine integration:** `bun test engine/src/__integration__/`
 - **CI runs both suites** — always run both UI and engine tests before declaring a story done, even if you only touched one side
 
-#### Python UI Tests (pytest via Meson)
+#### Python UI Tests (pytest via Meson compile)
 
+- **Two-step local workflow:** `meson compile -C builddir` (fast, compiles assets only) → `.venv/bin/pytest ui/tests/` (fast, runs tests directly). Raw `python -m pytest` without the compile step breaks tests touching `@Gtk.Template` or `Gio.Settings` — always compile first.
 - **Mock the IPC socket, never spawn real engine** — UI tests validate signal wiring, state transitions, and IPC message parsing in isolation
 - **Widget tests via Xvfb** — optional in CI (`CI_SKIP_WIDGET_TESTS=1`); required for any test that instantiates a GTK widget
 - **`conftest.py` provides shared fixtures** — mock engine connection, mock `Gio.Settings`, mock libsecret; never duplicate fixture setup across test files
 - **Mock engine must produce real protocol messages** — use the same message format constants the real engine uses; never hand-craft dicts with a different shape
 - **Test file naming** — `test_<module>.py` in `ui/tests/` (e.g., `test_auth.py`, `test_engine.py`, `test_widgets.py`)
-- **One-time setup:** `meson setup builddir` (then `meson test -C builddir` every time)
+- **One-time setup:** `meson setup builddir` then `meson compile -C builddir` (never `meson test` locally)
 
 #### Sync Engine Tests (bun:test)
 
@@ -226,7 +233,7 @@ rtk bun run src/main.ts
 
 # Terminal B — UI
 meson setup builddir        # first time only
-meson compile -C builddir
+meson compile -C builddir   # compile Blueprint/GSettings/GResource (NOT meson test)
 python -m protondrive
 ```
 

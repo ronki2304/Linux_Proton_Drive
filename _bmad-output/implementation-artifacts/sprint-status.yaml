@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-18  # 4-6 done
+last_updated: 2026-04-18  # 4-6 done; epic-4 retro done; 5-0 done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -91,7 +91,7 @@ development_status:
   epic-3-retrospective: done
 
   # Epic 4: Conflict Detection & Resolution
-  epic-4: in-progress
+  epic-4: done
   4-0-pre-epic-4-debt-cleanup: done
   4-0b-deletion-propagation: done
   4-1-conflict-detection-existing-files: done
@@ -100,10 +100,11 @@ development_status:
   4-4-in-app-conflict-notification-and-pair-status: done
   4-5-desktop-notification-for-conflicts: done
   4-6-conflict-log-and-reveal-in-files: done
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
 
   # Epic 5: Token Expiry & Error Recovery
   epic-5: backlog
+  5-0-pre-epic-5-debt-cleanup: done
   5-1-401-detection-and-sync-halt: backlog
   5-2-re-auth-modal-with-queued-change-count: backlog
   5-3-change-queue-replay-after-re-auth: backlog
@@ -117,6 +118,7 @@ development_status:
 
   # Epic 6: Multi-Pair Management & Validation
   epic-6: backlog
+  6-0-pre-epic-6-debt-cleanup: backlog
   6-1-add-subsequent-sync-pair: backlog
   6-2-nesting-and-overlap-validation: backlog
   6-3-remove-sync-pair-with-confirmation: backlog
@@ -125,6 +127,7 @@ development_status:
 
   # Epic 7: Packaging & Distribution
   epic-7: backlog
+  7-0-pre-epic-7-debt-cleanup: backlog
   7-1-flatpak-manifest-and-permission-justifications: backlog
   7-2-appstream-metainfo-and-desktop-file: backlog
   7-3-ci-cd-pipelines: backlog

@@ -825,7 +825,6 @@ class ProtonHTTPClient implements ProtonDriveHTTPClient {
       const buffer = await tempResp.arrayBuffer();
       if (contentType) headers.set("Content-Type", contentType);
       body = buffer;
-      process.stderr.write(`[FETCH-BLOB] storage upload: ct=${contentType} size=${buffer.byteLength}\n`);
     }
 
     return fetch(request.url, {
