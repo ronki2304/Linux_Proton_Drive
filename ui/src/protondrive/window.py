@@ -331,6 +331,22 @@ class MainWindow(Adw.ApplicationWindow):
         self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
         self.nav_split_view.set_show_content(True)
 
+    def select_pair(self, pair_id: str) -> None:
+        """Programmatically select a pair row in the sidebar and show its detail panel.
+
+        Called from Application._on_show_conflict_pair when the user clicks
+        the desktop notification. Mirrors the effect of the user clicking the row.
+        """
+        row = self._sync_pair_rows.get(pair_id)
+        if row is None:
+            return
+        self.pairs_list.select_row(row)
+        pair_data = self._pairs_data.get(pair_id, {})
+        self.pair_detail_panel.show_pair(pair_data)
+        conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
+        self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
+        self.nav_split_view.set_show_content(True)
+
     def on_offline(self) -> None:
         """Shift all pair rows and footer bar to offline state."""
         for pair_id, row in self._sync_pair_rows.items():

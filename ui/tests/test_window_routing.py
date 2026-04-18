@@ -576,6 +576,50 @@ class TestClearSessionResetsConflicts:
         assert win._conflict_copies_by_pair == {}
 
 
+# ---------------------------------------------------------------------------
+# Story 4-5 — select_pair
+# ---------------------------------------------------------------------------
+
+class TestSelectPair:
+    """Story 4-5 AC2 — MainWindow.select_pair programmatic navigation."""
+
+    def test_select_pair_selects_row_in_listbox(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win._pairs_data["p1"] = {"pair_id": "p1", "local_path": "/home/user/Docs"}
+        win.select_pair("p1")
+        win.pairs_list.select_row.assert_called_once_with(row)
+
+    def test_select_pair_shows_pair_in_detail_panel(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win._pairs_data["p1"] = {"pair_id": "p1"}
+        win.select_pair("p1")
+        win.pair_detail_panel.show_pair.assert_called_once_with({"pair_id": "p1"})
+
+    def test_select_pair_shows_content_pane(self):
+        win = _make_window()
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win.select_pair("p1")
+        win.nav_split_view.set_show_content.assert_called_once_with(True)
+
+    def test_select_pair_restores_conflict_banner(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win._conflict_copies_by_pair["p1"] = ["/tmp/notes.md.conflict-2026-04-17"]
+        win.select_pair("p1")
+        win.pair_detail_panel.set_conflict_state.assert_called_once_with("p1", 1, "Docs")
+
+    def test_select_pair_unknown_pair_id_does_nothing(self):
+        win = _make_window()
+        win.select_pair("unknown")
+        win.pairs_list.select_row.assert_not_called()
+
+
 class TestOnlineWatcherGuardsWithConflicts:
     """Story 4-4: on_online / on_watcher_status guards also check active conflicts."""
 

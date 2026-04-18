@@ -460,6 +460,12 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 - `Date.now()` collision producing identical `tmpPath` names under concurrent sync cycles — blocked by `isDraining` guard; theoretical only [`engine/src/sync-engine.ts`]
 - AC6 download-failure-after-copy path has no explicit test — not required by AC9; conflict copy preserves user data, sync_file_error emitted; low test gap [`engine/src/sync-engine.test.ts`]
 
+## Deferred from: code review of 4-5-desktop-notification-for-conflicts (2026-04-18)
+
+- Post-activation pair selection lost if window destroyed before notification click [main.py:_on_show_conflict_pair] — `activate()` is async; `if self._window is not None` guard fires before window is ready, so `select_pair` is skipped. Edge case: user closes window then clicks a queued desktop notification. Window re-opens but pair not pre-selected. Canonical GTK two-check pattern; no MVP fix needed.
+- Silent early return on missing pair_id in `_send_conflict_notification` [main.py] — matches existing codebase no-debug-logging style; complicates diagnosing silent notification failures. Not a bug.
+- `set_conflict_state(pair_id, 0, name)` in `select_pair` when no active conflicts [window.py] — mirrors `_on_row_activated` identical path; behavior relies on `set_conflict_state(…, 0, …)` correctly hiding the banner; not explicitly tested for notification-click zero-conflict case. Pre-existing in Story 4-4.
+
 ## Deferred from: code review of 4-0-pre-epic-4-debt-cleanup (2026-04-17)
 
 - **No test covering non-None captured credentials** — `test_auth_completion.py` assertions for `send_token_refresh` only verify the `None` case for `login_password` and `captured_salts`. A bug that ignores actual credential values (passing empty string or wrong structure) would go undetected. Add a test variant with real non-None values once credential forwarding is exercised.

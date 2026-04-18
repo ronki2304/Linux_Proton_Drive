@@ -9,7 +9,7 @@ of sys.modules is required.
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from protondrive.main import Application
 
@@ -152,6 +152,7 @@ class TestConflictDetectedHandler:
 
     def test_forwards_payload_to_window(self) -> None:
         app = _make_app()
+        app._send_conflict_notification = MagicMock()
         payload = {"pair_id": "p1", "conflict_copy_path": "/tmp/notes.md.conflict-2026-04-17"}
         app._on_conflict_detected({"payload": payload})
         app._window.on_conflict_detected.assert_called_once_with(payload)
@@ -159,6 +160,7 @@ class TestConflictDetectedHandler:
     def test_no_window_is_noop(self) -> None:
         app = _make_app()
         app._window = None
+        app._send_conflict_notification = MagicMock()
         app._on_conflict_detected({"payload": {"pair_id": "p1", "conflict_copy_path": "/tmp/x"}})
         # must not raise
 
@@ -174,3 +176,100 @@ class TestConflictDetectedHandler:
         source = inspect.getsource(main_module.Application.do_startup)
         assert '"conflict_detected"' in source
         assert "_on_conflict_detected" in source
+
+
+# ---------------------------------------------------------------------------
+# Story 4-5 — _send_conflict_notification
+# ---------------------------------------------------------------------------
+
+class TestSendConflictNotification:
+    """Story 4-5 AC1/3/4 — _send_conflict_notification behaviour."""
+
+    def _make_app(self) -> Application:
+        app = object.__new__(Application)
+        app._window = None
+        app.send_notification = MagicMock()
+        return app
+
+    def test_sends_notification_with_stable_id(self):
+        app = self._make_app()
+        app._get_pair_name_for_notification = MagicMock(return_value="Docs")
+        app._send_conflict_notification({
+            "pair_id": "p1",
+            "local_path": "/home/user/Docs/notes.md",
+        })
+        call_args = app.send_notification.call_args
+        assert call_args[0][0] == "conflict-p1"
+
+    def test_notification_title_is_sync_conflict_detected(self):
+        app = self._make_app()
+        app._get_pair_name_for_notification = MagicMock(return_value="Docs")
+        with patch("protondrive.main.Gio.Notification") as mock_notif_cls:
+            mock_notif = MagicMock()
+            mock_notif_cls.new.return_value = mock_notif
+            app._send_conflict_notification({
+                "pair_id": "p1",
+                "local_path": "/home/user/Docs/notes.md",
+            })
+            mock_notif_cls.new.assert_called_once_with("Sync Conflict Detected")
+
+    def test_body_includes_filename_and_pair_name(self):
+        app = self._make_app()
+        app._get_pair_name_for_notification = MagicMock(return_value="Docs")
+        with patch("protondrive.main.Gio.Notification") as mock_notif_cls:
+            mock_notif = MagicMock()
+            mock_notif_cls.new.return_value = mock_notif
+            app._send_conflict_notification({
+                "pair_id": "p1",
+                "local_path": "/home/user/Docs/notes.md",
+            })
+            mock_notif.set_body.assert_called_once_with("Conflict in Docs: notes.md")
+
+    def test_body_fallback_when_no_local_path(self):
+        app = self._make_app()
+        app._get_pair_name_for_notification = MagicMock(return_value="Photos")
+        with patch("protondrive.main.Gio.Notification") as mock_notif_cls:
+            mock_notif = MagicMock()
+            mock_notif_cls.new.return_value = mock_notif
+            app._send_conflict_notification({"pair_id": "p1"})
+            mock_notif.set_body.assert_called_once_with("Conflict in Photos")
+
+    def test_returns_early_when_no_pair_id(self):
+        app = self._make_app()
+        app._send_conflict_notification({})
+        app.send_notification.assert_not_called()
+
+    def test_on_conflict_detected_calls_send_conflict_notification(self):
+        app = self._make_app()
+        app._window = None
+        app._send_conflict_notification = MagicMock()
+        app._on_conflict_detected({"payload": {"pair_id": "p1", "local_path": "/tmp/f.md"}})
+        app._send_conflict_notification.assert_called_once_with(
+            {"pair_id": "p1", "local_path": "/tmp/f.md"}
+        )
+
+
+# ---------------------------------------------------------------------------
+# Story 4-5 — _on_show_conflict_pair
+# ---------------------------------------------------------------------------
+
+class TestOnShowConflictPair:
+    """Story 4-5 AC2 — _on_show_conflict_pair presents window and selects pair."""
+
+    def test_presents_window_and_selects_pair(self):
+        app = _make_app()
+        param = MagicMock()
+        param.get_string.return_value = "p1"
+        app._on_show_conflict_pair(MagicMock(), param)
+        app._window.present.assert_called_once()
+        app._window.select_pair.assert_called_once_with("p1")
+
+    def test_calls_activate_when_window_is_none(self):
+        app = _make_app()
+        app._window = None
+        app.activate = MagicMock()
+        # After activate(), _window remains None in unit context — no crash expected.
+        param = MagicMock()
+        param.get_string.return_value = "p1"
+        app._on_show_conflict_pair(MagicMock(), param)
+        app.activate.assert_called_once()

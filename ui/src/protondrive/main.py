@@ -64,6 +64,15 @@ class Application(Adw.Application):
             Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
         )
 
+        # Action invoked when user clicks the desktop conflict notification (Story 4-5).
+        show_conflict_pair_action = Gio.SimpleAction.new(
+            "show-conflict-pair", GLib.VariantType.new("s")
+        )
+        show_conflict_pair_action.connect(
+            "activate", self._on_show_conflict_pair
+        )
+        self.add_action(show_conflict_pair_action)
+
         style_manager = Adw.StyleManager.get_default()
         style_manager.set_color_scheme(Adw.ColorScheme.FORCE_DARK)
         if hasattr(style_manager, "set_accent_color") and hasattr(Adw, "AccentColor"):
@@ -214,6 +223,72 @@ class Application(Adw.Application):
             return
         if self._window is not None:
             self._window.on_conflict_detected(payload)
+        self._send_conflict_notification(payload)
+
+    def _send_conflict_notification(self, payload: dict[str, Any]) -> None:
+        """Send a desktop notification for a detected conflict (Story 4-5).
+
+        Uses Gio.Notification via send_notification() — the GApplication
+        integration routes through the GNOME notification system automatically.
+        Notification ID is stable per pair so repeated conflicts replace the
+        previous notification rather than stacking.
+        """
+        pair_id = payload.get("pair_id", "")
+        if not pair_id:
+            return
+
+        local_path = payload.get("local_path", "")
+        pair_name = self._get_pair_name_for_notification(pair_id)
+        filename = os.path.basename(local_path) if local_path else ""
+
+        notification = Gio.Notification.new("Sync Conflict Detected")
+        if filename:
+            body = f"Conflict in {pair_name}: {filename}"
+        else:
+            body = f"Conflict in {pair_name}"
+        notification.set_body(body)
+
+        # Default action: activate the app and select the affected pair.
+        # "app.show-conflict-pair" action is registered in do_startup (Task 2).
+        notification.set_default_action_and_target(
+            "app.show-conflict-pair", GLib.Variant("s", pair_id)
+        )
+
+        # Stable ID per pair: replaces previous conflict notification for same pair.
+        self.send_notification(f"conflict-{pair_id}", notification)
+
+    def _get_pair_name_for_notification(self, pair_id: str) -> str:
+        """Return display name for pair_id from window state, falling back to pair_id.
+
+        Used only for notification body text — window may not yet exist on
+        startup edge cases, so always falls back gracefully.
+        """
+        if self._window is not None:
+            row = self._window._sync_pair_rows.get(pair_id)
+            if row is not None:
+                return row.pair_name
+            data = self._window._pairs_data.get(pair_id, {})
+            local_path = data.get("local_path", "")
+            if local_path:
+                return os.path.basename(local_path.rstrip("/")) or pair_id
+        return pair_id
+
+    def _on_show_conflict_pair(
+        self, _action: Gio.SimpleAction, parameter: GLib.Variant
+    ) -> None:
+        """Bring window to focus and select the affected pair (Story 4-5 AC2).
+
+        Called when user clicks the desktop conflict notification.
+        parameter is a GLib.Variant("s", pair_id).
+        """
+        pair_id = parameter.get_string()
+
+        # Ensure window exists and is visible.
+        if self._window is None:
+            self.activate()
+        if self._window is not None:
+            self._window.present()
+            self._window.select_pair(pair_id)
 
     def _start_validation_timeout(self) -> None:
         """Start timeout for token validation response (NFR1)."""
