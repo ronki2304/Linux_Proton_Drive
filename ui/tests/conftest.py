@@ -17,6 +17,7 @@ Tests that need direct access to a mock can either:
 
 from __future__ import annotations
 
+import builtins
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -25,6 +26,11 @@ import pytest
 
 # Add source to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+
+# Install a no-op gettext shim so that _("string") in widget code works in tests.
+# In production, GTK installs this via gi.require_version / gtk.install_builtins.
+if not hasattr(builtins, "_"):
+    builtins._ = str
 
 
 # --- GI mock installation -----------------------------------------------------
@@ -46,10 +52,19 @@ class _FakeWidget:
     must be real classes rather than ``MagicMock`` instances. Tests that need
     fully-isolated instances continue to bypass ``__init__`` via
     ``object.__new__(...)`` as before.
+
+    ``__getattr__`` auto-creates ``MagicMock`` for unknown attributes so that
+    subclasses instantiated normally (e.g. ``ConflictLogRow``) can call
+    parent-class methods like ``set_subtitle`` and have them tracked by tests.
     """
 
     def __init__(self, **kwargs):
         pass
+
+    def __getattr__(self, name: str) -> MagicMock:
+        mock = MagicMock()
+        object.__setattr__(self, name, mock)
+        return mock
 
     def emit(self, *args, **kwargs):
         pass
@@ -82,6 +97,7 @@ def _build_gi_mocks() -> dict[str, MagicMock]:
     adw.Application = _FakeWidget
     adw.ApplicationWindow = _FakeWidget
     adw.Dialog = _FakeWidget
+    adw.ActionRow = _FakeWidget
     gtk.Box = _FakeWidget
     gtk.ListBoxRow = _FakeWidget
 

@@ -12,3 +12,8 @@
   background-color: alpha(#f0a020, 0.15);
   border-bottom: 1px solid alpha(#f0a020, 0.4);
 }
+
+/* Conflict log — amber warning icon (Story 4-6) */
+.conflict-warning-icon {
+  color: #f0a020;
+}

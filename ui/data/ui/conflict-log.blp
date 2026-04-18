@@ -1,0 +1,29 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveConflictLog: Adw.Bin {
+  child: Gtk.Stack conflict_log_stack {
+    transition-type: crossfade;
+
+    Gtk.StackPage {
+      name: "empty";
+      child: Adw.StatusPage {
+        icon-name: "emblem-ok-symbolic";
+        title: "No Conflicts";
+        description: "All synced files are in agreement";
+      };
+    }
+
+    Gtk.StackPage {
+      name: "list";
+      child: Gtk.ScrolledWindow {
+        propagate-natural-height: true;
+        vexpand: true;
+        child: Gtk.ListBox conflict_list {
+          selection-mode: none;
+          styles ["boxed-list"]
+        };
+      };
+    }
+  };
+}

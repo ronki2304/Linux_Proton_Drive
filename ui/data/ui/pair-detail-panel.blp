@@ -38,6 +38,15 @@ template $ProtonDrivePairDetailPanel: Adw.Bin {
           styles ["conflict-banner"]
         }
 
+        Gtk.Button view_conflict_log_btn {
+          label: _("View conflict log");
+          halign: center;
+          margin-top: 4;
+          margin-bottom: 4;
+          visible: false;
+          styles ["flat"]
+        }
+
         Gtk.ScrolledWindow {
           propagate-natural-height: true;
           vexpand: true;
@@ -93,6 +102,42 @@ template $ProtonDrivePairDetailPanel: Adw.Bin {
               margin-top: 8;
             }
           };
+        }
+      };
+    }
+
+    Gtk.StackPage {
+      name: "conflict-log";
+      child: Gtk.Box {
+        orientation: vertical;
+
+        // Mini-header with back navigation within the panel.
+        Gtk.Box conflict_log_header {
+          orientation: horizontal;
+          margin-start: 8;
+          margin-top: 4;
+          margin-bottom: 4;
+
+          Gtk.Button conflict_log_back_btn {
+            icon-name: "go-previous-symbolic";
+            tooltip-text: _("Back to details");
+            styles ["flat"]
+          }
+
+          Gtk.Label {
+            label: _("Conflict Log");
+            halign: start;
+            margin-start: 8;
+            styles ["heading"]
+          }
+        }
+
+        Gtk.Separator { orientation: horizontal; }
+
+        // Slot where ConflictLog widget is appended programmatically.
+        Gtk.Box conflict_log_slot {
+          orientation: vertical;
+          vexpand: true;
         }
       };
     }

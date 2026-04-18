@@ -28,6 +28,10 @@ def _make_panel() -> PairDetailPanel:
     panel.file_count_row = MagicMock()
     panel.total_size_row = MagicMock()
     panel.progress_slot = MagicMock()
+    panel.view_conflict_log_btn = MagicMock()
+    panel.conflict_log_slot = MagicMock()
+    panel.conflict_log_back_btn = MagicMock()
+    panel._conflict_log = None
     return panel
 
 
@@ -370,3 +374,54 @@ class TestCancelSyncTimer:
         glib_mock.source_remove.reset_mock()
         panel._cancel_sync_timer()
         glib_mock.source_remove.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Story 4-6 — ConflictLog integration in PairDetailPanel
+# ---------------------------------------------------------------------------
+
+class TestConflictLogIntegration:
+    def test_set_conflict_state_shows_view_log_btn_when_count_gt_0(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_conflict_state("p1", 1, "Docs")
+        panel.view_conflict_log_btn.set_visible.assert_called_with(True)
+
+    def test_set_conflict_state_hides_view_log_btn_when_count_0(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_conflict_state("p1", 0, "Docs")
+        panel.view_conflict_log_btn.set_visible.assert_called_with(False)
+
+    def test_show_conflict_log_page_lazy_creates_conflict_log(self):
+        panel = _make_panel()
+        with patch("protondrive.widgets.pair_detail_panel.ConflictLog") as mock_cls:
+            mock_log = MagicMock()
+            mock_cls.return_value = mock_log
+            panel.show_conflict_log_page([])
+            mock_cls.assert_called_once()
+            panel.conflict_log_slot.append.assert_called_once_with(mock_log)
+
+    def test_show_conflict_log_page_reuses_existing_log(self):
+        panel = _make_panel()
+        existing_log = MagicMock()
+        panel._conflict_log = existing_log
+        panel.show_conflict_log_page([{"pair_id": "p1"}])
+        existing_log.set_entries.assert_called_once_with([{"pair_id": "p1"}])
+        panel.conflict_log_slot.append.assert_not_called()
+
+    def test_show_conflict_log_page_switches_stack_to_conflict_log(self):
+        panel = _make_panel()
+        panel._conflict_log = MagicMock()
+        panel.show_conflict_log_page([])
+        panel.detail_stack.set_visible_child_name.assert_called_with("conflict-log")
+
+    def test_on_conflict_log_back_switches_stack_to_detail(self):
+        panel = _make_panel()
+        panel._on_conflict_log_back(MagicMock())
+        panel.detail_stack.set_visible_child_name.assert_called_with("detail")
+
+    def test_show_pair_hides_view_log_btn(self):
+        panel = _make_panel()
+        panel.show_pair({"pair_id": "p1", "local_path": "/tmp/Docs"})
+        panel.view_conflict_log_btn.set_visible.assert_called_with(False)

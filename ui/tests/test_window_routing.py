@@ -24,6 +24,7 @@ def _make_window() -> MainWindow:
     win._pairs_data = {}
     win._conflict_pending_count = 0
     win._conflict_copies_by_pair = {}
+    win._conflict_log_entries = []
     win._row_activated_connected = False
     win._settings = MagicMock()
     return win
@@ -638,3 +639,112 @@ class TestOnlineWatcherGuardsWithConflicts:
         win._sync_pair_rows["p1"] = _make_row(state="synced")
         win.on_watcher_status("ready")
         win.status_footer_bar.update_all_synced.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Story 4-6 — _conflict_log_entries management
+# ---------------------------------------------------------------------------
+
+class TestConflictLogEntries:
+    def test_on_conflict_detected_appends_to_conflict_log_entries(self):
+        win = _make_window()
+        win._sync_pair_rows["p1"] = _make_row(pair_name="Docs")
+        win._pairs_data["p1"] = {"local_path": "/home/user/Docs"}
+        win.on_conflict_detected({
+            "pair_id": "p1",
+            "conflict_copy_path": "/home/user/Docs/notes.md.conflict-2026-04-18",
+            "local_path": "/home/user/Docs/notes.md",
+        })
+        assert len(win._conflict_log_entries) == 1
+        entry = win._conflict_log_entries[0]
+        assert entry["pair_id"] == "p1"
+        assert entry["local_path"] == "/home/user/Docs/notes.md"
+        assert entry["date"] == "2026-04-18"
+        assert entry["resolved"] is False
+
+    def test_on_conflict_detected_deduplicates_by_conflict_copy_path(self):
+        win = _make_window()
+        win._sync_pair_rows["p1"] = _make_row(pair_name="Docs")
+        payload = {
+            "pair_id": "p1",
+            "conflict_copy_path": "/tmp/notes.md.conflict-2026-04-18",
+            "local_path": "/tmp/notes.md",
+        }
+        win.on_conflict_detected(payload)
+        win.on_conflict_detected(payload)  # duplicate
+        assert len(win._conflict_log_entries) == 1
+
+    def test_on_sync_complete_marks_resolved_when_file_gone(self):
+        win = _make_window()
+        win._conflict_log_entries = [{
+            "pair_id": "p1",
+            "local_path": "/tmp/notes.md",
+            "conflict_copy_path": "/tmp/notes.md.conflict-2026-04-18",
+            "pair_name": "Docs",
+            "date": "2026-04-18",
+            "resolved": False,
+        }]
+        win._sync_pair_rows["p1"] = _make_row()
+        win._conflict_copies_by_pair = {}  # already resolved in copies tracking
+        with patch("protondrive.window.os.path.exists", return_value=False):
+            win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-18T10:00:00Z"})
+        assert win._conflict_log_entries[0]["resolved"] is True
+
+    def test_on_sync_complete_does_not_mark_resolved_when_file_present(self):
+        win = _make_window()
+        win._conflict_log_entries = [{
+            "pair_id": "p1",
+            "local_path": "/tmp/notes.md",
+            "conflict_copy_path": "/tmp/notes.md.conflict-2026-04-18",
+            "pair_name": "Docs",
+            "date": "2026-04-18",
+            "resolved": False,
+        }]
+        win._sync_pair_rows["p1"] = _make_row()
+        win._conflict_copies_by_pair = {"p1": ["/tmp/notes.md.conflict-2026-04-18"]}
+        with patch("protondrive.window.os.path.exists", return_value=True):
+            win.on_sync_complete({"pair_id": "p1", "timestamp": ""})
+        assert win._conflict_log_entries[0]["resolved"] is False
+
+    def test_clear_session_clears_conflict_log_entries(self):
+        win = _make_window()
+        win._conflict_log_entries = [{"pair_id": "p1", "resolved": False}]
+        win.clear_session()
+        assert win._conflict_log_entries == []
+
+    def test_on_view_conflict_log_calls_show_conflict_log_page(self):
+        win = _make_window()
+        win._conflict_log_entries = [{"pair_id": "p1"}]
+        win._on_view_conflict_log(MagicMock())
+        win.pair_detail_panel.show_conflict_log_page.assert_called_once_with(
+            [{"pair_id": "p1"}]
+        )
+
+    def test_on_conflict_detected_date_empty_when_no_suffix(self):
+        win = _make_window()
+        win._sync_pair_rows["p1"] = _make_row(pair_name="Docs")
+        win._pairs_data["p1"] = {"local_path": "/tmp"}
+        win.on_conflict_detected({
+            "pair_id": "p1",
+            "conflict_copy_path": "/tmp/notes.md",  # no .conflict-YYYY-MM-DD suffix
+            "local_path": "/tmp/notes.md",
+        })
+        assert win._conflict_log_entries[0]["date"] == ""
+
+    def test_on_sync_complete_does_not_mark_different_pair_entries_resolved(self):
+        win = _make_window()
+        win._conflict_log_entries = [
+            {
+                "pair_id": "p2",  # different pair
+                "local_path": "/tmp/other.md",
+                "conflict_copy_path": "/tmp/other.md.conflict-2026-04-18",
+                "pair_name": "Other",
+                "date": "2026-04-18",
+                "resolved": False,
+            }
+        ]
+        win._sync_pair_rows["p1"] = _make_row()
+        win._conflict_copies_by_pair = {}
+        with patch("protondrive.window.os.path.exists", return_value=False):
+            win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-18T10:00:00Z"})
+        assert win._conflict_log_entries[0]["resolved"] is False

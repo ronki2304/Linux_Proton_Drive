@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 from gi.repository import Adw, Gio, Gtk
@@ -58,8 +59,15 @@ class MainWindow(Adw.ApplicationWindow):
         # Maps pair_id → list of conflict copy absolute paths (Story 4-4).
         # Populated by on_conflict_detected; resolved in on_sync_complete.
         self._conflict_copies_by_pair: dict[str, list[str]] = {}
+        # List of all conflict entries for the conflict log panel (Story 4-6).
+        # Each entry: {pair_id, pair_name, local_path, conflict_copy_path, date, resolved}
+        # date is extracted from conflict_copy_path suffix "filename.ext.conflict-YYYY-MM-DD".
+        self._conflict_log_entries: list[dict] = []
         self._row_activated_connected: bool = False
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
+        self.pair_detail_panel.connect(
+            "view-conflict-log", self._on_view_conflict_log
+        )
 
     def _on_close_request(self, window: Gtk.Window) -> bool:
         """Save window geometry to GSettings before closing."""
@@ -141,6 +149,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._sync_pair_rows = {}
         self._pairs_data = {}
         self._conflict_copies_by_pair = {}
+        self._conflict_log_entries = []          # Story 4-6
         self._row_activated_connected = False
         self.pair_detail_panel.show_no_pairs()
         self.status_footer_bar.update_all_synced()
@@ -175,6 +184,21 @@ class MainWindow(Adw.ApplicationWindow):
         count = len(copies)
         pair_name = self._get_pair_name(pair_id)
 
+        # Extract date from conflict copy path suffix "name.ext.conflict-YYYY-MM-DD".
+        _m = re.search(r'\.conflict-(\d{4}-\d{2}-\d{2})$', conflict_copy_path)
+        date_str = _m.group(1) if _m else ""
+
+        # Append to global conflict log entries (deduplicated by path).
+        if not any(e["conflict_copy_path"] == conflict_copy_path for e in self._conflict_log_entries):
+            self._conflict_log_entries.append({
+                "pair_id": pair_id,
+                "pair_name": pair_name,
+                "local_path": payload.get("local_path", ""),
+                "conflict_copy_path": conflict_copy_path,
+                "date": date_str,
+                "resolved": False,
+            })
+
         # Update sidebar row.
         row = self._sync_pair_rows.get(pair_id)
         if row is not None and row.state != "offline":
@@ -186,6 +210,10 @@ class MainWindow(Adw.ApplicationWindow):
 
         # Update footer: conflict > syncing priority (AC4).
         self.status_footer_bar.set_conflicts(self._total_active_conflicts())
+
+    def _on_view_conflict_log(self, _panel: object) -> None:
+        """Handle view-conflict-log signal — populate and show conflict log page."""
+        self.pair_detail_panel.show_conflict_log_page(self._conflict_log_entries)
 
     def _on_setup_requested(self, widget: object) -> None:
         """Handle setup-requested signal from PairDetailPanel."""
@@ -457,6 +485,13 @@ class MainWindow(Adw.ApplicationWindow):
             self._conflict_copies_by_pair[pair_id] = still_present
             if not still_present:
                 del self._conflict_copies_by_pair[pair_id]
+
+        # Mark resolved entries in conflict log (Story 4-6).
+        # Run this after _conflict_copies_by_pair is updated so both stay in sync.
+        for entry in self._conflict_log_entries:
+            if entry["pair_id"] == pair_id and not entry["resolved"]:
+                if not os.path.exists(entry["conflict_copy_path"]):
+                    entry["resolved"] = True
 
         # Determine post-sync state for this pair's row.
         pair_conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
