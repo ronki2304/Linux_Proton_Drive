@@ -42,6 +42,9 @@ class MainWindow(Adw.ApplicationWindow):
         if settings.get_boolean("window-maximized"):
             self.maximize()
         self.connect("close-request", self._on_close_request)
+        self.session_expired_banner.connect(
+            "button-clicked", self._on_session_expired_banner_clicked
+        )
         self.set_size_request(360, 480)
 
         self._pre_auth_screen: PreAuthScreen | None = None
@@ -294,6 +297,12 @@ class MainWindow(Adw.ApplicationWindow):
     def clear_token_expired_warning(self) -> None:
         """Hide the session-expired banner. Called on session_ready."""
         self.session_expired_banner.set_revealed(False)
+
+    def _on_session_expired_banner_clicked(self, _banner: Adw.Banner) -> None:
+        """Banner 'Sign in' button — present the reauth dialog via Application."""
+        app = self.get_application()
+        if app is not None and hasattr(app, "show_reauth_dialog"):
+            app.show_reauth_dialog()
 
     def on_session_ready(self, payload: dict[str, Any]) -> None:
         """Handle session_ready from engine — same for initial auth and re-auth."""

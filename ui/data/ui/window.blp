@@ -20,6 +20,7 @@ template $ProtonDriveMainWindow: Adw.ApplicationWindow {
         Adw.Banner session_expired_banner {
           title: _("Session expired — sign in to resume sync");
           revealed: false;
+          button-label: _("Sign in");
           styles ["error"]
         }
 

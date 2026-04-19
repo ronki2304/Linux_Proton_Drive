@@ -1,0 +1,12 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveReauthDialog: Adw.AlertDialog {
+  heading: _("Session expired");
+  close-response: "dismiss";
+
+  responses [
+    dismiss: _("Not now"),
+    sign_in: _("Sign in") suggested,
+  ]
+}

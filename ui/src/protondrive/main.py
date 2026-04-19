@@ -38,6 +38,8 @@ class Application(Adw.Application):
         self._cached_session_data: dict[str, Any] | None = None
         self._watcher_status: str = "unknown"
         self._pending_key_unlock_dialog: Any | None = None
+        self._pending_reauth_dialog: Any | None = None
+        self._last_token_expired_queued_count: int = 0
         # True once the user has started a browser auth session in this process
         # lifetime.  Used to decide whether to show the key-unlock dialog or to
         # route back to pre-auth (if the stored token is insufficient on startup).
@@ -342,6 +344,13 @@ class Application(Adw.Application):
             except Exception:
                 pass
             self._pending_key_unlock_dialog = None
+        # Close reauth dialog if still open (e.g., session_ready fired before user clicked).
+        if self._pending_reauth_dialog is not None:
+            try:
+                self._pending_reauth_dialog.close()
+            except Exception:
+                pass
+            self._pending_reauth_dialog = None
         # Tear down WebView (stop cookie poller) now that we have a valid token.
         self._window.close_auth_browser()
         has_pairs = self._has_configured_pairs()
@@ -405,21 +414,51 @@ class Application(Adw.Application):
                 )
 
     def _on_token_expired(self, payload: dict[str, Any]) -> None:
-        """Token expired mid-sync — show warning banner; keep credentials for re-auth.
+        """Token expired mid-sync — show warning banner and re-auth dialog.
 
-        Story 5-1: UI shifts to warning state; credentials are preserved so
-        Story 5-2 can pre-fill re-auth without requiring a fresh login.
-        Do NOT route to pre-auth — user stays on main view and can queue changes.
-        Banner is always shown regardless of auth browser state — if re-auth
-        succeeds, on_session_ready clears it; if it fails, the user sees feedback.
+        Story 5-1: banner is shown; credentials are preserved.
+        Story 5-2: re-auth modal is presented so user can sign in immediately.
         """
         import sys
         print(f"[APP] token_expired received: {payload}", file=sys.stderr)
         self._cancel_validation_timeout()
         self._watcher_status = "unknown"
 
+        queued_changes: int = payload.get("queued_changes", 0) if isinstance(payload, dict) else 0
+        self._last_token_expired_queued_count = queued_changes
+
         if self._window is not None:
             self._window.show_token_expired_warning()
+            self.show_reauth_dialog()
+
+    def show_reauth_dialog(self) -> None:
+        """Create and present the ReauthDialog if not already showing.
+
+        Idempotent: if the dialog is already on screen, does nothing.
+        Called from _on_token_expired and from the banner 'Sign in' button.
+        """
+        if self._pending_reauth_dialog is not None:
+            return  # already showing — do not stack a second dialog
+        if self._window is None:
+            return  # no parent window — cannot present dialog
+
+        from protondrive.widgets.reauth_dialog import ReauthDialog
+
+        dialog = ReauthDialog()
+        dialog.set_queued_changes(self._last_token_expired_queued_count)
+        dialog.connect("response", self._on_reauth_response)
+        self._pending_reauth_dialog = dialog
+        dialog.present(self._window)
+
+    def _on_reauth_response(self, _dialog: Any, response_id: str) -> None:
+        """Handle ReauthDialog button press.
+
+        "sign_in": close dialog, open auth browser (same flow as first-run).
+        "dismiss" / window close: close dialog, banner stays revealed.
+        """
+        self._pending_reauth_dialog = None
+        if response_id == "sign_in":
+            self.start_auth_flow()
 
     def logout(self) -> None:
         """Execute logout: clear credentials, shutdown engine, show pre-auth."""

@@ -30,7 +30,10 @@ def _make_app() -> Application:
     app._cached_session_data = None
     app._watcher_status = "unknown"
     app._pending_key_unlock_dialog = None
+    app._pending_reauth_dialog = None
+    app._last_token_expired_queued_count = 0
     app._had_browser_session = False
+    app.show_reauth_dialog = MagicMock()
     return app
 
 
@@ -302,9 +305,101 @@ class TestTokenExpiredCallsWarning:
         app = _make_app()
         app._window = None
         app._on_token_expired({"queued_changes": 2})  # must not raise
+        app.show_reauth_dialog.assert_not_called()
 
     def test_shows_banner_even_when_auth_browser_active(self) -> None:
         app = _make_app()
         app._window.is_auth_browser_active.return_value = True
         app._on_token_expired({"queued_changes": 1})
         app._window.show_token_expired_warning.assert_called_once_with()
+
+
+# ---------------------------------------------------------------------------
+# Story 5-2 — ReauthDialog lifecycle
+# ---------------------------------------------------------------------------
+
+class TestReauthDialogLifecycle:
+    """show_reauth_dialog creates dialog; _on_reauth_response handles sign_in/dismiss."""
+
+    def test_show_reauth_dialog_calls_set_queued_changes(self) -> None:
+        """Dialog receives the queued-change count from last token_expired payload."""
+        app = _make_app()
+        app._last_token_expired_queued_count = 5
+        mock_dialog = MagicMock()
+        # ReauthDialog is a lazy import inside show_reauth_dialog() — patch sys.modules.
+        import sys
+        import types
+        fake_mod = types.ModuleType("protondrive.widgets.reauth_dialog")
+        fake_mod.ReauthDialog = MagicMock(return_value=mock_dialog)
+        # Use the real show_reauth_dialog, not the mock set by _make_app
+        from protondrive.main import Application
+        with patch.dict(sys.modules, {"protondrive.widgets.reauth_dialog": fake_mod}):
+            Application.show_reauth_dialog(app)
+        mock_dialog.set_queued_changes.assert_called_once_with(5)
+
+    def test_show_reauth_dialog_is_idempotent(self) -> None:
+        """Calling show_reauth_dialog twice does not create a second dialog."""
+        app = _make_app()
+        existing = MagicMock()
+        app._pending_reauth_dialog = existing
+        from protondrive.main import Application
+        Application.show_reauth_dialog(app)  # must be a no-op
+        # pending_reauth_dialog is still the original (no new dialog created)
+        assert app._pending_reauth_dialog is existing
+
+    def test_on_token_expired_calls_show_reauth_dialog(self) -> None:
+        """_on_token_expired calls show_reauth_dialog (Story 5-2 addition)."""
+        app = _make_app()
+        app._on_token_expired({"queued_changes": 3})
+        app.show_reauth_dialog.assert_called_once_with()
+
+    def test_on_token_expired_caches_queued_count(self) -> None:
+        """_on_token_expired stores queued_changes for later dialog use."""
+        app = _make_app()
+        app._on_token_expired({"queued_changes": 7})
+        assert app._last_token_expired_queued_count == 7
+
+    def test_on_token_expired_zero_queued_fallback(self) -> None:
+        """Missing queued_changes key defaults to 0."""
+        app = _make_app()
+        app._on_token_expired({})
+        assert app._last_token_expired_queued_count == 0
+
+    def test_sign_in_response_calls_start_auth_flow(self) -> None:
+        """'sign_in' response invokes start_auth_flow (opens auth browser)."""
+        app = _make_app()
+        app.start_auth_flow = MagicMock()
+        app._pending_reauth_dialog = MagicMock()
+        app._on_reauth_response(MagicMock(), "sign_in")
+        app.start_auth_flow.assert_called_once_with()
+        assert app._pending_reauth_dialog is None
+
+    def test_dismiss_response_does_not_start_auth_flow(self) -> None:
+        """'dismiss' response clears dialog ref but does NOT start auth."""
+        app = _make_app()
+        app.start_auth_flow = MagicMock()
+        app._pending_reauth_dialog = MagicMock()
+        app._on_reauth_response(MagicMock(), "dismiss")
+        app.start_auth_flow.assert_not_called()
+        assert app._pending_reauth_dialog is None
+
+    def test_session_ready_closes_pending_reauth_dialog(self) -> None:
+        """_on_session_ready closes the reauth dialog if still open."""
+        app = _make_app()
+        mock_dialog = MagicMock()
+        app._pending_reauth_dialog = mock_dialog
+        app._has_configured_pairs = MagicMock(return_value=True)
+        app._engine = MagicMock()
+        app._cached_session_data = None
+        app._on_session_ready({"display_name": "Test"})
+        mock_dialog.close.assert_called_once_with()
+        assert app._pending_reauth_dialog is None
+
+    def test_session_ready_no_pending_dialog_is_safe(self) -> None:
+        """_on_session_ready with no pending dialog does not raise."""
+        app = _make_app()
+        assert app._pending_reauth_dialog is None
+        app._has_configured_pairs = MagicMock(return_value=True)
+        app._engine = MagicMock()
+        app._cached_session_data = None
+        app._on_session_ready({"display_name": "Test"})  # must not raise
