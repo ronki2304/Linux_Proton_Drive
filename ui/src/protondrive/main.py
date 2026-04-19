@@ -39,6 +39,7 @@ class Application(Adw.Application):
         self._watcher_status: str = "unknown"
         self._pending_key_unlock_dialog: Any | None = None
         self._pending_reauth_dialog: Any | None = None
+        self._pending_crash_recovery: bool = False
         self._last_token_expired_queued_count: int = 0
         # True once the user has started a browser auth session in this process
         # lifetime.  Used to decide whether to show the key-unlock dialog or to
@@ -95,6 +96,7 @@ class Application(Adw.Application):
         self._engine.on_event("queue_replay_complete", self._on_queue_replay_complete)
         self._engine.on_event("rate_limited", self._on_rate_limited)
         self._engine.on_event("conflict_detected", self._on_conflict_detected)
+        self._engine.on_event("crash_recovery_complete", self._on_crash_recovery_complete)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -218,6 +220,10 @@ class Application(Adw.Application):
     def _on_rate_limited(self, payload: dict[str, Any]) -> None:
         if self._window is not None:
             self._window.on_rate_limited(payload)
+
+    def _on_crash_recovery_complete(self, payload: dict[str, Any]) -> None:
+        """Cache crash recovery flag — toast shown after main window is visible (Story 5-4 AC4)."""
+        self._pending_crash_recovery = True
 
     def _on_conflict_detected(self, message: dict[str, Any]) -> None:
         payload = message.get("payload", {})
@@ -358,11 +364,15 @@ class Application(Adw.Application):
         if has_pairs:
             self._window.show_main()
             self._window.on_session_ready(payload)
+            if self._pending_crash_recovery:
+                self._pending_crash_recovery = False
+                self._window.on_crash_recovery_complete()
             if self._engine is not None:
                 self._engine.send_command_with_response(
                     {"type": "get_status"}, self._on_get_status_result
                 )
         else:
+            self._pending_crash_recovery = False
             print("[APP] calling show_setup_wizard", file=sys.stderr)
             self._window.show_setup_wizard(self._engine)
 

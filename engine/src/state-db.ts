@@ -71,9 +71,19 @@ const MIGRATIONS: Migration[] = [
     version: 2,
     up: `ALTER TABLE sync_pair ADD COLUMN last_synced_at TEXT;`,
   },
+  {
+    version: 3,
+    up: `
+      CREATE TABLE IF NOT EXISTS session_state (
+        id    INTEGER PRIMARY KEY DEFAULT 1,
+        dirty INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT OR IGNORE INTO session_state (id, dirty) VALUES (1, 0);
+    `,
+  },
 ];
 
-const CURRENT_VERSION = 2;
+const CURRENT_VERSION = 3;
 
 // ── StateDb ──────────────────────────────────────────────────────────────────
 
@@ -292,6 +302,19 @@ export class StateDb {
       .prepare(`SELECT COUNT(*) AS cnt FROM change_queue WHERE pair_id = ?`)
       .get(pairId) as { cnt: number };
     return row.cnt;
+  }
+
+  setDirtySession(dirty: boolean): void {
+    this.db
+      .prepare(`UPDATE session_state SET dirty = ? WHERE id = 1`)
+      .run(dirty ? 1 : 0);
+  }
+
+  isDirtySession(): boolean {
+    const row = this.db
+      .query(`SELECT dirty FROM session_state WHERE id = 1`)
+      .get() as { dirty: number } | null;
+    return (row?.dirty ?? 0) === 1;
   }
 
   // ── diagnostics (used in tests and health checks) ─────────────────────────

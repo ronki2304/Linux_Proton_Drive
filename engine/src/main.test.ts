@@ -18,6 +18,8 @@ import {
   _setStateDbForTests,
   _setServerForTests,
   createNetworkMonitorCallback,
+  cleanTmpFilesInDir,
+  runCrashRecovery,
 } from "./main.js";
 import { StateDb } from "./state-db.js";
 import { SyncEngine } from "./sync-engine.js";
@@ -712,6 +714,65 @@ describe("createNetworkMonitorCallback (Story 3-3 wiring)", () => {
 
     client.end();
     server.close();
+    db.close();
+  });
+});
+
+describe("crash recovery helpers (Story 5-4)", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-recovery-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("cleanTmpFilesInDir deletes .protondrive-tmp- files", async () => {
+    const tmpFile = path.join(tmpDir, "file.protondrive-tmp-12345");
+    fs.writeFileSync(tmpFile, "data");
+    const count = await cleanTmpFilesInDir(tmpDir);
+    expect(count).toBe(1);
+    expect(fs.existsSync(tmpFile)).toBe(false);
+  });
+
+  it("cleanTmpFilesInDir ignores non-tmp files", async () => {
+    const regularFile = path.join(tmpDir, "file.txt");
+    fs.writeFileSync(regularFile, "data");
+    const count = await cleanTmpFilesInDir(tmpDir);
+    expect(count).toBe(0);
+    expect(fs.existsSync(regularFile)).toBe(true);
+  });
+
+  it("cleanTmpFilesInDir recurses into subdirectories", async () => {
+    const subDir = path.join(tmpDir, "sub");
+    fs.mkdirSync(subDir);
+    const tmpFile = path.join(subDir, "nested.protondrive-tmp-99999");
+    fs.writeFileSync(tmpFile, "data");
+    const count = await cleanTmpFilesInDir(tmpDir);
+    expect(count).toBe(1);
+    expect(fs.existsSync(tmpFile)).toBe(false);
+  });
+
+  it("cleanTmpFilesInDir returns 0 for missing directory", async () => {
+    const count = await cleanTmpFilesInDir("/nonexistent/path/that/does/not/exist");
+    expect(count).toBe(0);
+  });
+
+  it("runCrashRecovery returns false when dirty flag is not set", async () => {
+    const db = new StateDb(":memory:");
+    const result = await runCrashRecovery(db);
+    expect(result).toBe(false);
+    db.close();
+  });
+
+  it("runCrashRecovery clears flag and returns true when dirty flag is set", async () => {
+    const db = new StateDb(":memory:");
+    db.setDirtySession(true);
+    const result = await runCrashRecovery(db);
+    expect(result).toBe(true);
+    expect(db.isDirtySession()).toBe(false);
     db.close();
   });
 });

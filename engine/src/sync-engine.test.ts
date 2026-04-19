@@ -2183,3 +2183,70 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
     expect(uploadFn.mock.calls.length).toBe(0);
   });
 });
+
+describe("SyncEngine — dirty-session flag lifecycle (Story 5-4)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `dirty-flag-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("drainQueue with client sets dirty flag before I/O, clears in finally", async () => {
+    mockClient = makeMockClient();
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    expect(db.isDirtySession()).toBe(false);
+    await engine.drainQueue();
+    expect(db.isDirtySession()).toBe(false); // cleared in finally
+  });
+
+  it("drainQueue without client does NOT set dirty flag", async () => {
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    // No setDriveClient — driveClient stays null
+
+    await engine.drainQueue();
+    expect(db.isDirtySession()).toBe(false);
+  });
+
+  it("re-entrant drainQueue bounce does NOT change dirty flag", async () => {
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    (engine as any).isDraining = true;
+    db.setDirtySession(true); // pre-set to known state
+    await engine.drainQueue(); // hits re-entrancy guard, returns early
+    expect(db.isDirtySession()).toBe(true); // unchanged — bounce path never touches flag
+    (engine as any).isDraining = false; // cleanup
+  });
+
+  it("dirty flag cleared even when AuthExpiredError thrown during drain", async () => {
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "file.txt",
+      change_type: "created",
+      queued_at: new Date().toISOString(),
+    });
+
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => {
+        throw new AuthExpiredError("401");
+      }),
+    });
+
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e), undefined, () => {}, () => {});
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+    expect(db.isDirtySession()).toBe(false); // finally block always clears dirtied flag
+  });
+});

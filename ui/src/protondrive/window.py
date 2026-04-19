@@ -465,6 +465,12 @@ class MainWindow(Adw.ApplicationWindow):
         # below). AC7 row 1 resolves there — doing it here would flash before
         # sync_complete.
 
+    def on_crash_recovery_complete(self) -> None:
+        """Show crash recovery toast (Story 5-4 FR44)."""
+        toast = Adw.Toast.new("Recovered from unexpected shutdown — sync resuming")
+        toast.set_timeout(5)
+        self.toast_overlay.add_toast(toast)
+
     def on_rate_limited(self, payload: dict[str, Any]) -> None:
         """Handle engine's `rate_limited` push event (Story 3-4 AC4)."""
         resume_in = (payload.get("resume_in_seconds") or 0)

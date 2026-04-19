@@ -31,6 +31,7 @@ def _make_app() -> Application:
     app._watcher_status = "unknown"
     app._pending_key_unlock_dialog = None
     app._pending_reauth_dialog = None
+    app._pending_crash_recovery = False
     app._last_token_expired_queued_count = 0
     app._had_browser_session = False
     app.show_reauth_dialog = MagicMock()
@@ -403,3 +404,34 @@ class TestReauthDialogLifecycle:
         app._engine = MagicMock()
         app._cached_session_data = None
         app._on_session_ready({"display_name": "Test"})  # must not raise
+
+
+class TestCrashRecovery:
+    """Crash recovery flag and session_ready injection (Story 5-4 AC4)."""
+
+    def test_crash_recovery_complete_sets_pending_flag(self) -> None:
+        """_on_crash_recovery_complete event sets _pending_crash_recovery."""
+        app = _make_app()
+        app._on_crash_recovery_complete({})
+        assert app._pending_crash_recovery is True
+
+    def test_session_ready_with_flag_calls_on_crash_recovery_complete(self) -> None:
+        """_on_session_ready with _pending_crash_recovery=True calls window.on_crash_recovery_complete."""
+        app = _make_app()
+        app._pending_crash_recovery = True
+        app._has_configured_pairs = MagicMock(return_value=True)
+        app._engine = MagicMock()
+        app._cached_session_data = None
+        app._on_session_ready({"display_name": "Test"})
+        app._window.on_crash_recovery_complete.assert_called_once()
+        assert app._pending_crash_recovery is False  # consumed
+
+    def test_session_ready_without_flag_does_not_call_on_crash_recovery_complete(self) -> None:
+        """_on_session_ready without _pending_crash_recovery does not call window.on_crash_recovery_complete."""
+        app = _make_app()
+        app._pending_crash_recovery = False
+        app._has_configured_pairs = MagicMock(return_value=True)
+        app._engine = MagicMock()
+        app._cached_session_data = None
+        app._on_session_ready({"display_name": "Test"})
+        app._window.on_crash_recovery_complete.assert_not_called()

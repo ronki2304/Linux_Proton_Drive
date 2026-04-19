@@ -180,4 +180,14 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ---
 
+## Deferred from: code review of 5-4-dirty-session-flag-and-crash-recovery (2026-04-19)
+
+- **[5-4 CR W1]** `cleanTmpFilesInDir` no depth limit — no stack-overflow guard for deep directory trees; mirrors [2-5] open items for `walkLocalTree`/`walkRemoteTree`. `engine/src/main.ts:cleanTmpFilesInDir`
+- **[5-4 CR W2]** Missing `session_state` row silently no-ops — `isDirtySession` returns false and `setDirtySession` no-ops on absent row; migration guarantees row via `INSERT OR IGNORE` so only abnormal DB corruption triggers this; consequence is pre-feature behavior (no recovery). `engine/src/state-db.ts`
+- **[5-4 CR W3]** `runCrashRecovery` clears dirty flag without try/finally guard — latent: `cleanTmpFilesInDir` swallows all errors so it cannot currently throw; if it ever does, flag is cleared despite incomplete cleanup. `engine/src/main.ts:runCrashRecovery`
+- **[5-4 CR W4]** `unlink` error suppression hides EACCES/EBUSY — bare `catch` silences all unlink errors; return count undercounts failures; return value unused by callers so no current functional impact. `engine/src/main.ts:cleanTmpFilesInDir`
+- **[5-4 CR W5]** `on_event` callback signature inconsistency — `_on_crash_recovery_complete` receives `payload` directly; older handlers receive full `message` dict; pre-existing inconsistency, no AC impact. `ui/src/protondrive/main.py`
+
+---
+
 _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 — see epic-4-retro-2026-04-18.md for full list._

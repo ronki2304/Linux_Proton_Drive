@@ -748,3 +748,24 @@ class TestConflictLogEntries:
         with patch("protondrive.window.os.path.exists", return_value=False):
             win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-18T10:00:00Z"})
         assert win._conflict_log_entries[0]["resolved"] is False
+
+
+# ---------------------------------------------------------------------------
+# Story 5-4 — on_crash_recovery_complete
+# ---------------------------------------------------------------------------
+
+class TestOnCrashRecoveryComplete:
+    """on_crash_recovery_complete shows AdwToast with correct text and timeout (AC4)."""
+
+    def test_crash_recovery_complete_shows_toast(self):
+        win = _make_window()
+        with patch("protondrive.window.Adw") as mock_adw:
+            mock_toast = MagicMock()
+            mock_adw.Toast.new.return_value = mock_toast
+            win.on_crash_recovery_complete()
+            mock_adw.Toast.new.assert_called_once_with(
+                "Recovered from unexpected shutdown — sync resuming"
+            )
+            mock_toast.set_timeout.assert_called_once_with(5)
+            win.toast_overlay.add_toast.assert_called_once_with(mock_toast)
+

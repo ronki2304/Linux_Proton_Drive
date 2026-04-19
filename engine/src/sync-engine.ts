@@ -542,6 +542,7 @@ export class SyncEngine {
     let skipped_conflicts = 0;
     let failed = 0;
     const pairsWithSuccess = new Set<string>();
+    let dirtied = false;
 
     try {
       // Snapshot driveClient at entry (matches syncPair pattern at line ~128).
@@ -551,6 +552,8 @@ export class SyncEngine {
         // counts are zero") so the UI can reliably clear any replaying state.
         return { synced, skipped_conflicts, failed };
       }
+      dirtied = true;
+      this.stateDb.setDirtySession(true);
 
       const pairs = this.stateDb.listPairs();
       for (const pair of pairs) {
@@ -643,6 +646,7 @@ export class SyncEngine {
           payload: { pair_id, timestamp },
         });
       }
+      if (dirtied) this.stateDb.setDirtySession(false);
       this.isDraining = false;
     }
 

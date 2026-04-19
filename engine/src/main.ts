@@ -1,6 +1,8 @@
 import { pathToFileURL } from "node:url";
 import https from "node:https";
 import tls from "node:tls";
+import { readdir, unlink } from "node:fs/promises";
+import { join } from "node:path";
 import { fetch as undiciFetch, setGlobalDispatcher, Agent } from "undici";
 
 // ---------------------------------------------------------------------------
@@ -603,9 +605,42 @@ export async function handleCommand(
   };
 }
 
+export async function cleanTmpFilesInDir(dirPath: string): Promise<number> {
+  let count = 0;
+  let entries;
+  try {
+    entries = await readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return 0; // directory doesn't exist or not readable — skip
+  }
+  for (const entry of entries) {
+    const fullPath = join(dirPath, entry.name);
+    if (entry.isDirectory()) {
+      count += await cleanTmpFilesInDir(fullPath);
+    } else if (entry.name.includes(".protondrive-tmp-")) {
+      try {
+        await unlink(fullPath);
+        count++;
+      } catch { /* already gone or locked */ }
+    }
+  }
+  return count;
+}
+
+export async function runCrashRecovery(db: StateDb): Promise<boolean> {
+  if (!db.isDirtySession()) return false;
+  const pairs = db.listPairs();
+  for (const pair of pairs) {
+    await cleanTmpFilesInDir(pair.local_path);
+  }
+  db.setDirtySession(false);
+  return true;
+}
+
 async function main(): Promise<void> {
   process.stderr.write(`[ENGINE] BUILD 2026-04-17-v5 started\n`);
   stateDb = new StateDb();
+  const wasDirty = await runCrashRecovery(stateDb!);
   syncEngine = new SyncEngine(
     stateDb,
     (e) => server.emitEvent(e),
@@ -645,6 +680,9 @@ async function main(): Promise<void> {
         protocol_version: PROTOCOL_VERSION,
       },
     });
+    if (wasDirty) {
+      server.emitEvent({ type: "crash_recovery_complete", payload: {} });
+    }
   });
 
   server.onClose(() => {

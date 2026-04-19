@@ -68,9 +68,9 @@ describe("StateDb — init", () => {
     expect(queue[0]!.queued_at).toBe("2026-04-09T10:00:00.000Z");
   });
 
-  it("sets user_version to 2 after migration (AC4)", () => {
-    // user_version tracks the schema version; after both migrations it must equal 2.
-    expect(db.pragma("user_version")).toBe(2);
+  it("sets user_version to 3 after migration (AC4)", () => {
+    // user_version tracks the schema version; after all migrations it must equal CURRENT_VERSION (3).
+    expect(db.pragma("user_version")).toBe(3);
   });
 });
 
@@ -449,5 +449,46 @@ describe("StateDb — ChangeType enum (AC1)", () => {
     expect(after.length).toBe(2);
     expect(after[0]!.change_type).toBe("created");
     expect(after[1]!.change_type).toBe("deleted");
+  });
+});
+
+describe("StateDb — session_state dirty flag (Story 5-4)", () => {
+  let flagDb: StateDb;
+
+  beforeEach(() => {
+    flagDb = new StateDb(":memory:");
+  });
+
+  afterEach(() => {
+    flagDb.close();
+  });
+
+  it("isDirtySession() returns false on fresh DB", () => {
+    expect(flagDb.isDirtySession()).toBe(false);
+  });
+
+  it("setDirtySession(true) → isDirtySession() returns true", () => {
+    flagDb.setDirtySession(true);
+    expect(flagDb.isDirtySession()).toBe(true);
+  });
+
+  it("setDirtySession(false) clears flag", () => {
+    flagDb.setDirtySession(true);
+    flagDb.setDirtySession(false);
+    expect(flagDb.isDirtySession()).toBe(false);
+  });
+
+  it("flag persists across separate StateDb instances on same file", () => {
+    const tmpPath = join(tmpdir(), `state-db-dirty-${Date.now()}.db`);
+    try {
+      const db1 = new StateDb(tmpPath);
+      db1.setDirtySession(true);
+      db1.close();
+      const db2 = new StateDb(tmpPath);
+      expect(db2.isDirtySession()).toBe(true);
+      db2.close();
+    } finally {
+      rmSync(tmpPath, { force: true });
+    }
   });
 });
