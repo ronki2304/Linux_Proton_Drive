@@ -43,6 +43,41 @@ Proton is reportedly working on a new SDK version. Until that ships, the tool mu
 - Assuming session tokens would be long-lived enough for cron use
 - The "scriptable CLI" value proposition — broken by SDK auth constraints
 
+---
+
+# Lessons Learned: Dev Environment (2026-04-19)
+
+## Distrobox Binary Wrapper Infinite Loop
+
+**Symptom**: `meson setup --wipe builddir` pegged all CPUs at ~98% per instance and never terminated. Multiple stuck `/bin/sh /usr/local/bin/meson` processes accumulated.
+
+**Root cause**: Distrobox's `distrobox-export --bin` generates a transparent wrapper script on the **host** so container binaries are callable from outside. At some point this wrapper was regenerated **inside** the `LinuxProtonDrive` container at `/usr/local/bin/meson`, overwriting the real binary. The script's `else` branch (hit when `$CONTAINER_ID == LinuxProtonDrive`) called `exec '/usr/local/bin/meson' "$@"` — itself — creating infinite recursion with `exec` (no new PID each iteration, so no process limit hit).
+
+**Attempted fix (wrong)**: Pointing the `else` branch to `/home/jeremy/.local/bin/meson` creates a *2-step* loop — that path is also a Distrobox-generated wrapper whose own `else` branch calls `/usr/local/bin/meson` right back.
+
+**Root cause of `pip3` not being available**: `pip3` is not in the container's PATH; meson is installed as a system package (`python3.14`, dnf-managed), not via pip. `python3 -m mesonbuild` also fails because `mesonbuild` has no `__main__.py`.
+
+**Correct fix**: Point directly to the real system meson at `/usr/bin/meson`:
+```bash
+distrobox enter LinuxProtonDrive -- sudo bash -c 'cat > /usr/local/bin/meson << '"'"'EOF'"'"'
+#!/bin/sh
+exec /usr/bin/meson "$@"
+EOF
+chmod +x /usr/local/bin/meson'
+```
+
+To find the real binary when unsure of its location:
+```bash
+distrobox enter LinuxProtonDrive -- python3 -c "import mesonbuild, os; print(os.path.dirname(mesonbuild.__file__))"
+# Returns /usr/lib/python3.14/site-packages/mesonbuild → real binary is at /usr/bin/meson
+```
+
+Verified working: `distrobox enter LinuxProtonDrive -- meson --version` → `1.8.5`
+
+**Pattern to watch for**: Any command inside the container that shows as `/bin/sh /usr/local/bin/<name>` in `ps` is a broken Distrobox wrapper. Inspect it with `cat /usr/local/bin/<name>`. Never point the `else` branch to another wrapper — always resolve to the real system binary (usually `/usr/bin/<name>`).
+
+---
+
 ## Implications for GUI Iteration
 
 - Auth flow must be interactive-first (embedded browser or system browser redirect for CAPTCHA)

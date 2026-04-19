@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-19  # 5-1 done (code review complete)
+last_updated: 2026-04-19  # 5-3 done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -106,8 +106,8 @@ development_status:
   epic-5: in-progress
   5-0-pre-epic-5-debt-cleanup: done
   5-1-401-detection-and-sync-halt: done
-  5-2-re-auth-modal-with-queued-change-count: backlog
-  5-3-change-queue-replay-after-re-auth: backlog
+  5-2-re-auth-modal-with-queued-change-count: done
+  5-3-change-queue-replay-after-re-auth: done
   5-4-dirty-session-flag-and-crash-recovery: backlog
   5-5-actionable-error-disk-full: backlog
   5-6-actionable-error-permission-denied: backlog

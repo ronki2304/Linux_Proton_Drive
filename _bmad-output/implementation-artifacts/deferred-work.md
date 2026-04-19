@@ -15,6 +15,13 @@ _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been remo
 
 ---
 
+## Deferred from: code review of 5-2-re-auth-modal-with-queued-change-count (2026-04-19)
+
+- **[5-2 D1]** No default body in Blueprint — `reauth-dialog.blp` has no `body:` property; if any future call site calls `present()` without first calling `set_queued_changes()`, the dialog shows an empty body. Current code always calls `set_queued_changes()` before `present()`, so this is a latent footgun, not an active bug. `ui/data/ui/reauth-dialog.blp`
+- **[5-2 D2]** Stale queued-change count with rapid `token_expired` events — if the engine fires `token_expired` twice in quick succession, the second event's `queued_changes` count is not reflected in the already-showing dialog (idempotency guard blocks creation of a second dialog). Engine-level concern; engine should not emit `token_expired` more than once per session expiry. `ui/src/protondrive/main.py`
+
+---
+
 ## Cross-Epic Tech Debt — Story 2-12: Unified Queue Drainer Refactor
 
 **Identified:** 2026-04-15 during Story 3-3 party-mode review
@@ -160,6 +167,16 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 - **[5-1 CR W3]** Banner `revealed` state not reset on `logout()` — `logout()` hides main view via `show_pre_auth()` so banner is not visible; `on_session_ready` clears it on re-auth; only a gap if user somehow reaches main view without `on_session_ready`. `ui/src/protondrive/main.py`
 - **[5-1 CR W4]** `TestTokenExpiredResetsWatcherStatus` tests call `_on_token_expired` with full-message-shaped payload — pre-existing; old tests pass `{"payload": {...}}` while correct shape is `{"queued_changes": N}` directly; old tests don't check extracted values so pass regardless; harmless inconsistency. `ui/tests/test_main.py`
 - **[5-1 CR W5]** 401 during conflict download leaves orphaned `.conflict-YYYY-MM-DD` file — conflict copy written and `conflict_detected` emitted before download; if download throws `AuthExpiredError`, copy is orphaned on disk; next reconcile after re-auth may create a second conflict copy for the same file. `engine/src/sync-engine.ts:~335`
+
+## Deferred from: code review of 5-3-change-queue-replay-after-re-auth (2026-04-19)
+
+- **[5-3 CR W1]** `failed` return value from `drainQueue` never asserted in any 5-3 test — stat errors (EACCES, EPERM, EIO) route to `failed`; counter is silently unchecked. `engine/src/sync-engine.test.ts`
+- **[5-3 CR W2]** `change_type='deleted'` queued during expiry window not covered — `trashNode` / `dequeue` paths in `processQueueEntry` are not exercised by the post-reauth drain tests. `engine/src/sync-engine.test.ts`
+- **[5-3 CR W3]** New file (no `sync_state`) queued during expiry not tested — `state === undefined && remote === undefined` → upload path not covered by Story 5-3 tests. `engine/src/sync-engine.test.ts`
+- **[5-3 CR W4]** ENOENT during drain mid-replay not tested — local file deleted between enqueue and drain routes to conflict in `processQueueEntry`; outcome unverified. `engine/src/sync-engine.test.ts`
+- **[5-3 CR W5]** `tmpDir` collision risk via `Date.now()` in test setup — two tests starting in the same millisecond share the same base path; `Math.random()` suffix reduces but does not eliminate risk. Pre-existing pattern across all test suites. `engine/src/sync-engine.test.ts`
+- **[5-3 CR W6]** `afterEach` cleanup ordering: if `db.close()` throws, `rmSync`/`mock.restore()` are skipped — pre-existing pattern across all test suites. `engine/src/sync-engine.test.ts`
+- **[5-3 CR W7]** AC4 UI toast coverage (`on_queue_replay_complete` → `AdwToast`) not verifiable from the Story 5-3 diff alone — pre-existing tests cited in Dev Note §7 (`test_window_routing.py:310–370`, `test_main.py:97–132`) cover this path; no action needed unless those tests are removed.
 
 ---
 

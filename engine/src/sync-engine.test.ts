@@ -576,6 +576,238 @@ describe("SyncEngine — 401 auth expiry detection", () => {
   });
 });
 
+describe("SyncEngine — post-reauth queue drain (Story 5-3)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair(); // uses REMOTE_ID ("remote-folder-uid") as remote_id
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("null-client guard: drainQueue before setDriveClient emits queue_replay_complete{synced:0}", async () => {
+    // During the expiry window, driveClient is null. Any FileWatcher-triggered drainQueue call
+    // must short-circuit and still emit queue_replay_complete so the UI is never stuck waiting.
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "notes.md",
+      change_type: "modified",
+      queued_at: new Date().toISOString(),
+    });
+    // Engine created without setDriveClient → driveClient is null.
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+
+    const result = await engine.drainQueue();
+
+    expect(result.synced).toBe(0);
+    expect(result.skipped_conflicts).toBe(0);
+    // Queue entry must remain — nothing was processed.
+    expect(db.queueSize(PAIR_ID)).toBe(1);
+    // queue_replay_complete emitted exactly once with zero counts.
+    const replayEvents = emittedEvents.filter((e) => e.type === "queue_replay_complete");
+    expect(replayEvents.length).toBe(1);
+    expect((replayEvents[0]!.payload as { synced: number }).synced).toBe(0);
+  });
+
+  it("AC1: accumulated queue entries are drained after setDriveClient + drainQueue", async () => {
+    // Simulate a file that was synced before expiry.
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "notes.md",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    // Simulate a local edit during expiry window.
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "notes.md",
+      change_type: "modified",
+      queued_at: "2026-04-10T11:00:00.000Z",
+    });
+    // Write the local file so stat() succeeds in processQueueEntry.
+    writeLocalFile("notes.md", "updated content");
+
+    // Remote: file unchanged (same remote_mtime as sync_state) — AC2 scenario.
+    // File exists remotely (has a node id) → uploadOne routes to uploadFileRevision, not uploadFile.
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("notes.md", "2026-04-10T10:00:00.000Z", 15, "node-1"),
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    // AC4: queue entry removed
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+    // AC4: queue_replay_complete emitted with synced: 1
+    const complete = emittedEvents.find((e) => e.type === "queue_replay_complete");
+    expect(complete).toBeTruthy();
+    expect((complete!.payload as { synced: number }).synced).toBe(1);
+    // AC2: uploadFileRevision called (file already existed remotely — no false conflict)
+    expect(mockClient.uploadFileRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it("AC2: remote-unchanged entry → upload, no conflict", async () => {
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "doc.md",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "doc.md",
+      change_type: "modified",
+      queued_at: "2026-04-10T11:00:00.000Z",
+    });
+    writeLocalFile("doc.md", "local edit during expiry");
+
+    // doc.md exists remotely (has a node id) → uploadOne routes to uploadFileRevision.
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("doc.md", "2026-04-10T10:00:00.000Z", 10, "node-doc"), // unchanged
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.drainQueue();
+
+    expect(result.synced).toBe(1);
+    expect(result.skipped_conflicts).toBe(0);
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+    // Upload happened via the revision path (no false conflict created).
+    expect(mockClient.uploadFileRevision).toHaveBeenCalledTimes(1);
+  });
+
+  it("AC3: both-sides-changed entry → conflict, entry stays in queue", async () => {
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "shared.md",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "shared.md",
+      change_type: "modified",
+      queued_at: "2026-04-10T11:00:00.000Z",
+    });
+    writeLocalFile("shared.md", "my local edit");
+
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("shared.md", "2026-04-10T10:30:00.000Z", 10, "node-shared"), // changed during expiry
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.drainQueue();
+
+    expect(result.synced).toBe(0);
+    expect(result.skipped_conflicts).toBe(1);
+    // Queue entry stays — conflict resolution is Epic 4's job.
+    expect(db.queueSize(PAIR_ID)).toBe(1);
+    // Neither upload path must fire on a conflict.
+    expect(mockClient.uploadFile).not.toHaveBeenCalled();
+    expect(mockClient.uploadFileRevision).not.toHaveBeenCalled();
+  });
+
+  it("AC4: queue_replay_complete payload has correct synced count", async () => {
+    // Two entries: one clean upload, one conflict.
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "a.md",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "b.md",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    db.enqueue({ pair_id: PAIR_ID, relative_path: "a.md", change_type: "modified", queued_at: new Date().toISOString() });
+    db.enqueue({ pair_id: PAIR_ID, relative_path: "b.md", change_type: "modified", queued_at: new Date().toISOString() });
+    writeLocalFile("a.md", "edit a");
+    writeLocalFile("b.md", "edit b");
+
+    // Both files exist remotely → uploadOne routes to uploadFileRevision.
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("a.md", "2026-04-10T10:00:00.000Z", 6, "n-a"),  // unchanged
+        makeRemoteFile("b.md", "2026-04-10T10:45:00.000Z", 6, "n-b"),  // changed
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const complete = emittedEvents.find((e) => e.type === "queue_replay_complete");
+    expect(complete).toBeTruthy();
+    expect(emittedEvents.filter((e) => e.type === "queue_replay_complete").length).toBe(1);
+    const p = complete!.payload as { synced: number; skipped_conflicts: number };
+    expect(p.synced).toBe(1);
+    expect(p.skipped_conflicts).toBe(1);
+  });
+
+  it("AC1(integration): startSyncAll → reconcileAndEnqueue + drainQueue processes accumulated queue entries", async () => {
+    // Simulate a file that was synced before token expired.
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "notes.md",
+      local_mtime: "2026-04-10T09:00:00.000Z",  // old — real file mtime differs; reconcile sees local change
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    // Simulate a local edit accumulated in the queue during the expiry window.
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "notes.md",
+      change_type: "modified",
+      queued_at: "2026-04-10T11:00:00.000Z",
+    });
+    writeLocalFile("notes.md", "updated content");
+
+    // Remote: file unchanged (same remote_mtime as sync_state).
+    // reconcileAndEnqueue sees notes.md as a local change but skips re-enqueueing (dedup).
+    // drainQueue then processes the pre-seeded entry and uploads it.
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("notes.md", "2026-04-10T10:00:00.000Z", 15, "node-1"),
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    // Queue fully drained by the startSyncAll → drainQueue path.
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+    // File existed remotely → uploadOne routes to uploadFileRevision.
+    expect(mockClient.uploadFileRevision).toHaveBeenCalledTimes(1);
+    // queue_replay_complete emitted with synced: 1 (AC4 wiring verified end-to-end).
+    const complete = emittedEvents.find((e) => e.type === "queue_replay_complete");
+    expect(complete).toBeTruthy();
+    expect((complete!.payload as { synced: number }).synced).toBe(1);
+  });
+});
+
 describe("SyncEngine — sync_progress and sync_complete events (AC7)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");

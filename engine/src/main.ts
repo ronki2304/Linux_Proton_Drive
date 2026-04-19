@@ -233,6 +233,8 @@ function _activateSession(
 ): void {
   driveClient = client;
   syncEngine?.setDriveClient(client);
+  // startSyncAll() = reconcile (fresh remote walk) + drainQueue (processes any
+  // change_queue entries accumulated during the token-expiry window, Story 5-3).
   void syncEngine?.startSyncAll();
   fileWatcher?.stop();
   fileWatcher = new FileWatcher(
