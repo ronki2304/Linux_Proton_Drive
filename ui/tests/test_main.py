@@ -438,7 +438,7 @@ class TestCrashRecovery:
 
 
 class TestOnEngineError:
-    """_on_engine_error() dispatches non-fatal pair errors to window (Story 5-5)."""
+    """_on_engine_error() dispatches non-fatal pair errors to window (Story 5-5; 5-9 AC4)."""
 
     def test_non_fatal_with_pair_id_dispatches_to_window(self) -> None:
         app = _make_app()
@@ -450,10 +450,17 @@ class TestOnEngineError:
         app._on_engine_error("some message", fatal=False, pair_id=None)
         app._window.on_pair_error.assert_not_called()
 
-    def test_fatal_does_not_dispatch(self) -> None:
+    def test_fatal_calls_show_engine_crashed_banner(self) -> None:
         app = _make_app()
         app._on_engine_error("fatal error", fatal=True, pair_id="p1")
+        app._window.show_engine_crashed_banner.assert_called_once()
         app._window.on_pair_error.assert_not_called()
+
+    def test_fatal_with_window_none_does_not_crash(self) -> None:
+        app = _make_app()
+        app._window = None
+        # Should not raise even though window is None
+        app._on_engine_error("fatal error", fatal=True, pair_id=None)
 
     def test_non_fatal_with_window_none_does_not_crash(self) -> None:
         app = _make_app()

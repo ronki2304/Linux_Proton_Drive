@@ -30,6 +30,24 @@ function isDiskFull(err: unknown): boolean {
   return err != null && typeof err === "object" && (err as NodeJS.ErrnoException).code === "ENOSPC";
 }
 
+function isPermissionDenied(err: unknown): boolean {
+  if (err == null || typeof err !== "object") return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "EACCES" || code === "EPERM") return true;
+  // SDK may re-throw without preserving .code — check message string as fallback
+  const msg = (err as Error).message ?? "";
+  return msg.includes("EACCES") || msg.includes("EPERM") || msg.includes("permission denied");
+}
+
+function isFileLocked(err: unknown): boolean {
+  if (err == null || typeof err !== "object") return false;
+  const code = (err as NodeJS.ErrnoException).code;
+  if (code === "EBUSY" || code === "ETXTBSY") return true;
+  // SDK may re-throw without preserving .code — check message string as fallback
+  const msg = (err as Error).message ?? "";
+  return msg.includes("EBUSY") || msg.includes("ETXTBSY");
+}
+
 // ── Internal types ───────────────────────────────────────────────────────────
 
 interface LocalFile {
@@ -311,9 +329,21 @@ export class SyncEngine {
           this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
           diskFull = true; break;
         }
+        if (isPermissionDenied(err)) {
+          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
+          continue;
+        }
+        if (isFileLocked(err)) {
+          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
+          continue;
+        }
+        const errCode = (err as NodeJS.ErrnoException)?.code;
+        const message = errCode
+          ? `Sync error ${errCode} — try again or check ProtonDrive status`
+          : "Sync error — try again or check ProtonDrive status";
         this.emitEvent({
           type: "error",
-          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
         });
         continue;
       }
@@ -352,9 +382,21 @@ export class SyncEngine {
           this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
           diskFull = true; break;
         }
+        if (isPermissionDenied(err)) {
+          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
+          continue;
+        }
+        if (isFileLocked(err)) {
+          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
+          continue;
+        }
+        const errCode = (err as NodeJS.ErrnoException)?.code;
+        const message = errCode
+          ? `Sync error ${errCode} — try again or check ProtonDrive status`
+          : "Sync error — try again or check ProtonDrive status";
         this.emitEvent({
           type: "error",
-          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
         });
       }
     }
@@ -375,9 +417,21 @@ export class SyncEngine {
           this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
           diskFull = true; break;
         }
+        if (isPermissionDenied(err)) {
+          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
+          continue;
+        }
+        if (isFileLocked(err)) {
+          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
+          continue;
+        }
+        const errCode = (err as NodeJS.ErrnoException)?.code;
+        const message = errCode
+          ? `Sync error ${errCode} — try again or check ProtonDrive status`
+          : "Sync error — try again or check ProtonDrive status";
         this.emitEvent({
           type: "error",
-          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
         });
         continue;
       }
@@ -416,9 +470,21 @@ export class SyncEngine {
           this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
           diskFull = true; break;
         }
+        if (isPermissionDenied(err)) {
+          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
+          continue;
+        }
+        if (isFileLocked(err)) {
+          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
+          continue;
+        }
+        const errCode = (err as NodeJS.ErrnoException)?.code;
+        const message = errCode
+          ? `Sync error ${errCode} — try again or check ProtonDrive status`
+          : "Sync error — try again or check ProtonDrive status";
         this.emitEvent({
           type: "error",
-          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
         });
       }
     }
@@ -431,9 +497,13 @@ export class SyncEngine {
       } catch (err) {
         const code = (err as NodeJS.ErrnoException)?.code;
         if (code !== "ENOENT") {
-          const msg = err instanceof Error ? err.message : "unknown";
-          debugLog(`sync-engine: delete_local failed for ${item.relativePath}: ${msg}`);
-          this.emitEvent({ type: "error", payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id } });
+          const errMsg = err instanceof Error ? err.message : "unknown";
+          const errCode = (err as NodeJS.ErrnoException)?.code;
+          const message = errCode
+            ? `Sync error ${errCode} — try again or check ProtonDrive status`
+            : "Sync error — try again or check ProtonDrive status";
+          debugLog(`sync-engine: delete_local failed for ${item.relativePath}: ${errMsg}`);
+          this.emitEvent({ type: "error", payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id } });
           continue;  // keep sync_state so next cycle retries
         }
       }
@@ -502,9 +572,21 @@ export class SyncEngine {
           this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
           diskFull = true; break;
         }
+        if (isPermissionDenied(err)) {
+          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
+          continue;
+        }
+        if (isFileLocked(err)) {
+          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
+          continue;
+        }
+        const errCode = (err as NodeJS.ErrnoException)?.code;
+        const message = errCode
+          ? `Sync error ${errCode} — try again or check ProtonDrive status`
+          : "Sync error — try again or check ProtonDrive status";
         this.emitEvent({
           type: "error",
-          payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
+          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
         });
       }
     }
@@ -604,13 +686,17 @@ export class SyncEngine {
           // them as failed and emit one error event per entry so the UI can
           // surface them individually (including the affected relative_path).
           const msg = err instanceof Error ? err.message : "unknown";
+          const errCode = (err as NodeJS.ErrnoException)?.code;
+          const message = errCode
+            ? `Sync error ${errCode} — try again or check ProtonDrive status`
+            : "Sync error — try again or check ProtonDrive status";
           for (const entry of pairQueue) {
             failed++;
             this.emitEvent({
               type: "error",
               payload: {
-                code: "queue_replay_failed",
-                message: msg,
+                code: "SDK_ERROR",
+                message,
                 pair_id: pair.pair_id,
                 relative_path: entry.relative_path,
               },
@@ -747,11 +833,12 @@ export class SyncEngine {
             debugLog(
               `sync-engine: replay upload ${entry.relative_path} — remote parent not found`,
             );
+            const message = "Sync error — try again or check ProtonDrive status";
             this.emitEvent({
               type: "error",
               payload: {
-                code: "queue_replay_failed",
-                message: "remote parent folder not found",
+                code: "SDK_ERROR",
+                message,
                 pair_id: pair.pair_id,
                 relative_path: entry.relative_path,
               },
@@ -779,11 +866,14 @@ export class SyncEngine {
             debugLog(
               `sync-engine: replay upload ${entry.relative_path} — stat failed (${code ?? "no-code"}): ${msg}`,
             );
+            const message = code
+              ? `Sync error ${code} — try again or check ProtonDrive status`
+              : "Sync error — try again or check ProtonDrive status";
             this.emitEvent({
               type: "error",
               payload: {
-                code: "queue_replay_failed",
-                message: `stat failed: ${msg}`,
+                code: "SDK_ERROR",
+                message,
                 pair_id: pair.pair_id,
                 relative_path: entry.relative_path,
               },
@@ -874,15 +964,27 @@ export class SyncEngine {
         this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
         return "disk_full"; // signals drainQueue to abort the entire drain pass
       }
+      if (isPermissionDenied(err)) {
+        this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, entry.relative_path)}`, pair_id: pair.pair_id } });
+        return "failed";
+      }
+      if (isFileLocked(err)) {
+        this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, entry.relative_path))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
+        return "failed";
+      }
       const msg = err instanceof Error ? err.message : "unknown";
       debugLog(
-        `sync-engine: queue_replay_failed pair=${pair.pair_id} entry=${entry.id} path=${entry.relative_path}: ${msg}`,
+        `sync-engine: processQueueEntry failed pair=${pair.pair_id} entry=${entry.id} path=${entry.relative_path}: ${msg}`,
       );
+      const errCode = (err as NodeJS.ErrnoException)?.code;
+      const message = errCode
+        ? `Sync error ${errCode} — try again or check ProtonDrive status`
+        : "Sync error — try again or check ProtonDrive status";
       this.emitEvent({
         type: "error",
         payload: {
-          code: "queue_replay_failed",
-          message: msg,
+          code: "SDK_ERROR",
+          message,
           pair_id: pair.pair_id,
           relative_path: entry.relative_path,
         },

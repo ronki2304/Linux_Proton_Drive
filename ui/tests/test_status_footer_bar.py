@@ -345,13 +345,27 @@ class TestStatusFooterBarSetError:
         _, values = bar._accessible_label_args
         assert values == ["Sync error in Music"]
 
-    def test_announce_called_with_high_priority(self):
+    def test_announce_called_on_first_transition_with_high_priority(self):
         from gi.repository import Gtk
         bar = _make_bar()
         bar.set_error("Documents")
         bar.announce.assert_called_once_with(
             "Sync error in Documents", Gtk.AccessibleAnnouncementPriority.HIGH
         )
+
+    def test_announce_not_called_on_subsequent_set_error_while_already_in_error(self):
+        """Screen-reader flood prevention: second set_error while already in error must NOT re-announce (AC5)."""
+        bar = _make_bar()
+        bar.set_error("Documents")
+        bar.announce.reset_mock()
+        bar.set_error("Documents")
+        bar.announce.assert_not_called()
+
+    def test_set_error_with_n_pairs_label(self):
+        """Footer shows 'Sync error in 2 pairs' when two pairs have errors (AC3)."""
+        bar = _make_bar()
+        bar.set_error("2 pairs")
+        bar.footer_label.set_text.assert_called_with("Sync error in 2 pairs")
 
     def test_no_css_class_added_for_error_state(self):
         bar = _make_bar()

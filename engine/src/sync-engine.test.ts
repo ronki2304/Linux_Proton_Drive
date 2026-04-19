@@ -335,7 +335,7 @@ describe("SyncEngine — delta detection (AC1)", () => {
     expect(state!.remote_mtime).toBe(remoteMtime);
   });
 
-  it("rename fails → sync_file_error emitted, downloadFile NOT called", async () => {
+  it("rename fails → PERMISSION_DENIED emitted (EACCES), downloadFile NOT called", async () => {
     writeLocalFile("conflict.txt");
 
     const remoteMtime = "2026-04-10T10:00:00.000Z";
@@ -364,13 +364,12 @@ describe("SyncEngine — delta detection (AC1)", () => {
     const downloadFn = mockClient.downloadFile as ReturnType<typeof mock>;
     // download must NOT be called — rename failed
     expect(downloadFn.mock.calls.length).toBe(0);
-    // sync_file_error must be emitted
+    // PERMISSION_DENIED must be emitted (chmod 0o555 → EACCES)
     const errorEvent = emittedEvents.find(
-      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "sync_file_error"
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED"
     );
     expect(errorEvent).toBeTruthy();
     expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
-    expect(typeof (errorEvent!.payload as Record<string, unknown>).message).toBe("string");
     // conflict_detected must NOT be emitted
     const conflictEvent = emittedEvents.find((e) => e.type === "conflict_detected");
     expect(conflictEvent).toBeUndefined();
@@ -1378,12 +1377,12 @@ describe("SyncEngine — drainQueue", () => {
     expect(remaining.length).toBe(1);
     expect(remaining[0]!.relative_path).toBe("b.txt");
 
-    // One error push event with queue_replay_failed
+    // One error push event with SDK_ERROR
     const errEvents = emittedEvents.filter((e) => e.type === "error");
     expect(errEvents.length).toBe(1);
     expect(
       (errEvents[0]!.payload as Record<string, unknown>).code,
-    ).toBe("queue_replay_failed");
+    ).toBe("SDK_ERROR");
   });
 
   it("4.12 empty queue → queue_replay_complete still emitted with zero counts", async () => {
@@ -1880,7 +1879,7 @@ describe("SyncEngine — deletion propagation (Story 4-0b)", () => {
     expect(emittedEvents.filter((e) => e.type === "error").length).toBe(0);
   });
 
-  it("delete_local EPERM failure → sync_file_error event emitted, sync_state preserved", async () => {
+  it("delete_local EPERM failure → SDK_ERROR event emitted, sync_state preserved", async () => {
     writeLocalFile("perm-denied.txt");
     db.upsertSyncState({
       pair_id: PAIR_ID,
@@ -1904,7 +1903,7 @@ describe("SyncEngine — deletion propagation (Story 4-0b)", () => {
 
     const errors = emittedEvents.filter((e) => e.type === "error");
     expect(errors.length).toBeGreaterThan(0);
-    expect((errors[0] as any).payload.code).toBe("sync_file_error");
+    expect((errors[0] as any).payload.code).toBe("SDK_ERROR");
     // sync_state preserved for retry
     expect(db.getSyncState(PAIR_ID, "perm-denied.txt")).toBeDefined();
   });
@@ -2014,7 +2013,7 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
     expect(state!.content_hash).not.toBeNull(); // hash populated by Story 4-3
   });
 
-  it("conflict copy creation fails → sync_file_error emitted, no download", async () => {
+  it("conflict copy creation fails → PERMISSION_DENIED emitted (EACCES), no download", async () => {
     writeLocalFile("conflict.txt", "local content");
 
     const storedLocalMtime  = "2020-01-01T00:00:00.000Z";
@@ -2052,11 +2051,10 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
       chmodSync(tmpDir, 0o755);
     }
 
-    // sync_file_error emitted
+    // PERMISSION_DENIED emitted (chmod 0o555 → EACCES on copyFile)
     const errorEvent = emittedEvents.find((e) => e.type === "error");
     expect(errorEvent).toBeTruthy();
-    expect((errorEvent!.payload as Record<string, unknown>).code).toBe("sync_file_error");
-    expect(typeof (errorEvent!.payload as Record<string, unknown>).message).toBe("string");
+    expect((errorEvent!.payload as Record<string, unknown>).code).toBe("PERMISSION_DENIED");
     expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
 
     // conflict_detected NOT emitted
@@ -2202,7 +2200,7 @@ describe("SyncEngine — DISK_FULL detection (Story 5-5)", () => {
     mock.restore();
   });
 
-  it("ENOSPC via processQueueEntry → DISK_FULL emitted, queue_replay_failed NOT emitted", async () => {
+  it("ENOSPC via processQueueEntry → DISK_FULL emitted, SDK_ERROR NOT emitted", async () => {
     // Enqueue a file creation so drainQueue → processQueueEntry runs.
     writeLocalFile("upload.txt");
     db.enqueue({
@@ -2234,13 +2232,13 @@ describe("SyncEngine — DISK_FULL detection (Story 5-5)", () => {
     expect(msg).toContain("Free up space on");
     expect(msg).toContain(tmpDir);
 
-    const replayFailed = emittedEvents.find(
-      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "queue_replay_failed",
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
     );
-    expect(replayFailed).toBeUndefined();
+    expect(sdkError).toBeUndefined();
   });
 
-  it("non-ENOSPC error in processQueueEntry → queue_replay_failed emitted, DISK_FULL NOT emitted", async () => {
+  it("non-ENOSPC error in processQueueEntry → SDK_ERROR emitted, DISK_FULL NOT emitted", async () => {
     writeLocalFile("upload.txt");
     db.enqueue({
       pair_id: PAIR_ID,
@@ -2265,10 +2263,10 @@ describe("SyncEngine — DISK_FULL detection (Story 5-5)", () => {
     );
     expect(diskFullEvent).toBeUndefined();
 
-    const replayFailed = emittedEvents.find(
-      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "queue_replay_failed",
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
     );
-    expect(replayFailed).toBeTruthy();
+    expect(sdkError).toBeTruthy();
   });
 });
 
@@ -2336,5 +2334,625 @@ describe("SyncEngine — dirty-session flag lifecycle (Story 5-4)", () => {
 
     await engine.drainQueue();
     expect(db.isDirtySession()).toBe(false); // finally block always clears dirtied flag
+  });
+});
+
+describe("SyncEngine — PERMISSION_DENIED detection (Story 5-6)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `perm-denied-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  // Helper to enqueue a file and trigger processQueueEntry via drainQueue.
+  function enqueueFile(name: string): void {
+    writeLocalFile(name);
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: name,
+      change_type: "created",
+      queued_at: new Date().toISOString(),
+    });
+  }
+
+  it("EACCES via processQueueEntry → PERMISSION_DENIED emitted, SDK_ERROR NOT emitted", async () => {
+    enqueueFile("upload.txt");
+    const eacces = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw eacces; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permEvent).toBeTruthy();
+    expect((permEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+    const msg = (permEvent!.payload as Record<string, unknown>).message as string;
+    expect(msg).toContain("Check folder permissions for");
+    expect(msg).toContain("upload.txt");
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeUndefined();
+  });
+
+  it("EPERM via processQueueEntry → PERMISSION_DENIED emitted, returns failed (not disk_full)", async () => {
+    enqueueFile("upload.txt");
+    const eperm = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw eperm; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permEvent).toBeTruthy();
+    expect((permEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+
+    const diskFull = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFull).toBeUndefined();
+  });
+
+  it("ENOSPC via processQueueEntry still emits DISK_FULL, NOT PERMISSION_DENIED (5-5 regression)", async () => {
+    enqueueFile("upload.txt");
+    const enospc = Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw enospc; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const diskFull = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFull).toBeTruthy();
+
+    const permEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permEvent).toBeUndefined();
+  });
+
+  it("non-permission error (EIO) → SDK_ERROR emitted, PERMISSION_DENIED NOT emitted", async () => {
+    enqueueFile("upload.txt");
+    const eio = Object.assign(new Error("I/O error"), { code: "EIO" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw eio; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permEvent).toBeUndefined();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeTruthy();
+  });
+
+  it("EACCES message contains joined local_path and relative_path", async () => {
+    enqueueFile("important.txt");
+    const eacces = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw eacces; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permEvent).toBeTruthy();
+    const msg = (permEvent!.payload as Record<string, unknown>).message as string;
+    expect(msg).toContain("Check folder permissions for");
+    expect(msg).toContain(tmpDir);
+    expect(msg).toContain("important.txt");
+  });
+
+  it("null error in processQueueEntry → SDK_ERROR emitted (null guard in isPermissionDenied)", async () => {
+    enqueueFile("upload.txt");
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw null; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permEvent).toBeUndefined();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeTruthy();
+  });
+
+  it("SDK-wrapped EACCES (no .code, message contains 'EACCES') → PERMISSION_DENIED emitted", async () => {
+    enqueueFile("upload.txt");
+    // Simulates SDK re-throwing without preserving .code on the error object
+    const sdkWrapped = new Error("EACCES: permission denied, open '/home/jeremy/tmp/nop.txt'");
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw sdkWrapped; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permEvent).toBeTruthy();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeUndefined();
+  });
+
+  it("SDK-wrapped 'permission denied' message (no .code) → PERMISSION_DENIED emitted", async () => {
+    enqueueFile("upload.txt");
+    const sdkWrapped = new Error("Upload failed: permission denied");
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw sdkWrapped; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permEvent).toBeTruthy();
+  });
+});
+
+describe("SyncEngine — FILE_LOCKED detection (Story 5-8)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `file-locked-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  function enqueueFile(name: string): void {
+    writeLocalFile(name);
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: name,
+      change_type: "created",
+      queued_at: new Date().toISOString(),
+    });
+  }
+
+  it("null error in processQueueEntry → FILE_LOCKED NOT emitted (null guard in isFileLocked)", async () => {
+    enqueueFile("upload.txt");
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw null; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeUndefined();
+  });
+
+  it("SDK-wrapped EBUSY (no .code, message contains 'EBUSY') → FILE_LOCKED emitted", async () => {
+    enqueueFile("upload.txt");
+    // Simulates SDK re-throwing without preserving .code on the error object
+    const sdkWrapped = new Error("EBUSY: resource busy or locked, open '/home/jeremy/tmp/Document1.docx'");
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw sdkWrapped; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeTruthy();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeUndefined();
+  });
+
+  it("EBUSY via processQueueEntry → FILE_LOCKED emitted, SDK_ERROR NOT emitted", async () => {
+    enqueueFile("upload.txt");
+    const ebusy = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw ebusy; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeTruthy();
+    expect((fileLocked!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeUndefined();
+  });
+
+  it("ETXTBSY via processQueueEntry → FILE_LOCKED emitted, returns failed (not disk_full)", async () => {
+    enqueueFile("upload.txt");
+    const etxtbsy = Object.assign(new Error("text file busy"), { code: "ETXTBSY" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw etxtbsy; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeTruthy();
+
+    const diskFull = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFull).toBeUndefined();
+  });
+
+  it("EBUSY message uses basename (not full path) and contains retry text", async () => {
+    enqueueFile("report.xlsx");
+    const ebusy = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw ebusy; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeTruthy();
+    const msg = (fileLocked!.payload as Record<string, unknown>).message as string;
+    expect(msg).toContain("report.xlsx");
+    expect(msg).not.toContain(tmpDir);
+    expect(msg).toContain("is in use — sync will retry when it's released");
+  });
+
+  it("FILE_LOCKED pair_id matches the affected sync pair", async () => {
+    enqueueFile("upload.txt");
+    const ebusy = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw ebusy; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeTruthy();
+    expect((fileLocked!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+  });
+
+  it("non-EBUSY/ETXTBSY error (EIO) → SDK_ERROR emitted, FILE_LOCKED NOT emitted", async () => {
+    enqueueFile("upload.txt");
+    const eio = Object.assign(new Error("I/O error"), { code: "EIO" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw eio; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeUndefined();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeTruthy();
+  });
+
+  it("EACCES via processQueueEntry → PERMISSION_DENIED emitted, FILE_LOCKED NOT emitted (5-6 regression)", async () => {
+    enqueueFile("upload.txt");
+    const eacces = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw eacces; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permDenied = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permDenied).toBeTruthy();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeUndefined();
+  });
+
+  it("ENOSPC via processQueueEntry → DISK_FULL emitted, FILE_LOCKED NOT emitted (5-5 regression)", async () => {
+    enqueueFile("upload.txt");
+    const enospc = Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw enospc; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const diskFull = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFull).toBeTruthy();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeUndefined();
+  });
+
+  it("ETXTBSY message uses basename and contains retry text", async () => {
+    enqueueFile("script.sh");
+    const etxtbsy = Object.assign(new Error("text file busy"), { code: "ETXTBSY" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw etxtbsy; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeTruthy();
+    const msg = (fileLocked!.payload as Record<string, unknown>).message as string;
+    expect(msg).toContain("script.sh");
+    expect(msg).toContain("is in use — sync will retry when it's released");
+  });
+});
+
+describe("SyncEngine — SDK_ERROR (Story 5-9)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `sdk-error-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  function enqueueFile(name: string): void {
+    writeLocalFile(name);
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: name,
+      change_type: "created",
+      queued_at: new Date().toISOString(),
+    });
+  }
+
+  it("unknown error (no .code) in processQueueEntry → SDK_ERROR emitted, generic message", async () => {
+    enqueueFile("upload.txt");
+    const unknownErr = new Error("something unexpected");
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw unknownErr; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeTruthy();
+    expect((sdkError!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+    const msg = (sdkError!.payload as Record<string, unknown>).message as string;
+    expect(msg).toBe("Sync error — try again or check ProtonDrive status");
+  });
+
+  it("error with .code = ETIMEDOUT → SDK_ERROR emitted, message includes errCode", async () => {
+    enqueueFile("upload.txt");
+    const etimedout = Object.assign(new Error("connection timed out"), { code: "ETIMEDOUT" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw etimedout; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeTruthy();
+    const msg = (sdkError!.payload as Record<string, unknown>).message as string;
+    expect(msg).toBe("Sync error ETIMEDOUT — try again or check ProtonDrive status");
+  });
+
+  it("SDK_ERROR path in processQueueEntry returns 'failed' (NOT 'disk_full')", async () => {
+    enqueueFile("upload.txt");
+    const ioErr = Object.assign(new Error("I/O error"), { code: "EIO" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw ioErr; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.drainQueue();
+
+    expect(result.failed).toBe(1);
+    // drainQueue returns disk_full path separately — no DISK_FULL abort occurred
+    const diskFullEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFullEvent).toBeUndefined();
+  });
+
+  it("regression: ENOSPC → DISK_FULL emitted, SDK_ERROR NOT emitted", async () => {
+    enqueueFile("upload.txt");
+    const enospc = Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw enospc; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const diskFull = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFull).toBeTruthy();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeUndefined();
+  });
+
+  it("regression: EACCES → PERMISSION_DENIED emitted, SDK_ERROR NOT emitted", async () => {
+    enqueueFile("upload.txt");
+    const eacces = Object.assign(new Error("permission denied"), { code: "EACCES" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw eacces; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const permDenied = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(permDenied).toBeTruthy();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeUndefined();
+  });
+
+  it("regression: EBUSY → FILE_LOCKED emitted, SDK_ERROR NOT emitted", async () => {
+    enqueueFile("upload.txt");
+    const ebusy = Object.assign(new Error("resource busy"), { code: "EBUSY" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw ebusy; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const fileLocked = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "FILE_LOCKED",
+    );
+    expect(fileLocked).toBeTruthy();
+
+    const sdkError = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
+    );
+    expect(sdkError).toBeUndefined();
   });
 });

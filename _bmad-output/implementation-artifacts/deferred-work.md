@@ -1,5 +1,17 @@
 # Deferred Work
 
+## Infrastructure — Meson wrapper loop bug (documented Epic 5 retrospective 2026-04-19)
+
+**Root cause:** `~/.local/bin/meson` is a distrobox-generated wrapper that enters the LinuxProtonDrive container and calls `/usr/local/bin/meson`. That inner script is a **malformed heredoc artifact** — it starts with leading spaces (invalid shebang), then contains the lines `#!/bin/sh`, `exec /usr/bin/meson "$@"`, `EOF`, and `chmod +x /usr/local/bin/meson` as literal text. The kernel rejects the malformed shebang; the shell falls back to line-by-line execution; the `EOF` token triggers a heredoc-input wait — **an infinite hang** from the Claude Code sandbox.
+
+**Workaround (in use since Epic 2):** Call `/usr/bin/meson` directly via distrobox — documented in `project-context.md` "Meson invocation from Claude Code sandbox" section.
+
+**Status:** Workaround is sufficient for all current dev work. Root fix would be regenerating the wrapper via distrobox, but this requires Jeremy's terminal and is low priority. **Do not attempt to fix `/usr/local/bin/meson` from the Claude Code sandbox** — the container path is not writable from the Bash tool.
+
+**Impact:** Only affects Claude Code Bash tool invocations. User's own terminal is unaffected.
+
+---
+
 ## Open Items (triaged Epic 4 retrospective 2026-04-18)
 
 The following items are real risks that require future attention.
@@ -30,6 +42,14 @@ _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been remo
 - **[5-5 D4]** `on_watcher_status("ready")` clears footer despite error rows — watcher restart calls `update_all_synced()` without checking for error-state rows. Story 5-9. `ui/src/protondrive/window.py`
 - **[5-5 D5]** Multiple DISK_FULL events per cycle → screen-reader flood — N files hitting ENOSPC emit N identical DISK_FULL events; UI announces with HIGH priority N times. Story 5-9 deduplication. `engine/src/sync-engine.ts`
 - **[5-5 D6]** No multi-entry test for `queue_replay_failed` suppression — if a later queue entry fails non-ENOSPC after DISK_FULL entries, both codes get emitted. Low risk / out of scope. `engine/src/sync-engine.test.ts`
+
+---
+
+## Deferred from: code review of 5-6-actionable-error-permission-denied (2026-04-19)
+
+- **[5-6 D1]** Test coverage gap: Sites 2–5 in reconcilePair lack dedicated PERMISSION_DENIED tests — conflict_update download, collision rename, collision download, and main download loop catch sites not directly covered; Site 1 covered by updated pre-existing test, Site 6 by 6 new drainQueue tests; all 5 sites use identical emit pattern. `engine/src/sync-engine.test.ts`
+- **[5-6 D2]** stat() inner catch emits `queue_replay_failed` for EACCES/EPERM instead of `PERMISSION_DENIED` — inner try/catch at lines 794-818 fires before outer `isPermissionDenied` check at line 903; out of scope for the 6 specified catch sites in this story; code comment acknowledges EACCES/EPERM are user-actionable. `engine/src/sync-engine.ts:796-818`
+- **[5-6 D3]** Infinite retry on permanently permission-denied files — `continue` after PERMISSION_DENIED (like `sync_file_error`) means a permanently unreadable file retries on every drain cycle with no backoff, dead-letter, or retry cap; pre-existing architecture pattern also deferred from earlier stories. `engine/src/sync-engine.ts`
 
 ---
 
@@ -191,6 +211,19 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ---
 
+## Deferred from: code review of 5-9-actionable-error-sdk-api-error-and-error-state-components (2026-04-19)
+
+- **[5-9 CR W1]** `_error_pending_cycle` persists one extra cycle after offline→online boundary — when an error arrives then the device goes offline→online, the `_error_pending_cycle` flag is still set from before offline; first clean `on_sync_complete` consumes the flag but keeps error; second clean cycle finally clears it. Effect: error lingers one extra cycle. Same applies if `queue_replay_complete` fires without a subsequent `sync_complete` for that pair. Fix: clear `_error_pending_cycle` entries in `on_offline()` and/or `on_queue_replay_complete()`; requires design decision to avoid introducing regressions. `ui/src/protondrive/window.py`
+
+---
+
+## Deferred from: code review of 5-7-actionable-error-inotify-limit-exceeded (2026-04-19)
+
+- **[5-7 CR W1]** INOTIFY_LIMIT error emitted without `stopped` check — `emitEvent()` in the ENOSPC catch branch fires regardless of `this.stopped` state; if `stop()` is called concurrently during `setupPairWatches`, the error event is emitted after the watcher claims to be stopped. `engine/src/watcher.ts:66-76`
+- **[5-7 CR W2]** Pending debounce timers from pre-ENOSPC watchers not cleared on ENOSPC — when `break` exits the inner dir loop after ENOSPC, existing debounce timers for already-registered watchers remain active and may fire `onChangesDetected` after the error is emitted; only `stop()` clears them. `engine/src/watcher.ts:77`
+
+---
+
 ## Deferred from: code review of 5-4-dirty-session-flag-and-crash-recovery (2026-04-19)
 
 - **[5-4 CR W1]** `cleanTmpFilesInDir` no depth limit — no stack-overflow guard for deep directory trees; mirrors [2-5] open items for `walkLocalTree`/`walkRemoteTree`. `engine/src/main.ts:cleanTmpFilesInDir`
@@ -202,3 +235,10 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 ---
 
 _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 — see epic-4-retro-2026-04-18.md for full list._
+
+---
+
+## Deferred from: code review of 5-8-actionable-error-file-locked (2026-04-19)
+
+- **[5-8 CR W1]** Null guard test only asserts negative — Test at `sync-engine.test.ts:2539` verifies `FILE_LOCKED NOT emitted` on `throw null` but does not assert `SDK_ERROR IS emitted`. If null silently vanished from the error pipeline (regression), the test would not catch it. Low risk; null guard pattern is well-established. `engine/src/sync-engine.test.ts:2539`
+- **[5-8 CR W2]** `delete_local` catch: PERMISSION_DENIED and FILE_LOCKED not checked — `unlink()` failures at `sync-engine.ts:491` emit SDK_ERROR for all non-ENOENT errors including EPERM (directory became read-only). Story 5-8 spec explicitly excludes FILE_LOCKED for delete_local; Story 5-6 also omitted PERMISSION_DENIED here. Pre-existing gap. `engine/src/sync-engine.ts:491`

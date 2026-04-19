@@ -163,6 +163,7 @@ describe("FileWatcher — debounce (AC2, AC6)", () => {
 
 describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
   let tmpDir: string;
+  let tmpDir2: string | undefined;
 
   beforeEach(() => {
     tmpDir = join(tmpdir(), `watcher-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -174,6 +175,10 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
 
   afterEach(() => {
     rmSync(tmpDir, { recursive: true, force: true });
+    if (tmpDir2) {
+      rmSync(tmpDir2, { recursive: true, force: true });
+      tmpDir2 = undefined;
+    }
     mock.restore();
   });
 
@@ -213,6 +218,112 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
 
     // Only 2 watchers successfully registered
     expect(mockWatchers.length).toBe(2);
+  });
+
+  it("ENOSPC emits correct message text", async () => {
+    let callCount = 0;
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => {
+      callCount++;
+      if (callCount === 3) {
+        throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      }
+      return makeMockWatcher();
+    });
+    const emittedEvents: IpcPushEvent[] = [];
+    const pair = makeTestPair(tmpDir);
+    const fw = new FileWatcher(
+      [pair],
+      mock(async (_pairId: string) => {}),
+      (e) => emittedEvents.push(e),
+      mockWatch as unknown as WatchFn,
+      50,
+    );
+
+    await fw.initialize();
+
+    const errorEvent = emittedEvents.find((e) => e.type === "error");
+    expect(errorEvent).toBeTruthy();
+    expect(errorEvent!.payload["message"]).toBe(
+      "Too many files to watch — close other apps or increase system inotify limit",
+    );
+  });
+
+  it("already-registered watchers still fire change events after ENOSPC", async () => {
+    const mockWatchers: FSWatcher[] = [];
+    let callCount = 0;
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => {
+      callCount++;
+      if (callCount === 3) {
+        throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      }
+      const w = makeMockWatcher();
+      mockWatchers.push(w);
+      return w;
+    });
+    const onChanges = mock(async (_pairId: string) => {});
+    const pair = makeTestPair(tmpDir);
+    const fw = new FileWatcher(
+      [pair],
+      onChanges,
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      50,
+    );
+
+    await fw.initialize();
+
+    // 2 watchers registered before ENOSPC; fire a change on the 1st watcher's listener
+    expect(mockWatchers.length).toBe(2);
+    const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
+    listener("change", "file.txt");
+
+    // Await debounce (50ms) + buffer — proves watcher is still operational
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    expect(onChanges.mock.calls.length).toBe(1);
+
+    fw.stop();
+  });
+
+  it("ENOSPC on pair-1 dir → pair-2 dirs not watched", async () => {
+    tmpDir2 = join(tmpdir(), `watcher-test-${Date.now()}-${Math.random().toString(36).slice(2)}-p2`);
+    mkdirSync(tmpDir2, { recursive: true });
+
+    let callCount = 0;
+    const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => {
+      callCount++;
+      if (callCount === 1) {
+        throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      }
+      return makeMockWatcher();
+    });
+    const emittedEvents: IpcPushEvent[] = [];
+    const pair1 = makeTestPair(tmpDir);
+    const pair2: SyncPair = {
+      pair_id: "p2",
+      local_path: tmpDir2,
+      remote_path: "/r2",
+      remote_id: "r2",
+      created_at: "2026-01-01T00:00:00Z",
+      last_synced_at: null,
+    };
+    const fw = new FileWatcher(
+      [pair1, pair2],
+      mock(async (_pairId: string) => {}),
+      (e) => emittedEvents.push(e),
+      mockWatch as unknown as WatchFn,
+      50,
+    );
+
+    await fw.initialize();
+
+    // inotifyExhausted guard breaks outer loop before pair-2 is attempted
+    expect(mockWatch.mock.calls.length).toBe(1);
+
+    // INOTIFY_LIMIT error emitted for pair-1 only
+    const errorEvent = emittedEvents.find((e) => e.type === "error");
+    expect(errorEvent).toBeTruthy();
+    expect(errorEvent!.payload["code"]).toBe("INOTIFY_LIMIT");
+    expect(errorEvent!.payload["pair_id"]).toBe("p1");
   });
 });
 

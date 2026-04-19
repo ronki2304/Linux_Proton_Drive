@@ -24,6 +24,14 @@ template $ProtonDriveMainWindow: Adw.ApplicationWindow {
           styles ["error"]
         }
 
+        [top]
+        Adw.Banner engine_crashed_banner {
+          title: _("Sync engine stopped — restart to resume");
+          revealed: false;
+          button-label: _("Restart");
+          styles ["error"]
+        }
+
         content: Gtk.ScrolledWindow {
           child: Gtk.ListBox pairs_list {
             selection-mode: single;

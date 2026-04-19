@@ -25,6 +25,8 @@ def _make_window() -> MainWindow:
     win._conflict_pending_count = 0
     win._conflict_copies_by_pair = {}
     win._conflict_log_entries = []
+    win._error_pair_ids = set()
+    win._error_pending_cycle = set()
     win._row_activated_connected = False
     win._settings = MagicMock()
     return win
@@ -488,6 +490,21 @@ class TestOnConflictDetected:
         win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
         win.pair_detail_panel.set_conflict_state.assert_called_once_with("p1", 1, "Docs")
 
+    def test_error_state_active_suppresses_footer_conflict_update(self):
+        """Error > conflict priority: footer must not be overwritten by conflict event when a pair has an error."""
+        win = _make_window()
+        row = _make_row(state="error")
+        win._sync_pair_rows["p1"] = row
+        win._error_pair_ids.add("p1")
+        win.on_conflict_detected({"pair_id": "p2", "conflict_copy_path": "/tmp/a.conflict"})
+        win.status_footer_bar.set_conflicts.assert_not_called()
+
+    def test_no_error_state_allows_footer_conflict_update(self):
+        """Without active errors, conflict events update the footer normally."""
+        win = _make_window()
+        win.on_conflict_detected({"pair_id": "p1", "conflict_copy_path": "/tmp/a.conflict"})
+        win.status_footer_bar.set_conflicts.assert_called_once_with(1)
+
 
 class TestOnSyncProgressConflictPriority:
     """Story 4-4 AC4: Conflict > Syncing footer priority."""
@@ -800,4 +817,65 @@ class TestOnCrashRecoveryComplete:
             )
             mock_toast.set_timeout.assert_called_once_with(5)
             win.toast_overlay.add_toast.assert_called_once_with(mock_toast)
+
+
+class TestErrorStatePersistence:
+    """Error state tracking and priority logic (Story 5-9 AC3, AC5)."""
+
+    def test_on_pair_error_then_on_online_row_stays_error(self):
+        """on_online must NOT reset a row that is in error state (AC3)."""
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Sync error ETIMEDOUT — try again or check ProtonDrive status")
+        row.set_state.reset_mock()
+        # Simulate coming back online
+        win.on_online()
+        # Row should NOT be reset to "synced" — error state preserved
+        row.set_state.assert_not_called()
+
+    def test_on_pair_error_then_on_sync_complete_no_new_errors_clears_error(self):
+        """Clean sync cycle (no new error for that pair) clears error state (AC3)."""
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        row.state = "error"
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Sync error ETIMEDOUT — try again or check ProtonDrive status")
+        # Drain the pending flag (simulating on_sync_complete called AFTER the
+        # error was added but NOT re-fired in the same cycle).
+        # First call to on_sync_complete: pending flag is set → discards it, keeps error.
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-19T00:00:00.000Z"})
+        assert "p1" in win._error_pair_ids  # still in error after first cycle
+
+        # Second call: no new error → _error_pending_cycle is empty for p1 → cleared.
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-19T00:00:01.000Z"})
+        assert "p1" not in win._error_pair_ids
+
+    def test_on_pair_error_twice_same_cycle_then_sync_complete_keeps_error(self):
+        """Two errors in same cycle: on_sync_complete should keep error (pending flag reset but pair stays)."""
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        row.state = "error"
+        win._sync_pair_rows["p1"] = row
+        # Error fires twice in the same sync cycle
+        win.on_pair_error("p1", "Sync error ETIMEDOUT — try again")
+        win.on_pair_error("p1", "Sync error ETIMEDOUT — try again")
+        # on_sync_complete: pending flag is set → discards flag, keeps error
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-19T00:00:00.000Z"})
+        assert "p1" in win._error_pair_ids
+        assert "p1" not in win._error_pending_cycle
+
+    def test_two_pair_errors_footer_shows_n_pairs(self):
+        """Two pairs in error → footer set_error called with '2 pairs' label (AC3)."""
+        win = _make_window()
+        row1 = _make_row(pair_name="Docs")
+        row2 = _make_row(pair_name="Photos")
+        win._sync_pair_rows["p1"] = row1
+        win._sync_pair_rows["p2"] = row2
+        win.on_pair_error("p1", "Sync error EIO — try again")
+        win.on_pair_error("p2", "Sync error EIO — try again")
+        # Last call to set_error should use "2 pairs"
+        last_call_args = win.status_footer_bar.set_error.call_args
+        assert last_call_args is not None
+        assert "2 pairs" in last_call_args[0][0]
 

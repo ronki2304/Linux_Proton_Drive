@@ -505,9 +505,11 @@ class Application(Adw.Application):
         return False
 
     def _on_engine_error(self, message: str, fatal: bool, pair_id: str | None = None) -> None:
-        """Dispatch engine errors to appropriate UI surface (Story 5-5)."""
+        """Dispatch engine errors to appropriate UI surface (Story 5-5; 5-9 AC4)."""
         if fatal:
-            return  # Fatal error display deferred to Story 5-9
+            if self._window is not None:
+                self._window.show_engine_crashed_banner()
+            return
         if pair_id is not None and self._window is not None:
             self._window.on_pair_error(pair_id, message)
 

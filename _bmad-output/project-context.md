@@ -133,6 +133,22 @@ SDK returns 401 → engine emits `token_expired` with `{queued_changes}` count �
 - **Engine integration:** `bun test engine/src/__integration__/`
 - **CI runs both suites** — always run both UI and engine tests before declaring a story done, even if you only touched one side
 
+#### Meson invocation from Claude Code sandbox — CRITICAL
+
+The system `meson` command (`~/.local/bin/meson`) is a distrobox-generated wrapper that calls `/usr/local/bin/meson` inside the LinuxProtonDrive container. That inner script is a **malformed heredoc artifact** — it starts with leading spaces (invalid shebang) and contains `EOF` and `chmod +x` as literal shell lines. When the kernel rejects the shebang, the shell falls back to running it line-by-line and blocks waiting for heredoc input: **an infinite hang**.
+
+**Never call bare `meson` from the Claude Code Bash tool.** Always use the direct distrobox invocation:
+
+```sh
+# Compile only (incremental — use this most of the time)
+distrobox-enter -n LinuxProtonDrive -- bash -c "/usr/bin/meson compile -C builddir 2>&1"
+
+# Full wipe + rebuild (first-time or after meson.build changes)
+distrobox-enter -n LinuxProtonDrive -- bash -c "/usr/bin/meson setup --wipe builddir && /usr/bin/meson compile -C builddir 2>&1"
+```
+
+This bypasses the wrapper entirely and calls the real `/usr/bin/meson` binary inside the container. From the user's own terminal, `meson compile -C builddir` works normally — the user's shell resolves distrobox correctly.
+
 #### Python UI Tests (pytest via Meson compile)
 
 - **Two-step local workflow:** `meson compile -C builddir` (fast, compiles assets only) → `.venv/bin/pytest ui/tests/` (fast, runs tests directly). Raw `python -m pytest` without the compile step breaks tests touching `@Gtk.Template` or `Gio.Settings` — always compile first.

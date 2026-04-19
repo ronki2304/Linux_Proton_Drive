@@ -114,14 +114,17 @@ class StatusFooterBar(Gtk.Box):
         self.announce(text, Gtk.AccessibleAnnouncementPriority.LOW)
         self._rate_limit_source_id = GLib.timeout_add(1000, self._on_rate_limit_tick)
 
-    def set_error(self, pair_name: str) -> None:
-        """Show sync error state for a pair (Story 5-5)."""
-        text = f"Sync error in {pair_name}"
+    def set_error(self, label: str) -> None:
+        """Show sync error state for one or more pairs (Story 5-5; 5-9 AC5)."""
+        text = f"Sync error in {label}"
         self.footer_label.set_text(text)
+        already_error = self._dot_state == "error"
         self._set_dot_state("error")
         self.update_property([Gtk.AccessibleProperty.LABEL], [text])
-        # HIGH priority: error requires immediate user action (unlike offline/conflict which use LOW).
-        self.announce(text, Gtk.AccessibleAnnouncementPriority.HIGH)
+        if not already_error:
+            # Announce only on first transition to error state — prevents screen-reader
+            # flood when multiple error events arrive in the same sync cycle (Story 5-9 AC5).
+            self.announce(text, Gtk.AccessibleAnnouncementPriority.HIGH)
 
     def _on_rate_limit_tick(self) -> bool:
         """GLib.timeout_add callback — fires every 1s during rate-limit countdown."""

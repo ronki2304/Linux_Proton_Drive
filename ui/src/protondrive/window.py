@@ -32,6 +32,7 @@ class MainWindow(Adw.ApplicationWindow):
     status_footer_bar: StatusFooterBar = Gtk.Template.Child()
     pair_detail_panel: PairDetailPanel = Gtk.Template.Child()
     session_expired_banner: Adw.Banner = Gtk.Template.Child()
+    engine_crashed_banner: Adw.Banner = Gtk.Template.Child()
 
     def __init__(self, settings: Gio.Settings, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -44,6 +45,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.connect("close-request", self._on_close_request)
         self.session_expired_banner.connect(
             "button-clicked", self._on_session_expired_banner_clicked
+        )
+        self.engine_crashed_banner.connect(
+            "button-clicked", self._on_engine_crashed_banner_clicked
         )
         self.set_size_request(360, 480)
 
@@ -60,6 +64,12 @@ class MainWindow(Adw.ApplicationWindow):
         # to "All synced" by on_sync_complete / on_watcher_status / on_online.
         # Cleared only by a subsequent clean replay (Story 3-3, AC7).
         self._conflict_pending_count: int = 0
+        # Error state tracking (Story 5-9).
+        # _error_pair_ids: pairs currently in error state (persists until cleared)
+        # _error_pending_cycle: pairs that received an error event in the current sync cycle
+        # Used to clear error state only when a full sync cycle completes with no new errors.
+        self._error_pair_ids: set[str] = set()
+        self._error_pending_cycle: set[str] = set()
         # Maps pair_id → list of conflict copy absolute paths (Story 4-4).
         # Populated by on_conflict_detected; resolved in on_sync_complete.
         self._conflict_copies_by_pair: dict[str, list[str]] = {}
@@ -154,6 +164,9 @@ class MainWindow(Adw.ApplicationWindow):
         self._pairs_data = {}
         self._conflict_copies_by_pair = {}
         self._conflict_log_entries = []          # Story 4-6
+        self._error_pair_ids = set()
+        self._error_pending_cycle = set()
+        self.hide_engine_crashed_banner()
         self._row_activated_connected = False
         self.pair_detail_panel.show_no_pairs()
         self.status_footer_bar.update_all_synced()
@@ -212,8 +225,10 @@ class MainWindow(Adw.ApplicationWindow):
         # (set_conflict_state guards internally via _current_pair_id).
         self.pair_detail_panel.set_conflict_state(pair_id, count, pair_name)
 
-        # Update footer: conflict > syncing priority (AC4).
-        self.status_footer_bar.set_conflicts(self._total_active_conflicts())
+        # Update footer: error > conflict > syncing priority.
+        # Mirrors the same hierarchy enforced in on_sync_complete / on_online.
+        if not self._error_pair_ids:
+            self.status_footer_bar.set_conflicts(self._total_active_conflicts())
 
     def _on_view_conflict_log(self, _panel: object) -> None:
         """Handle view-conflict-log signal — populate and show conflict log page."""
@@ -303,6 +318,32 @@ class MainWindow(Adw.ApplicationWindow):
         app = self.get_application()
         if app is not None and hasattr(app, "show_reauth_dialog"):
             app.show_reauth_dialog()
+
+    def show_engine_crashed_banner(self) -> None:
+        """Show engine crash banner with restart button (Story 5-9 AC4)."""
+        self.engine_crashed_banner.set_revealed(True)
+
+    def hide_engine_crashed_banner(self) -> None:
+        """Hide engine crash banner."""
+        self.engine_crashed_banner.set_revealed(False)
+
+    def _on_engine_crashed_banner_clicked(self, _banner: Adw.Banner) -> None:
+        """Restart the sync engine on banner button click."""
+        self.hide_engine_crashed_banner()
+        app = self.get_application()
+        if app is not None and hasattr(app, "_engine") and app._engine is not None:
+            app._engine.restart()
+
+    def _update_footer_error_state(self) -> None:
+        """Update footer to show error state for one or more pairs (Story 5-9 AC3, AC5)."""
+        count = len(self._error_pair_ids)
+        if count == 0:
+            return
+        if count == 1:
+            pair_id = next(iter(self._error_pair_ids))
+            self.status_footer_bar.set_error(self._get_pair_name(pair_id))
+        else:
+            self.status_footer_bar.set_error(f"{count} pairs")
 
     def on_session_ready(self, payload: dict[str, Any]) -> None:
         """Handle session_ready from engine — same for initial auth and re-auth."""
@@ -404,11 +445,17 @@ class MainWindow(Adw.ApplicationWindow):
     def on_online(self) -> None:
         """Return all pair rows and footer bar to synced state."""
         for pair_id, row in self._sync_pair_rows.items():
+            if pair_id in self._error_pair_ids:
+                continue  # preserve error state — on_online must not clear it (Story 5-9 AC3)
             pair_conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
             if pair_conflict_count > 0:
                 row.set_state("conflict", conflict_count=pair_conflict_count)
             else:
                 row.set_state("synced")
+        # Footer: Error > conflict > synced
+        if self._error_pair_ids:
+            self._update_footer_error_state()
+            return
         # Preserve the conflict-pending footer across online transitions
         # (Story 3-3, AC7 regression guard).
         if self._conflict_pending_count > 0 or self._total_active_conflicts() > 0:
@@ -458,7 +505,8 @@ class MainWindow(Adw.ApplicationWindow):
             # would otherwise linger until the next sync_complete — reset the
             # footer explicitly. (The regression guard in on_sync_complete no
             # longer blocks now that _conflict_pending_count is 0.)
-            self.status_footer_bar.update_all_synced()
+            if not self._error_pair_ids:  # don't override error state
+                self.status_footer_bar.update_all_synced()
         # Green "All synced" for the fresh-replay case (synced>0, skipped==0,
         # no prior conflict-pending) is handled by the subsequent
         # sync_complete event via its regression guard (see on_sync_complete
@@ -472,12 +520,14 @@ class MainWindow(Adw.ApplicationWindow):
         self.toast_overlay.add_toast(toast)
 
     def on_pair_error(self, pair_id: str, _message: str) -> None:
-        """Handle engine error for a specific sync pair (Story 5-5 AC3, AC4)."""
+        """Handle engine error for a specific sync pair (Story 5-5 AC3, AC4; 5-9 AC3, AC5)."""
         row = self._sync_pair_rows.get(pair_id)
         if row is None:
             return
         row.set_state("error")
-        self.status_footer_bar.set_error(row.pair_name)
+        self._error_pair_ids.add(pair_id)
+        self._error_pending_cycle.add(pair_id)
+        self._update_footer_error_state()
 
     def on_rate_limited(self, payload: dict[str, Any]) -> None:
         """Handle engine's `rate_limited` push event (Story 3-4 AC4)."""
@@ -496,8 +546,8 @@ class MainWindow(Adw.ApplicationWindow):
             pair_name = row.pair_name
         files_done = payload.get("files_done", 0)
         files_total = payload.get("files_total", 0)
-        # Conflict > Syncing: only update footer to "syncing" if no active conflicts.
-        if self._total_active_conflicts() == 0:
+        # Conflict > Syncing: only update footer to "syncing" if no active conflicts or errors.
+        if self._total_active_conflicts() == 0 and not self._error_pair_ids:
             self.status_footer_bar.set_syncing(pair_name, files_done, files_total)
         if pair_id in self._pairs_data and files_total > 0:
             self._pairs_data[pair_id]["file_count_text"] = f"{files_total} files"
@@ -530,7 +580,18 @@ class MainWindow(Adw.ApplicationWindow):
         pair_conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         row = self._sync_pair_rows.get(pair_id)
         if row is not None and row.state != "offline":
-            if pair_conflict_count > 0:
+            if pair_id in self._error_pair_ids:
+                # Cycle-based error clearing: if no new error arrived this cycle for this pair,
+                # clear error state. If error arrived again this cycle, keep it and reset the flag.
+                if pair_id in self._error_pending_cycle:
+                    self._error_pending_cycle.discard(pair_id)  # reset for next cycle; keep error
+                else:
+                    self._error_pair_ids.discard(pair_id)  # clean cycle — clear error
+                    if pair_conflict_count > 0:
+                        row.set_state("conflict", conflict_count=pair_conflict_count)
+                    else:
+                        row.set_state("synced")
+            elif pair_conflict_count > 0:
                 row.set_state("conflict", conflict_count=pair_conflict_count)
             else:
                 row.set_state("synced")
@@ -546,7 +607,10 @@ class MainWindow(Adw.ApplicationWindow):
                 payload.get("timestamp", "")
             )
 
-        # Footer update — Conflict > _conflict_pending > all-synced.
+        # Footer update — Error > Conflict > _conflict_pending > all-synced (Story 5-9 AC3).
+        if self._error_pair_ids:
+            self._update_footer_error_state()
+            return
         total_conflicts = self._total_active_conflicts()
         if total_conflicts > 0:
             self.status_footer_bar.set_conflicts(total_conflicts)
@@ -566,6 +630,8 @@ class MainWindow(Adw.ApplicationWindow):
             # Story 3-3 AC7 regression guard: preserve the conflict-pending
             # footer across watcher 'ready' transitions.
             if self._conflict_pending_count > 0 or self._total_active_conflicts() > 0:
+                return
+            if self._error_pair_ids:  # Story 5-9: error > synced
                 return
             any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
             any_offline = any(r.state == "offline" for r in self._sync_pair_rows.values())
