@@ -151,4 +151,16 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ---
 
+---
+
+## Deferred from: code review of 5-1-401-detection-and-sync-halt (2026-04-19)
+
+- **[5-1 CR W1]** Banner has no re-auth action button — `Adw.Banner` in `window.blp` has no `button-label`/`action-name`; Story 5-2 will add the re-auth modal trigger from the banner. `ui/data/ui/window.blp`
+- **[5-1 CR W2]** `startSyncAll` comment misleads about 401 path — comment "NetworkMonitor will trigger a fresh drain on reconnect" is accurate for network-failure but does not note that 401 (`onTokenExpired`) does not reconnect-drain; documentation smell only. `engine/src/sync-engine.ts:~132`
+- **[5-1 CR W3]** Banner `revealed` state not reset on `logout()` — `logout()` hides main view via `show_pre_auth()` so banner is not visible; `on_session_ready` clears it on re-auth; only a gap if user somehow reaches main view without `on_session_ready`. `ui/src/protondrive/main.py`
+- **[5-1 CR W4]** `TestTokenExpiredResetsWatcherStatus` tests call `_on_token_expired` with full-message-shaped payload — pre-existing; old tests pass `{"payload": {...}}` while correct shape is `{"queued_changes": N}` directly; old tests don't check extracted values so pass regardless; harmless inconsistency. `ui/tests/test_main.py`
+- **[5-1 CR W5]** 401 during conflict download leaves orphaned `.conflict-YYYY-MM-DD` file — conflict copy written and `conflict_detected` emitted before download; if download throws `AuthExpiredError`, copy is orphaned on disk; next reconcile after re-auth may create a second conflict copy for the same file. `engine/src/sync-engine.ts:~335`
+
+---
+
 _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 — see epic-4-retro-2026-04-18.md for full list._

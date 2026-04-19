@@ -12,7 +12,7 @@ import {
   type UploadBody,
   type AccountInfo,
 } from "./sdk.js";
-import { EngineError, NetworkError, RateLimitError, SyncError } from "./errors.js";
+import { AuthExpiredError, EngineError, NetworkError, RateLimitError, SyncError } from "./errors.js";
 
 describe("SDK boundary enforcement", () => {
   const srcDir = path.resolve(import.meta.dirname!, ".");
@@ -630,6 +630,25 @@ describe("DriveClient SDK error mapping", () => {
 
   it("ServerError → NetworkError('API error: ...')", async () => {
     await expectMapping(sdkErrorFactoriesForTests.server("boom"), NetworkError, /API error: boom/);
+  });
+
+  it("ServerError with statusCode 401 → AuthExpiredError('Session token expired'), NOT NetworkError", async () => {
+    const sdkErr = sdkErrorFactoriesForTests.server401();
+    const sdk = makeFakeSdk({
+      getMyFilesRootFolder: mock(async () => { throw sdkErr; }),
+    });
+    const client = new DriveClient(sdk);
+    let captured: unknown;
+    try {
+      await client.listRemoteFolders(null);
+      expect(true).toBe(false);
+    } catch (err) {
+      captured = err;
+    }
+    expect(captured).toBeInstanceOf(AuthExpiredError);
+    expect((captured as Error).message).toMatch(/Session token expired/);
+    expect(captured instanceof NetworkError).toBe(false);  // 401 must NOT be treated as NetworkError
+    expect((captured as Error & { cause?: unknown }).cause).toBe(sdkErr);
   });
 
   it("IntegrityError → SyncError('Decryption failed')", async () => {

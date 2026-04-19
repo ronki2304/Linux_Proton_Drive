@@ -18,7 +18,7 @@ import { SyncEngine } from "./sync-engine.js";
 import type { DriveClient, RemoteFile } from "./sdk.js";
 import type { IpcPushEvent } from "./ipc.js";
 import type { ConfigPair } from "./config.js";
-import { RateLimitError, SyncError } from "./errors.js";
+import { AuthExpiredError, RateLimitError, SyncError } from "./errors.js";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -486,6 +486,93 @@ describe("SyncEngine — remote_id resolution (AC6)", () => {
       (e) => e.type === "error" && (e.payload as Record<string, unknown>)["code"] === "sync_cycle_error",
     );
     expect(syncCycleErrors.length).toBe(0);
+  });
+});
+
+describe("SyncEngine — 401 auth expiry detection", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tmpDir, { recursive: true });
+    db.insertPair({
+      pair_id: PAIR_ID,
+      local_path: tmpDir,
+      remote_path: "/Documents",
+      remote_id: "some-remote-id",
+      created_at: "2026-04-10T00:00:00.000Z",
+      last_synced_at: null,
+    });
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  // AC1: 401 during reconcileAndEnqueue (walkRemoteTree/reconcilePair) → onTokenExpired called
+  it("401 during reconcile → onTokenExpired called, not onNetworkFailure", async () => {
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => {
+        throw new AuthExpiredError("401");
+      }),
+    });
+
+    let tokenExpiredCalled = false;
+    let networkFailureCalled = false;
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e), undefined, () => {
+      networkFailureCalled = true;
+    }, () => {
+      tokenExpiredCalled = true;
+    });
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    expect(tokenExpiredCalled).toBe(true);
+    expect(networkFailureCalled).toBe(false);
+  });
+
+  // AC1: 401 during drainQueue → onTokenExpired called, drain halts cleanly
+  it("401 during drain → onTokenExpired called, drain halts", async () => {
+    // Add a queue entry so drainQueue calls walkRemoteTree (which calls listRemoteFiles)
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "file.txt",
+      change_type: "created",
+      queued_at: new Date().toISOString(),
+    });
+
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => {
+        throw new AuthExpiredError("401");
+      }),
+    });
+
+    let tokenExpiredCalled = false;
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e), undefined, () => {}, () => {
+      tokenExpiredCalled = true;
+    });
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    expect(tokenExpiredCalled).toBe(true);
+    // queue_replay_complete must still emit (finally block still runs)
+    const completeEvent = emittedEvents.find((e) => e.type === "queue_replay_complete");
+    expect(completeEvent).toBeTruthy();
+  });
+
+  // AC3: with null driveClient (after token expiry), drainQueue returns immediately without throwing
+  it("drainQueue with null client after token expiry returns immediately", async () => {
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    // No setDriveClient call — client stays null
+
+    await engine.drainQueue(); // must not throw
+
+    const errorEvents = emittedEvents.filter((e) => e.type === "error");
+    expect(errorEvents.length).toBe(0);
   });
 });
 
@@ -1328,7 +1415,7 @@ describe("SyncEngine — drainQueue", () => {
         return { node_uid: "uid-rl", revision_uid: "rev-1" };
       }),
     });
-    engine = new SyncEngine(db, (e) => emittedEvents.push(e), () => [{ pair_id: PAIR_ID, local_path: tmpDir, remote_path: "/Documents", created_at: "2026-04-10T00:00:00.000Z" }], () => {}, noopSleep);
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e), () => [{ pair_id: PAIR_ID, local_path: tmpDir, remote_path: "/Documents", created_at: "2026-04-10T00:00:00.000Z" }], () => {}, () => {}, noopSleep);
     engine.setDriveClient(mockClient);
 
     const result = await engine.drainQueue();
@@ -1357,6 +1444,7 @@ describe("SyncEngine — withBackoff", () => {
       db,
       (e) => backoffEvents.push(e),
       () => [],
+      () => {},
       () => {},
       sleepSpy,
     );

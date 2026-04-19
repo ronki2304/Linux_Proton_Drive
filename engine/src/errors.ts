@@ -28,6 +28,13 @@ export class RateLimitError extends EngineError {
   }
 }
 
+export class AuthExpiredError extends EngineError {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "AuthExpiredError";
+  }
+}
+
 export class IpcError extends EngineError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);

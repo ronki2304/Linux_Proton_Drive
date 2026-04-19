@@ -604,7 +604,23 @@ export async function handleCommand(
 async function main(): Promise<void> {
   process.stderr.write(`[ENGINE] BUILD 2026-04-17-v5 started\n`);
   stateDb = new StateDb();
-  syncEngine = new SyncEngine(stateDb, (e) => server.emitEvent(e), undefined, () => networkMonitor?.forceCheck());
+  syncEngine = new SyncEngine(
+    stateDb,
+    (e) => server.emitEvent(e),
+    undefined,                                          // getConfigPairs: use default
+    () => networkMonitor?.forceCheck(),                 // onNetworkFailure (existing)
+    () => {                                             // onTokenExpired (NEW)
+      if (!driveClient) return;                         // idempotent — already expired
+      driveClient = null;
+      syncEngine?.setDriveClient(null);
+      // DO NOT stop fileWatcher — keep queuing local changes (AC3)
+      const db = stateDb;
+      const queuedTotal = db
+        ? db.listPairs().reduce((sum, p) => sum + db.queueSize(p.pair_id), 0)
+        : 0;
+      server.emitEvent({ type: "token_expired", payload: { queued_changes: queuedTotal } });
+    },
+  );
   const socketPath = resolveSocketPath();
   server = new IpcServer(socketPath, handleCommand);
   // Wrap the emit callback so an `online` transition triggers queue replay in

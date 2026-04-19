@@ -7,7 +7,7 @@ import type { IpcPushEvent } from "./ipc.js";
 import type { DriveClient, RemoteFile } from "./sdk.js";
 import type { ChangeQueueEntry, StateDb, SyncPair, SyncState } from "./state-db.js";
 import { listConfigPairs, type ConfigPair } from "./config.js";
-import { NetworkError, RateLimitError, SyncError } from "./errors.js";
+import { AuthExpiredError, NetworkError, RateLimitError, SyncError } from "./errors.js";
 import { detectConflict } from "./conflict.js";
 import { debugLog } from "./debug-log.js";
 
@@ -20,6 +20,10 @@ function isFetchFailure(err: unknown): boolean {
   // TypeErrors from bundled undici where instanceof TypeError is false.
   if (err instanceof Error && err.name === "TypeError" && err.message === "fetch failed") return true;
   return false;
+}
+
+function isAuthExpired(err: unknown): boolean {
+  return err instanceof AuthExpiredError;
 }
 
 // ── Internal types ───────────────────────────────────────────────────────────
@@ -78,6 +82,7 @@ export class SyncEngine {
     private readonly emitEvent: (event: IpcPushEvent) => void,
     private readonly getConfigPairs: () => ConfigPair[] = listConfigPairs,
     private readonly onNetworkFailure: () => void = () => {},
+    private readonly onTokenExpired: () => void = () => {},
     private readonly sleepMs: (ms: number) => Promise<void> =
       (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
   ) {}
@@ -172,6 +177,11 @@ export class SyncEngine {
         await this.reconcilePair(pairObj, client);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "unknown";
+        if (isAuthExpired(err)) {
+          process.stderr.write("[ENGINE] reconcile aborted — 401 session expired\n");
+          this.onTokenExpired();
+          return true; // halt reconcile; same return semantics as network failure
+        }
         if (isFetchFailure(err)) {
           process.stderr.write(`[ENGINE] reconcile aborted — network failure detected, forcing connectivity check\n`);
           this.onNetworkFailure();
@@ -198,6 +208,7 @@ export class SyncEngine {
         process.stderr.write(`[ENGINE] resolved remote_id=${resolvedId.slice(-8)} for pair=${pair.pair_id.slice(-8)}\n`);
         pair = { ...pair, remote_id: resolvedId };
       } catch (err) {
+        if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : "unknown";
         process.stderr.write(`[ENGINE] remote_path_not_found pair=${pair.pair_id.slice(-8)}: ${msg}\n`);
         this.emitEvent({
@@ -324,6 +335,7 @@ export class SyncEngine {
           content_hash: hash,
         });
       } catch (err) {
+        if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         debugLog(`sync-engine: conflict download failed for ${item.relativePath}: ${msg}`);
         this.emitEvent({
@@ -378,6 +390,7 @@ export class SyncEngine {
           content_hash: hash,
         });
       } catch (err) {
+        if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         debugLog(`sync-engine: collision download failed for ${item.relativePath}: ${msg}`);
         this.emitEvent({
@@ -409,6 +422,7 @@ export class SyncEngine {
         await this.withBackoff(() => client.trashNode(item.remoteNodeId));
         this.stateDb.deleteSyncState(pair.pair_id, item.relativePath);
       } catch (err) {
+        if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : "unknown";
         debugLog(`sync-engine: trash_remote failed for ${item.relativePath}: ${msg}`);
         this.emitEvent({ type: "error", payload: { code: "sync_cycle_error", message: msg, pair_id: pair.pair_id } });
@@ -457,6 +471,7 @@ export class SyncEngine {
           },
         });
       } catch (err) {
+        if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : "unknown";
         process.stderr.write(`[ENGINE] sync_file_error ${item.relativePath}: ${msg}\n`);
         this.emitEvent({
@@ -551,6 +566,7 @@ export class SyncEngine {
           remoteFiles = tree.files;
           remoteFolders = tree.folders;
         } catch (err) {
+          if (isAuthExpired(err)) throw err; // propagate to outer catch to halt drain
           // walkRemoteTree failure blocks all entries for this pair — count
           // them as failed and emit one error event per entry so the UI can
           // surface them individually (including the affected relative_path).
@@ -604,6 +620,13 @@ export class SyncEngine {
             failed++;
           }
         }
+      }
+    } catch (err) {
+      if (isAuthExpired(err)) {
+        this.onTokenExpired();
+        // fall through to finally — isDraining reset, queue_replay_complete emitted
+      } else {
+        throw err; // unexpected; propagate
       }
     } finally {
       // Ordered emission (AC6a): queue_replay_complete FIRST so the UI can
@@ -807,6 +830,7 @@ export class SyncEngine {
         }
       }
     } catch (err) {
+      if (isAuthExpired(err)) throw err; // propagate to halt drain — do NOT emit "failed" or "queue_replay_failed"
       const msg = err instanceof Error ? err.message : "unknown";
       debugLog(
         `sync-engine: queue_replay_failed pair=${pair.pair_id} entry=${entry.id} path=${entry.relative_path}: ${msg}`,

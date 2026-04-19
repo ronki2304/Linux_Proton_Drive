@@ -405,37 +405,21 @@ class Application(Adw.Application):
                 )
 
     def _on_token_expired(self, payload: dict[str, Any]) -> None:
-        """Token expired — route to pre-auth, unless auth browser is active.
+        """Token expired mid-sync — show warning banner; keep credentials for re-auth.
 
-        When the auth browser is open the user is mid-login; the cookie poller
-        will automatically retry with the next token it finds (e.g., after the
-        user completes the full login flow and Proton upgrades the session scope).
-        We must not disrupt that flow.
+        Story 5-1: UI shifts to warning state; credentials are preserved so
+        Story 5-2 can pre-fill re-auth without requiring a fresh login.
+        Do NOT route to pre-auth — user stays on main view and can queue changes.
+        Banner is always shown regardless of auth browser state — if re-auth
+        succeeds, on_session_ready clears it; if it fails, the user sees feedback.
         """
         import sys
         print(f"[APP] token_expired received: {payload}", file=sys.stderr)
         self._cancel_validation_timeout()
         self._watcher_status = "unknown"
 
-        if self._window is not None and self._window.is_auth_browser_active():
-            # Mid-login: keep the auth browser open and let the poller retry.
-            print("[APP] token_expired ignored — auth browser active, waiting for valid token", file=sys.stderr)
-            return
-
-        if self._credential_manager is not None:
-            try:
-                self._credential_manager.delete_token()
-            except Exception:
-                pass
-            try:
-                self._credential_manager.delete_key_password()
-            except Exception:
-                pass
-
-        self.settings.set_boolean("wizard-auth-complete", False)
-
         if self._window is not None:
-            self._window.show_pre_auth()
+            self._window.show_token_expired_warning()
 
     def logout(self) -> None:
         """Execute logout: clear credentials, shutdown engine, show pre-auth."""

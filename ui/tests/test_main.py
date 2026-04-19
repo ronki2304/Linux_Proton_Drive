@@ -273,3 +273,38 @@ class TestOnShowConflictPair:
         param.get_string.return_value = "p1"
         app._on_show_conflict_pair(MagicMock(), param)
         app.activate.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Story 5-1 — _on_token_expired new behaviour (banner, no credential deletion)
+# ---------------------------------------------------------------------------
+
+class TestTokenExpiredCallsWarning:
+    """_on_token_expired calls show_token_expired_warning, not show_pre_auth."""
+
+    def test_calls_show_token_expired_warning(self) -> None:
+        app = _make_app()
+        app._on_token_expired({"queued_changes": 3})
+        app._window.show_token_expired_warning.assert_called_once_with()
+
+    def test_does_not_call_show_pre_auth(self) -> None:
+        app = _make_app()
+        app._on_token_expired({"queued_changes": 0})
+        app._window.show_pre_auth.assert_not_called()
+
+    def test_does_not_delete_credentials(self) -> None:
+        app = _make_app()
+        app._on_token_expired({"queued_changes": 0})
+        app._credential_manager.delete_token.assert_not_called()
+        app._credential_manager.delete_key_password.assert_not_called()
+
+    def test_no_window_is_noop(self) -> None:
+        app = _make_app()
+        app._window = None
+        app._on_token_expired({"queued_changes": 2})  # must not raise
+
+    def test_shows_banner_even_when_auth_browser_active(self) -> None:
+        app = _make_app()
+        app._window.is_auth_browser_active.return_value = True
+        app._on_token_expired({"queued_changes": 1})
+        app._window.show_token_expired_warning.assert_called_once_with()

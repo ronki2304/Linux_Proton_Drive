@@ -67,7 +67,7 @@ import * as openpgp from "openpgp";
 
 import bcrypt from "bcryptjs";
 
-import { EngineError, NetworkError, RateLimitError, SyncError } from "./errors.js";
+import { AuthExpiredError, EngineError, NetworkError, RateLimitError, SyncError } from "./errors.js";
 import { debugLog } from "./debug-log.js";
 
 // ---------------------------------------------------------------------------
@@ -186,6 +186,9 @@ function mapSdkError(err: unknown): never {
   if (err instanceof RateLimitedError) {
     throw new RateLimitError("Rate limited", { cause: err });
   }
+  if (err instanceof ServerError && err.statusCode === 401) {
+    throw new AuthExpiredError("Session token expired", { cause: err });
+  }
   if (err instanceof ServerError) {
     throw new NetworkError(`API error: ${err.message}`, { cause: err });
   }
@@ -237,6 +240,8 @@ export const sdkErrorFactoriesForTests = {
     new NodeWithSameNameExistsValidationError(msg, 409),
   abort: (msg = "aborted") => new AbortError(msg),
   protonDrive: (msg = "generic sdk") => new ProtonDriveError(msg),
+  server401: (msg = "session expired") =>
+    Object.assign(new ServerError(msg), { statusCode: 401 }),
 } as const;
 
 // ---------------------------------------------------------------------------

@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-18  # 4-6 done; epic-4 retro done; 5-0 done
+last_updated: 2026-04-19  # 5-1 done (code review complete)
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -103,9 +103,9 @@ development_status:
   epic-4-retrospective: done
 
   # Epic 5: Token Expiry & Error Recovery
-  epic-5: backlog
+  epic-5: in-progress
   5-0-pre-epic-5-debt-cleanup: done
-  5-1-401-detection-and-sync-halt: backlog
+  5-1-401-detection-and-sync-halt: done
   5-2-re-auth-modal-with-queued-change-count: backlog
   5-3-change-queue-replay-after-re-auth: backlog
   5-4-dirty-session-flag-and-crash-recovery: backlog

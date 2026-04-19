@@ -16,6 +16,13 @@ template $ProtonDriveMainWindow: Adw.ApplicationWindow {
         [top]
         Adw.HeaderBar {}
 
+        [top]
+        Adw.Banner session_expired_banner {
+          title: _("Session expired — sign in to resume sync");
+          revealed: false;
+          styles ["error"]
+        }
+
         content: Gtk.ScrolledWindow {
           child: Gtk.ListBox pairs_list {
             selection-mode: single;

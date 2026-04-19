@@ -31,6 +31,7 @@ class MainWindow(Adw.ApplicationWindow):
     pairs_list: Gtk.ListBox = Gtk.Template.Child()
     status_footer_bar: StatusFooterBar = Gtk.Template.Child()
     pair_detail_panel: PairDetailPanel = Gtk.Template.Child()
+    session_expired_banner: Adw.Banner = Gtk.Template.Child()
 
     def __init__(self, settings: Gio.Settings, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -286,8 +287,17 @@ class MainWindow(Adw.ApplicationWindow):
         )
         about.present(self)
 
+    def show_token_expired_warning(self) -> None:
+        """Show the session-expired banner. Called by Application on token_expired."""
+        self.session_expired_banner.set_revealed(True)
+
+    def clear_token_expired_warning(self) -> None:
+        """Hide the session-expired banner. Called on session_ready."""
+        self.session_expired_banner.set_revealed(False)
+
     def on_session_ready(self, payload: dict[str, Any]) -> None:
         """Handle session_ready from engine — same for initial auth and re-auth."""
+        self.clear_token_expired_warning()      # clear banner on re-auth
         self._session_data = payload
 
         if self._account_header_bar is None:
