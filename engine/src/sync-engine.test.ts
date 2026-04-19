@@ -2184,6 +2184,94 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
   });
 });
 
+describe("SyncEngine — DISK_FULL detection (Story 5-5)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `disk-full-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("ENOSPC via processQueueEntry → DISK_FULL emitted, queue_replay_failed NOT emitted", async () => {
+    // Enqueue a file creation so drainQueue → processQueueEntry runs.
+    writeLocalFile("upload.txt");
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "upload.txt",
+      change_type: "created",
+      queued_at: new Date().toISOString(),
+    });
+
+    // Client.listRemoteFiles is called inside processQueueEntry to get remote snapshot;
+    // make uploadFile throw ENOSPC to exercise isDiskFull in the catch site.
+    const enospcErr = Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw enospcErr; }),
+    });
+
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const diskFullEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFullEvent).toBeTruthy();
+    expect((diskFullEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+    const msg = (diskFullEvent!.payload as Record<string, unknown>).message as string;
+    expect(msg).toContain("Free up space on");
+    expect(msg).toContain(tmpDir);
+
+    const replayFailed = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "queue_replay_failed",
+    );
+    expect(replayFailed).toBeUndefined();
+  });
+
+  it("non-ENOSPC error in processQueueEntry → queue_replay_failed emitted, DISK_FULL NOT emitted", async () => {
+    writeLocalFile("upload.txt");
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "upload.txt",
+      change_type: "created",
+      queued_at: new Date().toISOString(),
+    });
+
+    const ioErr = Object.assign(new Error("I/O error"), { code: "EIO" });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw ioErr; }),
+    });
+
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const diskFullEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFullEvent).toBeUndefined();
+
+    const replayFailed = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "queue_replay_failed",
+    );
+    expect(replayFailed).toBeTruthy();
+  });
+});
+
 describe("SyncEngine — dirty-session flag lifecycle (Story 5-4)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");

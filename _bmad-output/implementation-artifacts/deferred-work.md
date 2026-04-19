@@ -22,6 +22,17 @@ _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been remo
 
 ---
 
+## Deferred from: code review of 5-5-actionable-error-disk-full (2026-04-19)
+
+- **[5-5 D1]** Test gap: Sites 1–5 DISK_FULL in main sync loop not directly tested — acknowledged in story dev notes as acceptable low-risk tradeoff. `engine/src/sync-engine.test.ts`
+- **[5-5 D2]** Multi-pair error: `on_pair_error` overwrites footer with last errored pair name — second DISK_FULL event for a different pair silently replaces the first. Story 5-9 priority ordering. `ui/src/protondrive/window.py`
+- **[5-5 D3]** `on_online` clears error state on offline→online transition — `on_online` calls `set_state("synced")` on error-state rows without guard. Story 5-9 priority ordering. `ui/src/protondrive/window.py`
+- **[5-5 D4]** `on_watcher_status("ready")` clears footer despite error rows — watcher restart calls `update_all_synced()` without checking for error-state rows. Story 5-9. `ui/src/protondrive/window.py`
+- **[5-5 D5]** Multiple DISK_FULL events per cycle → screen-reader flood — N files hitting ENOSPC emit N identical DISK_FULL events; UI announces with HIGH priority N times. Story 5-9 deduplication. `engine/src/sync-engine.ts`
+- **[5-5 D6]** No multi-entry test for `queue_replay_failed` suppression — if a later queue entry fails non-ENOSPC after DISK_FULL entries, both codes get emitted. Low risk / out of scope. `engine/src/sync-engine.test.ts`
+
+---
+
 ## Cross-Epic Tech Debt — Story 2-12: Unified Queue Drainer Refactor
 
 **Identified:** 2026-04-15 during Story 3-3 party-mode review

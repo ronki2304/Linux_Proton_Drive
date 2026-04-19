@@ -471,6 +471,14 @@ class MainWindow(Adw.ApplicationWindow):
         toast.set_timeout(5)
         self.toast_overlay.add_toast(toast)
 
+    def on_pair_error(self, pair_id: str, _message: str) -> None:
+        """Handle engine error for a specific sync pair (Story 5-5 AC3, AC4)."""
+        row = self._sync_pair_rows.get(pair_id)
+        if row is None:
+            return
+        row.set_state("error")
+        self.status_footer_bar.set_error(row.pair_name)
+
     def on_rate_limited(self, payload: dict[str, Any]) -> None:
         """Handle engine's `rate_limited` push event (Story 3-4 AC4)."""
         resume_in = (payload.get("resume_in_seconds") or 0)

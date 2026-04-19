@@ -754,6 +754,38 @@ class TestConflictLogEntries:
 # Story 5-4 — on_crash_recovery_complete
 # ---------------------------------------------------------------------------
 
+class TestOnPairError:
+    """on_pair_error() routes DISK_FULL errors to row + footer (Story 5-5 AC3, AC4)."""
+
+    def test_known_pair_sets_row_state_error(self):
+        win = _make_window()
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Free up space on /home/user/docs to continue syncing")
+        row.set_state.assert_called_once_with("error")
+
+    def test_known_pair_sets_footer_error(self):
+        win = _make_window()
+        row = _make_row(pair_name="Documents")
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "some message")
+        win.status_footer_bar.set_error.assert_called_once_with("Documents")
+
+    def test_unknown_pair_id_does_not_crash(self):
+        win = _make_window()
+        win.on_pair_error("nonexistent", "msg")
+        win.status_footer_bar.set_error.assert_not_called()
+
+    def test_message_is_not_forwarded_to_status_label(self):
+        """Raw message (contains path) must not appear in footer label directly."""
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Free up space on /secret/path")
+        # set_error is called with pair_name only — not the raw message
+        win.status_footer_bar.set_error.assert_called_once_with("Docs")
+
+
 class TestOnCrashRecoveryComplete:
     """on_crash_recovery_complete shows AdwToast with correct text and timeout (AC4)."""
 

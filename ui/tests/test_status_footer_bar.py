@@ -324,3 +324,43 @@ class TestStatusFooterBarSetInitialising:
         bar.set_initialising()
         _, values = bar._accessible_label_args
         assert values == ["Initialising file watcher\u2026"]
+
+
+class TestStatusFooterBarSetError:
+    """set_error() — red dot, 'Sync error in <pair>' label, HIGH priority announce (Story 5-5 AC4)."""
+
+    def test_label_text(self):
+        bar = _make_bar()
+        bar.set_error("Documents")
+        bar.footer_label.set_text.assert_called_with("Sync error in Documents")
+
+    def test_dot_state_becomes_error(self):
+        bar = _make_bar()
+        bar.set_error("Photos")
+        assert bar._dot_state == "error"
+
+    def test_accessible_label_set(self):
+        bar = _make_bar()
+        bar.set_error("Music")
+        _, values = bar._accessible_label_args
+        assert values == ["Sync error in Music"]
+
+    def test_announce_called_with_high_priority(self):
+        from gi.repository import Gtk
+        bar = _make_bar()
+        bar.set_error("Documents")
+        bar.announce.assert_called_once_with(
+            "Sync error in Documents", Gtk.AccessibleAnnouncementPriority.HIGH
+        )
+
+    def test_no_css_class_added_for_error_state(self):
+        bar = _make_bar()
+        bar.set_error("Documents")
+        bar.footer_dot.add_css_class.assert_not_called()
+
+    def test_error_dot_colour_is_red(self):
+        bar = _make_bar()
+        bar._dot_state = "error"
+        cr = MagicMock()
+        bar._on_dot_draw(None, cr, 8, 8)
+        cr.set_source_rgb.assert_called_once_with(0.87, 0.19, 0.19)

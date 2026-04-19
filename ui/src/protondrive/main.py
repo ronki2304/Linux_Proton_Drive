@@ -505,8 +505,11 @@ class Application(Adw.Application):
         return False
 
     def _on_engine_error(self, message: str, fatal: bool, pair_id: str | None = None) -> None:
-        """Handle engine errors."""
-        pass  # TODO: Story 5.x error display
+        """Dispatch engine errors to appropriate UI surface (Story 5-5)."""
+        if fatal:
+            return  # Fatal error display deferred to Story 5-9
+        if pair_id is not None and self._window is not None:
+            self._window.on_pair_error(pair_id, message)
 
     def _on_key_unlock_required(self, message: dict[str, Any]) -> None:
         """Engine needs a password to unlock sync keys.

@@ -435,3 +435,28 @@ class TestCrashRecovery:
         app._cached_session_data = None
         app._on_session_ready({"display_name": "Test"})
         app._window.on_crash_recovery_complete.assert_not_called()
+
+
+class TestOnEngineError:
+    """_on_engine_error() dispatches non-fatal pair errors to window (Story 5-5)."""
+
+    def test_non_fatal_with_pair_id_dispatches_to_window(self) -> None:
+        app = _make_app()
+        app._on_engine_error("Free up space on /path", fatal=False, pair_id="p1")
+        app._window.on_pair_error.assert_called_once_with("p1", "Free up space on /path")
+
+    def test_non_fatal_without_pair_id_does_not_dispatch(self) -> None:
+        app = _make_app()
+        app._on_engine_error("some message", fatal=False, pair_id=None)
+        app._window.on_pair_error.assert_not_called()
+
+    def test_fatal_does_not_dispatch(self) -> None:
+        app = _make_app()
+        app._on_engine_error("fatal error", fatal=True, pair_id="p1")
+        app._window.on_pair_error.assert_not_called()
+
+    def test_non_fatal_with_window_none_does_not_crash(self) -> None:
+        app = _make_app()
+        app._window = None
+        # Should not raise even though window is None
+        app._on_engine_error("Free up space on /path", fatal=False, pair_id="p1")

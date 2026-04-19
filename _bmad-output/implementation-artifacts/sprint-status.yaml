@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-19  # 5-4 done
+last_updated: 2026-04-19  # 5-5 done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -109,7 +109,7 @@ development_status:
   5-2-re-auth-modal-with-queued-change-count: done
   5-3-change-queue-replay-after-re-auth: done
   5-4-dirty-session-flag-and-crash-recovery: done
-  5-5-actionable-error-disk-full: backlog
+  5-5-actionable-error-disk-full: done
   5-6-actionable-error-permission-denied: backlog
   5-7-actionable-error-inotify-limit-exceeded: backlog
   5-8-actionable-error-file-locked: backlog

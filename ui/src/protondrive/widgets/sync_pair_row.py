@@ -81,6 +81,17 @@ class SyncPairRow(Gtk.ListBoxRow):
             )
             self.status_dot.queue_draw()
             return  # early return: skip generic _set_accessible_label below
+        elif state == "error":
+            self.status_label.set_text("Sync error")
+            self.status_dot.remove_css_class("sync-dot-syncing")
+            self.status_dot.remove_css_class("sync-dot-offline")
+            self.status_dot.remove_css_class("sync-dot-conflict")
+            self.status_dot.queue_draw()
+            self.update_property(
+                [Gtk.AccessibleProperty.LABEL],
+                [f"{self._pair_name} \u2014 error"],
+            )
+            return  # early return: skip generic _set_accessible_label
         else:
             self.status_label.set_text("")
             self.status_dot.remove_css_class("sync-dot-syncing")
@@ -97,6 +108,8 @@ class SyncPairRow(Gtk.ListBoxRow):
             cr.set_source_rgb(0.60, 0.60, 0.60)  # grey
         elif self._state == "conflict":
             cr.set_source_rgb(0.95, 0.62, 0.14)  # amber — matches StatusFooterBar conflict colour
+        elif self._state == "error":
+            cr.set_source_rgb(0.87, 0.19, 0.19)  # red
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2

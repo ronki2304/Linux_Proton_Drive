@@ -201,6 +201,59 @@ class TestSyncPairRowConflictState:
         assert values == ["Documents \u2014 1 conflict"]
 
 
+class TestSyncPairRowErrorState:
+    """set_state('error') — red dot, 'Sync error' label, accessible label (Story 5-5 AC3)."""
+
+    def test_error_sets_internal_state(self):
+        row = _make_row()
+        row.set_state("error")
+        assert row._state == "error"
+
+    def test_error_sets_status_label(self):
+        row = _make_row()
+        row.set_state("error")
+        row.status_label.set_text.assert_called_with("Sync error")
+
+    def test_error_removes_syncing_css_class(self):
+        row = _make_row()
+        row.set_state("error")
+        removed = [c.args[0] for c in row.status_dot.remove_css_class.call_args_list]
+        assert "sync-dot-syncing" in removed
+
+    def test_error_removes_offline_css_class(self):
+        row = _make_row()
+        row.set_state("error")
+        removed = [c.args[0] for c in row.status_dot.remove_css_class.call_args_list]
+        assert "sync-dot-offline" in removed
+
+    def test_error_removes_conflict_css_class(self):
+        row = _make_row()
+        row.set_state("error")
+        removed = [c.args[0] for c in row.status_dot.remove_css_class.call_args_list]
+        assert "sync-dot-conflict" in removed
+
+    def test_error_does_not_add_any_css_class(self):
+        row = _make_row()
+        row.set_state("error")
+        row.status_dot.add_css_class.assert_not_called()
+
+    def test_error_queues_draw(self):
+        row = _make_row()
+        row.set_state("error")
+        row.status_dot.queue_draw.assert_called()
+
+    def test_error_accessible_label(self):
+        row = _make_row(pair_name="Documents")
+        row.set_state("error")
+        _, values = row._accessible_label_args
+        assert values == ["Documents \u2014 error"]
+
+    def test_state_property_error(self):
+        row = _make_row()
+        row.set_state("error")
+        assert row.state == "error"
+
+
 class TestSyncPairRowDrawDot:
     def test_conflict_colour_is_amber(self):
         row = _make_row()
@@ -208,6 +261,13 @@ class TestSyncPairRowDrawDot:
         cr = MagicMock()
         row._draw_dot(None, cr, 8, 8)
         cr.set_source_rgb.assert_called_once_with(0.95, 0.62, 0.14)
+
+    def test_error_colour_is_red(self):
+        row = _make_row()
+        row._state = "error"
+        cr = MagicMock()
+        row._draw_dot(None, cr, 8, 8)
+        cr.set_source_rgb.assert_called_once_with(0.87, 0.19, 0.19)
 
 
 class TestSyncPairRowProperty:

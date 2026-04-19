@@ -26,6 +26,10 @@ function isAuthExpired(err: unknown): boolean {
   return err instanceof AuthExpiredError;
 }
 
+function isDiskFull(err: unknown): boolean {
+  return err != null && typeof err === "object" && (err as NodeJS.ErrnoException).code === "ENOSPC";
+}
+
 // ── Internal types ───────────────────────────────────────────────────────────
 
 interface LocalFile {
@@ -270,6 +274,8 @@ export class SyncEngine {
       this.stateDb.deleteSyncState(pair.pair_id, item.relativePath);
     }
 
+    let diskFull = false; // set on ENOSPC; causes early return after each loop
+
     // ── Execute conflict items (copy local version → conflict copy, download remote version) ──
     for (const item of conflictItems) {
       const localFilePath = join(pair.local_path, item.relativePath);
@@ -301,6 +307,10 @@ export class SyncEngine {
         try { await unlink(tmpPath); } catch { /* already gone */ }
         const msg = err instanceof Error ? err.message : String(err);
         debugLog(`sync-engine: conflict copy creation failed for ${item.relativePath}: ${msg}`);
+        if (isDiskFull(err)) {
+          this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
+          diskFull = true; break;
+        }
         this.emitEvent({
           type: "error",
           payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
@@ -338,12 +348,17 @@ export class SyncEngine {
         if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         debugLog(`sync-engine: conflict download failed for ${item.relativePath}: ${msg}`);
+        if (isDiskFull(err)) {
+          this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
+          diskFull = true; break;
+        }
         this.emitEvent({
           type: "error",
           payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
         });
       }
     }
+    if (diskFull) return;
 
     // ── Execute new_file_collision items (rename local → conflict copy, download remote) ──
     for (const item of newFileCollisionItems) {
@@ -356,6 +371,10 @@ export class SyncEngine {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         debugLog(`sync-engine: collision rename failed for ${item.relativePath}: ${msg}`);
+        if (isDiskFull(err)) {
+          this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
+          diskFull = true; break;
+        }
         this.emitEvent({
           type: "error",
           payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
@@ -393,12 +412,17 @@ export class SyncEngine {
         if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
         debugLog(`sync-engine: collision download failed for ${item.relativePath}: ${msg}`);
+        if (isDiskFull(err)) {
+          this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
+          diskFull = true; break;
+        }
         this.emitEvent({
           type: "error",
           payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
         });
       }
     }
+    if (diskFull) return;
 
     // Execute delete_local items (ENOENT = already gone = success)
     for (const item of deleteLocalItems) {
@@ -474,12 +498,17 @@ export class SyncEngine {
         if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : "unknown";
         process.stderr.write(`[ENGINE] sync_file_error ${item.relativePath}: ${msg}\n`);
+        if (isDiskFull(err)) {
+          this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
+          diskFull = true; break;
+        }
         this.emitEvent({
           type: "error",
           payload: { code: "sync_file_error", message: msg, pair_id: pair.pair_id },
         });
       }
     }
+    if (diskFull) return;
 
     // ── Enqueue uploads (skip already-queued paths to avoid duplicates) ──────
     const existingQueued = new Set(
@@ -556,6 +585,7 @@ export class SyncEngine {
       this.stateDb.setDirtySession(true);
 
       const pairs = this.stateDb.listPairs();
+      let diskFullAbort = false; // set when DISK_FULL is detected; aborts all further drain work
       for (const pair of pairs) {
         const pairQueue = this.stateDb.listQueue(pair.pair_id);
         if (pairQueue.length === 0) continue;
@@ -619,10 +649,15 @@ export class SyncEngine {
             });
           } else if (outcome === "conflict") {
             skipped_conflicts++;
+          } else if (outcome === "disk_full") {
+            failed++;
+            diskFullAbort = true;
+            break; // stop this pair's remaining entries
           } else {
             failed++;
           }
         }
+        if (diskFullAbort) break; // stop all further pairs
       }
     } catch (err) {
       if (isAuthExpired(err)) {
@@ -670,7 +705,7 @@ export class SyncEngine {
     remoteFiles: Map<string, RemoteFile>,
     remoteFolders: Map<string, string>,
     client: DriveClient,
-  ): Promise<"synced" | "conflict" | "failed"> {
+  ): Promise<"synced" | "conflict" | "failed" | "disk_full"> {
     try {
       const state = this.stateDb.getSyncState(pair.pair_id, entry.relative_path);
       const remote = remoteFiles.get(entry.relative_path);
@@ -835,6 +870,10 @@ export class SyncEngine {
       }
     } catch (err) {
       if (isAuthExpired(err)) throw err; // propagate to halt drain — do NOT emit "failed" or "queue_replay_failed"
+      if (isDiskFull(err)) {
+        this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
+        return "disk_full"; // signals drainQueue to abort the entire drain pass
+      }
       const msg = err instanceof Error ? err.message : "unknown";
       debugLog(
         `sync-engine: queue_replay_failed pair=${pair.pair_id} entry=${entry.id} path=${entry.relative_path}: ${msg}`,
