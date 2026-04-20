@@ -42,6 +42,7 @@ class PairDetailPanel(Adw.Bin):
 
     detail_stack: Gtk.Stack = Gtk.Template.Child()
     conflict_banner: Adw.Banner = Gtk.Template.Child()
+    error_banner: Adw.Banner = Gtk.Template.Child()
     setup_btn: Gtk.Button = Gtk.Template.Child()
     pair_name_heading: Gtk.Label = Gtk.Template.Child()
     local_path_row: Adw.ActionRow = Gtk.Template.Child()
@@ -63,6 +64,7 @@ class PairDetailPanel(Adw.Bin):
         self._conflict_log: ConflictLog | None = None  # lazy-created on first use
         self.setup_btn.connect("clicked", lambda _: self.emit("setup-requested"))
         self.conflict_banner.connect("button-clicked", self._on_conflict_banner_dismissed)
+        self.error_banner.connect("button-clicked", self._on_error_banner_dismissed)
         self.view_conflict_log_btn.connect(
             "clicked", lambda _: self.emit("view-conflict-log")
         )
@@ -71,6 +73,10 @@ class PairDetailPanel(Adw.Bin):
     def _on_conflict_banner_dismissed(self, _banner: Adw.Banner) -> None:
         """Hide the conflict banner when user clicks Dismiss."""
         self.conflict_banner.set_revealed(False)
+
+    def _on_error_banner_dismissed(self, _banner: Adw.Banner) -> None:
+        """Hide the error banner when user clicks Dismiss."""
+        self.error_banner.set_revealed(False)
 
     def _on_conflict_log_back(self, _btn: Gtk.Button) -> None:
         """Return to the detail view from the conflict log panel."""
@@ -111,6 +117,20 @@ class PairDetailPanel(Adw.Bin):
             self.conflict_banner.set_revealed(False)
             self.view_conflict_log_btn.set_visible(False)
 
+    def set_error_state(self, pair_id: str, has_error: bool, message: str = "") -> None:
+        """Update error banner — only if pair_id matches what is currently shown.
+
+        Called from window.py on pair_error, sync_complete, and row_activated.
+        Pair_id guard prevents a non-selected pair's error from updating the banner.
+        """
+        if self._current_pair_id != pair_id:
+            return
+        if has_error:
+            self.error_banner.set_title(message)
+            self.error_banner.set_revealed(True)
+        else:
+            self.error_banner.set_revealed(False)
+
     def show_no_pairs(self) -> None:
         """Show the 'no pairs' empty state."""
         self._cancel_sync_timer()
@@ -137,6 +157,7 @@ class PairDetailPanel(Adw.Bin):
         self.file_count_row.set_subtitle(pair_data.get("file_count_text", "--"))
         self.total_size_row.set_subtitle(pair_data.get("total_size_text", "--"))
         self.conflict_banner.set_revealed(False)
+        self.error_banner.set_revealed(False)   # Story 6-0d
         self.view_conflict_log_btn.set_visible(False)
         self.detail_stack.set_visible_child_name("detail")
 

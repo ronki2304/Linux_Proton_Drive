@@ -202,6 +202,14 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ---
 
+## Deferred from: code review of 6-0d-per-pair-error-detail-ux (2026-04-20)
+
+- **[6-0d CR W1]** `_error_pair_ids` and `_error_messages` not reset in `populate_pairs` — if re-login causes `populate_pairs` to run while stale error IDs happen to collide with new pair IDs, `_on_row_activated` will incorrectly restore the error banner; `clear_session()` normally prevents this, but `populate_pairs` has no direct guard. Pre-existing structural gap. `ui/src/protondrive/window.py:391-403`
+- **[6-0d CR W2]** Stale banner title persists on hide — `error_banner.set_title()` is only called in the `has_error=True` branch; when hidden via `set_error_state(False)` the widget title is not cleared, leaving stale text in the DOM (invisible, but potentially surfaced by screen readers or future banner reuse). Pre-existing pattern; harmless in current code paths since banner is never re-revealed without a matching `set_title` call. `ui/src/protondrive/widgets/pair_detail_panel.py`
+- **[6-0d CR W3]** Early `on_pair_error` message silently dropped before `populate_pairs` — the `row is None` guard returns before `self._error_messages[pair_id] = message` is reached; an engine error event arriving before the UI has populated pair rows is discarded, so re-selecting the pair later calls `set_error_state` with an empty-string fallback. Pre-existing behavior consistent with all other on_pair_error event-drop logic. `ui/src/protondrive/window.py:540-543`
+
+---
+
 _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 — see epic-4-retro-2026-04-18.md for full list._
 
 ---

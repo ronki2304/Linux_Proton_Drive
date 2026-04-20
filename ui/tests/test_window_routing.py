@@ -27,6 +27,7 @@ def _make_window() -> MainWindow:
     win._conflict_log_entries = []
     win._error_pair_ids = set()
     win._error_pending_cycle = set()
+    win._error_messages = {}
     win._row_activated_connected = False
     win._settings = MagicMock()
     return win
@@ -986,4 +987,145 @@ class TestSessionExpiredBannerCount:
         win.session_expired_banner.set_title.assert_called_once_with(
             "Session expired — sign in to resume sync"
         )
+
+
+# ---------------------------------------------------------------------------
+# Story 6-0d — per-pair error message storage
+# ---------------------------------------------------------------------------
+
+class TestOnPairErrorStoresMessage:
+    """on_pair_error stores message in _error_messages (Story 6-0d AC1)."""
+
+    def test_message_stored_in_error_messages(self):
+        win = _make_window()
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Free up space on /dev/sda1")
+        assert win._error_messages["p1"] == "Free up space on /dev/sda1"
+
+    def test_new_message_overwrites_old_for_same_pair(self):
+        win = _make_window()
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Free up space on /dev/sda1")
+        win.on_pair_error("p1", "Check folder permissions for /home/user/Docs")
+        assert win._error_messages["p1"] == "Check folder permissions for /home/user/Docs"
+
+    def test_unknown_pair_does_not_store_message(self):
+        win = _make_window()
+        win.on_pair_error("unknown", "Some error")
+        assert "unknown" not in win._error_messages
+
+    def test_detail_panel_set_error_state_called_with_message(self):
+        win = _make_window()
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Free up space on /dev/sda1")
+        win.pair_detail_panel.set_error_state.assert_called_once_with(
+            "p1", True, "Free up space on /dev/sda1"
+        )
+
+    def test_different_pair_error_calls_set_error_state_with_its_pair_id(self):
+        win = _make_window()
+        row1 = _make_row(pair_name="Docs")
+        row2 = _make_row(pair_name="Photos")
+        win._sync_pair_rows["p1"] = row1
+        win._sync_pair_rows["p2"] = row2
+        win.on_pair_error("p2", "Sync file error ETIMEDOUT")
+        win.pair_detail_panel.set_error_state.assert_called_once_with(
+            "p2", True, "Sync file error ETIMEDOUT"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Story 6-0d — error message cleared on clean sync
+# ---------------------------------------------------------------------------
+
+class TestErrorMessageClearedOnCleanSync:
+    """_error_messages cleared and panel updated when clean sync clears error (Story 6-0d AC4)."""
+
+    def test_error_message_cleared_after_two_clean_syncs(self):
+        win = _make_window()
+        row = _make_row()
+        row.state = "error"
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Free up space on /dev/sda1")
+        assert "p1" in win._error_messages
+
+        # First sync_complete: pending flag set → kept (error persists)
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:00.000Z"})
+        assert "p1" in win._error_messages
+
+        # Second sync_complete: no pending flag → error cleared
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:01.000Z"})
+        assert "p1" not in win._error_messages
+
+    def test_detail_panel_set_error_false_when_error_clears(self):
+        win = _make_window()
+        row = _make_row()
+        row.state = "error"
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Free up space on /dev/sda1")
+        win.pair_detail_panel.set_error_state.reset_mock()
+
+        # First sync: keeps error, second sync: clears
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:00.000Z"})
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:01.000Z"})
+        win.pair_detail_panel.set_error_state.assert_called_with("p1", False)
+
+    def test_error_message_not_cleared_when_pending_flag_still_set(self):
+        win = _make_window()
+        row = _make_row()
+        row.state = "error"
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_error("p1", "Free up space on /dev/sda1")
+        # Only one sync_complete: pending flag discarded but error kept
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:00.000Z"})
+        assert "p1" in win._error_messages  # message preserved — error not yet cleared
+
+
+# ---------------------------------------------------------------------------
+# Story 6-0d — row activation and select_pair restore error banner
+# ---------------------------------------------------------------------------
+
+class TestRowActivatedRestoresErrorBanner:
+    """Selecting an errored pair restores the error banner (Story 6-0d AC2)."""
+
+    def test_activating_error_pair_calls_set_error_state(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        row.pair_id = "p1"
+        win._sync_pair_rows["p1"] = row
+        win._error_pair_ids.add("p1")
+        win._error_messages["p1"] = "Free up space on /dev/sda1"
+        win._pairs_data["p1"] = {"pair_id": "p1", "local_path": "/home/user/Docs"}
+        list_box_mock = MagicMock()
+        win._on_row_activated(list_box_mock, row)
+        win.pair_detail_panel.set_error_state.assert_called_once_with(
+            "p1", True, "Free up space on /dev/sda1"
+        )
+
+    def test_activating_non_error_pair_does_not_call_set_error_state(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        row.pair_id = "p1"
+        win._sync_pair_rows["p1"] = row
+        win._pairs_data["p1"] = {"pair_id": "p1", "local_path": "/home/user/Docs"}
+        list_box_mock = MagicMock()
+        win._on_row_activated(list_box_mock, row)
+        win.pair_detail_panel.set_error_state.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Story 6-0d — clear_session resets _error_messages
+# ---------------------------------------------------------------------------
+
+class TestClearSessionResetsErrorMessages:
+    """clear_session resets _error_messages (Story 6-0d AC6)."""
+
+    def test_clear_session_clears_error_messages(self):
+        win = _make_window()
+        win._error_messages["p1"] = "Some error"
+        win.clear_session()
+        assert win._error_messages == {}
 

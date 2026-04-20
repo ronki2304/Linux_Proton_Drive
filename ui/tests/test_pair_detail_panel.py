@@ -20,6 +20,7 @@ def _make_panel() -> PairDetailPanel:
     panel._progress_card = None
     panel.detail_stack = MagicMock()
     panel.conflict_banner = MagicMock()
+    panel.error_banner = MagicMock()
     panel.setup_btn = MagicMock()
     panel.pair_name_heading = MagicMock()
     panel.local_path_row = MagicMock()
@@ -425,3 +426,53 @@ class TestConflictLogIntegration:
         panel = _make_panel()
         panel.show_pair({"pair_id": "p1", "local_path": "/tmp/Docs"})
         panel.view_conflict_log_btn.set_visible.assert_called_with(False)
+
+
+# ---------------------------------------------------------------------------
+# Story 6-0d — set_error_state
+# ---------------------------------------------------------------------------
+
+class TestSetErrorState:
+    """set_error_state shows/hides error_banner and guards by pair_id (Story 6-0d)."""
+
+    def test_has_error_reveals_banner_with_message(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_error_state("p1", True, "Free up space on /dev/sda1")
+        panel.error_banner.set_title.assert_called_once_with("Free up space on /dev/sda1")
+        panel.error_banner.set_revealed.assert_called_once_with(True)
+
+    def test_has_error_with_empty_message(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_error_state("p1", True, "")
+        panel.error_banner.set_title.assert_called_once_with("")
+        panel.error_banner.set_revealed.assert_called_once_with(True)
+
+    def test_no_error_hides_banner(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_error_state("p1", False)
+        panel.error_banner.set_revealed.assert_called_once_with(False)
+        panel.error_banner.set_title.assert_not_called()
+
+    def test_wrong_pair_id_is_noop(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_error_state("p2", True, "Some error")
+        panel.error_banner.set_revealed.assert_not_called()
+        panel.error_banner.set_title.assert_not_called()
+
+    def test_no_current_pair_is_noop(self):
+        panel = _make_panel()
+        panel._current_pair_id = None
+        panel.set_error_state("p1", True, "Some error")
+        panel.error_banner.set_revealed.assert_not_called()
+
+    def test_show_pair_hides_error_banner(self):
+        panel = _make_panel()
+        panel._current_pair_id = "p1"
+        panel.set_error_state("p1", True, "Sync error")
+        panel.error_banner.reset_mock()
+        panel.show_pair({"pair_id": "p2", "local_path": "/home/user/Docs"})
+        panel.error_banner.set_revealed.assert_called_with(False)

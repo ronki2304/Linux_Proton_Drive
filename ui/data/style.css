@@ -13,6 +13,12 @@
   border-bottom: 1px solid alpha(#f0a020, 0.4);
 }
 
+/* Error banner — red accent (Story 6-0d) */
+.error-banner {
+  background-color: alpha(#e83030, 0.12);
+  border-bottom: 1px solid alpha(#e83030, 0.35);
+}
+
 /* Conflict log — amber warning icon (Story 4-6) */
 .conflict-warning-icon {
   color: #f0a020;

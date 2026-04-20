@@ -32,6 +32,13 @@ template $ProtonDrivePairDetailPanel: Adw.Bin {
       child: Gtk.Box {
         orientation: vertical;
 
+        Adw.Banner error_banner {
+          title: "";
+          button-label: _("Dismiss");
+          revealed: false;
+          styles ["error-banner"]
+        }
+
         Adw.Banner conflict_banner {
           button-label: _("Dismiss");
           revealed: false;

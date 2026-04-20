@@ -1,6 +1,6 @@
 # Story 6.0d: Per-Pair Error Detail UX
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -86,9 +86,9 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Add `.error-banner` CSS to `style.css`** (AC: #2, #5)
-  - [ ] 1.1 Open `ui/data/style.css`
-  - [ ] 1.2 Append after the existing `.conflict-banner` block (~line 14):
+- [x] **Task 1: Add `.error-banner` CSS to `style.css`** (AC: #2, #5)
+  - [x] 1.1 Open `ui/data/style.css`
+  - [x] 1.2 Append after the existing `.conflict-banner` block (~line 14):
     ```css
     /* Error banner — red accent (Story 6-0d) */
     .error-banner {
@@ -97,9 +97,9 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
     }
     ```
 
-- [ ] **Task 2: Add `error_banner` to `pair-detail-panel.blp`** (AC: #2, #5)
-  - [ ] 2.1 Open `ui/data/ui/pair-detail-panel.blp`
-  - [ ] 2.2 Insert `error_banner` ABOVE `conflict_banner` (error has higher UX priority — should appear on top). The `"detail"` stack page's vertical box currently starts with `conflict_banner`; insert before it:
+- [x] **Task 2: Add `error_banner` to `pair-detail-panel.blp`** (AC: #2, #5)
+  - [x] 2.1 Open `ui/data/ui/pair-detail-panel.blp`
+  - [x] 2.2 Insert `error_banner` ABOVE `conflict_banner` (error has higher UX priority — should appear on top). The `"detail"` stack page's vertical box currently starts with `conflict_banner`; insert before it:
     ```blueprint
     Adw.Banner error_banner {
       title: "";
@@ -110,26 +110,26 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
 
     Adw.Banner conflict_banner {
     ```
-  - [ ] 2.3 `meson compile -C builddir` (see Dev Notes §1) — zero errors
+  - [x] 2.3 `meson compile -C builddir` (see Dev Notes §1) — zero errors
 
-- [ ] **Task 3: Update `pair_detail_panel.py` — add Template.Child and `set_error_state()`** (AC: #2, #3, #5, #7)
-  - [ ] 3.1 Open `ui/src/protondrive/widgets/pair_detail_panel.py`
-  - [ ] 3.2 Add `error_banner` Template.Child immediately after `conflict_banner` (~line 44):
+- [x] **Task 3: Update `pair_detail_panel.py` — add Template.Child and `set_error_state()`** (AC: #2, #3, #5, #7)
+  - [x] 3.1 Open `ui/src/protondrive/widgets/pair_detail_panel.py`
+  - [x] 3.2 Add `error_banner` Template.Child immediately after `conflict_banner` (~line 44):
     ```python
     conflict_banner: Adw.Banner = Gtk.Template.Child()
     error_banner: Adw.Banner = Gtk.Template.Child()
     ```
-  - [ ] 3.3 In `__init__`, wire the dismiss signal for `error_banner` immediately after `conflict_banner`'s signal (~line 65):
+  - [x] 3.3 In `__init__`, wire the dismiss signal for `error_banner` immediately after `conflict_banner`'s signal (~line 65):
     ```python
     self.error_banner.connect("button-clicked", self._on_error_banner_dismissed)
     ```
-  - [ ] 3.4 Add handler method immediately after `_on_conflict_banner_dismissed`:
+  - [x] 3.4 Add handler method immediately after `_on_conflict_banner_dismissed`:
     ```python
     def _on_error_banner_dismissed(self, _banner: Adw.Banner) -> None:
         """Hide the error banner when user clicks Dismiss."""
         self.error_banner.set_revealed(False)
     ```
-  - [ ] 3.5 Add `set_error_state()` method immediately after `set_conflict_state()` (~line 112):
+  - [x] 3.5 Add `set_error_state()` method immediately after `set_conflict_state()` (~line 112):
     ```python
     def set_error_state(self, pair_id: str, has_error: bool, message: str = "") -> None:
         """Update error banner — only if pair_id matches what is currently shown.
@@ -145,28 +145,28 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
         else:
             self.error_banner.set_revealed(False)
     ```
-  - [ ] 3.6 In `show_pair()`, hide the error banner alongside the conflict banner (~line 139):
+  - [x] 3.6 In `show_pair()`, hide the error banner alongside the conflict banner (~line 139):
     ```python
     self.conflict_banner.set_revealed(False)
     self.error_banner.set_revealed(False)   # Story 6-0d
     self.view_conflict_log_btn.set_visible(False)
     ```
-  - [ ] 3.7 `meson compile -C builddir` — zero errors
+  - [x] 3.7 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 4: Update `window.py` — 5 targeted changes** (AC: #1, #3, #4, #6)
-  - [ ] 4.1 Open `ui/src/protondrive/window.py`, locate `__init__` (~line 71). Add `_error_messages` immediately after `_error_pending_cycle`:
+- [x] **Task 4: Update `window.py` — 5 targeted changes** (AC: #1, #3, #4, #6)
+  - [x] 4.1 Open `ui/src/protondrive/window.py`, locate `__init__` (~line 71). Add `_error_messages` immediately after `_error_pending_cycle`:
     ```python
     self._error_pair_ids: set[str] = set()
     self._error_pending_cycle: set[str] = set()
     self._error_messages: dict[str, str] = {}  # Story 6-0d: most recent message per errored pair
     ```
-  - [ ] 4.2 Locate `clear_session()` (~line 160). Add `_error_messages` reset alongside the other error state resets:
+  - [x] 4.2 Locate `clear_session()` (~line 160). Add `_error_messages` reset alongside the other error state resets:
     ```python
     self._error_pair_ids = set()
     self._error_pending_cycle = set()
     self._error_messages = {}  # Story 6-0d
     ```
-  - [ ] 4.3 Locate `on_pair_error()` (~line 522). Remove `_` prefix from `_message` and add message storage + panel call:
+  - [x] 4.3 Locate `on_pair_error()` (~line 522). Remove `_` prefix from `_message` and add message storage + panel call:
     ```python
     def on_pair_error(self, pair_id: str, message: str) -> None:
         """Handle engine error for a specific sync pair (Story 5-5 AC3, AC4; 5-9 AC3, AC5; 6-0d AC1)."""
@@ -180,7 +180,7 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
         self.pair_detail_panel.set_error_state(pair_id, True, message)  # Story 6-0d
         self._update_footer_error_state()
     ```
-  - [ ] 4.4 Locate `on_sync_complete()`, find the `else` branch that calls `self._error_pair_ids.discard(pair_id)` (~line 589). Add the two Story 6-0d lines immediately after the discard:
+  - [x] 4.4 Locate `on_sync_complete()`, find the `else` branch that calls `self._error_pair_ids.discard(pair_id)` (~line 589). Add the two Story 6-0d lines immediately after the discard:
     ```python
     else:
         self._error_pair_ids.discard(pair_id)  # clean cycle — clear error
@@ -191,7 +191,7 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
         else:
             row.set_state("synced")
     ```
-  - [ ] 4.5 Locate `_on_row_activated()` (~line 412). Add error banner restoration after `set_conflict_state`:
+  - [x] 4.5 Locate `_on_row_activated()` (~line 412). Add error banner restoration after `set_conflict_state`:
     ```python
     self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
     if pair_id in self._error_pair_ids:                             # Story 6-0d
@@ -200,7 +200,7 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
         )                                                          # Story 6-0d
     self.nav_split_view.set_show_content(True)
     ```
-  - [ ] 4.6 Locate `select_pair()` (~line 422). Add the same error banner restoration pattern after `set_conflict_state` (mirrors 4.5 exactly — see Dev Notes §3):
+  - [x] 4.6 Locate `select_pair()` (~line 422). Add the same error banner restoration pattern after `set_conflict_state` (mirrors 4.5 exactly — see Dev Notes §3):
     ```python
     self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
     if pair_id in self._error_pair_ids:                             # Story 6-0d
@@ -209,33 +209,43 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
         )                                                          # Story 6-0d
     self.nav_split_view.set_show_content(True)
     ```
-  - [ ] 4.7 `meson compile -C builddir` — zero errors
+  - [x] 4.7 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 5: Update `_make_panel()` and add `TestSetErrorState` in `test_pair_detail_panel.py`** (AC: #8)
-  - [ ] 5.1 Open `ui/tests/test_pair_detail_panel.py`, locate `_make_panel()` (~line 15)
-  - [ ] 5.2 Add `panel.error_banner = MagicMock()` immediately after `panel.conflict_banner = MagicMock()` (~line 22):
+- [x] **Task 5: Update `_make_panel()` and add `TestSetErrorState` in `test_pair_detail_panel.py`** (AC: #8)
+  - [x] 5.1 Open `ui/tests/test_pair_detail_panel.py`, locate `_make_panel()` (~line 15)
+  - [x] 5.2 Add `panel.error_banner = MagicMock()` immediately after `panel.conflict_banner = MagicMock()` (~line 22):
     ```python
     panel.conflict_banner = MagicMock()
     panel.error_banner = MagicMock()
     ```
-  - [ ] 5.3 Append new test class at end of file (see Dev Notes §4 for exact test code)
-  - [ ] 5.4 `meson compile -C builddir` — zero errors
+  - [x] 5.3 Append new test class at end of file (see Dev Notes §4 for exact test code)
+  - [x] 5.4 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 6: Update `_make_window()` and add error tests in `test_window_routing.py`** (AC: #8)
-  - [ ] 6.1 Open `ui/tests/test_window_routing.py`, locate `_make_window()` (~line 15)
-  - [ ] 6.2 Add `win._error_messages = {}` immediately after `win._error_pending_cycle = set()` (~line 29). **This is a regression-prevention step** — existing `TestErrorStatePersistence` tests call `on_pair_error()` which will now access `self._error_messages`; without this update those tests fail with `AttributeError`:
+- [x] **Task 6: Update `_make_window()` and add error tests in `test_window_routing.py`** (AC: #8)
+  - [x] 6.1 Open `ui/tests/test_window_routing.py`, locate `_make_window()` (~line 15)
+  - [x] 6.2 Add `win._error_messages = {}` immediately after `win._error_pending_cycle = set()` (~line 29). **This is a regression-prevention step** — existing `TestErrorStatePersistence` tests call `on_pair_error()` which will now access `self._error_messages`; without this update those tests fail with `AttributeError`:
     ```python
     win._error_pair_ids = set()
     win._error_pending_cycle = set()
     win._error_messages = {}
     ```
-  - [ ] 6.3 Append new test classes at end of file (see Dev Notes §5 for exact test code)
-  - [ ] 6.4 `meson compile -C builddir` — zero errors
+  - [x] 6.3 Append new test classes at end of file (see Dev Notes §5 for exact test code)
+  - [x] 6.4 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 7: Final validation** (AC: #8, #9)
-  - [ ] 7.1 `meson compile -C builddir` from project root — zero errors
-  - [ ] 7.2 `.venv/bin/pytest ui/tests/` — zero failures, zero regressions against prior UI tests
-  - [ ] 7.3 Set story status to `review`
+- [x] **Task 7: Final validation** (AC: #8, #9)
+  - [x] 7.1 `meson compile -C builddir` from project root — zero errors
+  - [x] 7.2 `.venv/bin/pytest ui/tests/` — zero failures, zero regressions against prior UI tests (607 passed)
+  - [x] 7.3 Set story status to `review`
+
+### Review Findings
+
+- [ ] [Review][Decision] Empty message guard — `set_error_state(pair_id, True, "")` reveals a styled red banner with no text; no guard exists; should this suppress the banner or show a fallback placeholder? `pair_detail_panel.py`
+- [ ] [Review][Decision] Missing `select_pair()` test for error banner restore — `TestRowActivatedRestoresErrorBanner` covers `_on_row_activated` only; `select_pair()` branch of AC2 has no test; story §9 marks it "optional" but AC8 implicitly requires coverage — add or formally defer? `ui/tests/test_window_routing.py`
+- [ ] [Review][Patch] Duplicate error-banner restore blocks — identical 4-line `if pair_id in self._error_pair_ids` pattern in `_on_row_activated` and `select_pair`; extract to private helper to prevent future divergence `window.py:425-431,445-451`
+- [ ] [Review][Patch] Weak test assertion in `test_show_pair_hides_error_banner` — uses `assert_called_with(False)` instead of `assert_called_once_with(False)`; masks double-call regressions `ui/tests/test_pair_detail_panel.py`
+- [x] [Review][Defer] `_error_pair_ids` and `_error_messages` not reset in `populate_pairs` — if re-login causes `populate_pairs` to run with stale error IDs that collide with new pair IDs, banner restores incorrectly; pre-existing structural gap `window.py:391-403` — deferred, pre-existing
+- [x] [Review][Defer] Stale banner title on hide — title only set on `has_error=True`; stale text persists in widget when hidden; harmless since banner is never re-revealed without matching `set_title`; pre-existing pattern `pair_detail_panel.py` — deferred, pre-existing
+- [x] [Review][Defer] Early `on_pair_error` message silently dropped — `row is None` guard exits before `_error_messages` write; engine error before `populate_pairs` is discarded; pre-existing behavior consistent with existing event-drop pattern `window.py:540-543` — deferred, pre-existing
 
 ---
 
@@ -516,6 +526,23 @@ claude-sonnet-4-6
 
 ### Debug Log References
 
+(none)
+
 ### Completion Notes List
 
+- Implemented all AC1–AC7: `_error_messages` dict storage, `set_error_state()` with pair_id guard, auto-hide on clean sync, banner restoration on row activation and `select_pair()`, `clear_session()` reset, `show_pair()` hide.
+- Blueprint `error_banner` inserted above `conflict_banner` per UX priority order (AC §2).
+- Meson compile clean on all 3 compile checkpoints (Tasks 2, 3, 4).
+- 57 tests in `test_pair_detail_panel.py` — all passed (6 new `TestSetErrorState` tests).
+- 107 tests in `test_window_routing.py` — all passed (18 new tests: `TestOnPairErrorStoresMessage`, `TestErrorMessageClearedOnCleanSync`, `TestRowActivatedRestoresErrorBanner`, `TestClearSessionResetsErrorMessages`).
+- Full suite: 607 passed, 0 failures, 0 regressions.
+
 ### File List
+
+- `ui/data/style.css`
+- `ui/data/ui/pair-detail-panel.blp`
+- `ui/src/protondrive/widgets/pair_detail_panel.py`
+- `ui/src/protondrive/window.py`
+- `ui/tests/test_pair_detail_panel.py`
+- `ui/tests/test_window_routing.py`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`

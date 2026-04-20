@@ -70,6 +70,7 @@ class MainWindow(Adw.ApplicationWindow):
         # Used to clear error state only when a full sync cycle completes with no new errors.
         self._error_pair_ids: set[str] = set()
         self._error_pending_cycle: set[str] = set()
+        self._error_messages: dict[str, str] = {}  # Story 6-0d: most recent message per errored pair
         # Maps pair_id → list of conflict copy absolute paths (Story 4-4).
         # Populated by on_conflict_detected; resolved in on_sync_complete.
         self._conflict_copies_by_pair: dict[str, list[str]] = {}
@@ -166,6 +167,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._conflict_log_entries = []          # Story 4-6
         self._error_pair_ids = set()
         self._error_pending_cycle = set()
+        self._error_messages = {}  # Story 6-0d
         self.hide_engine_crashed_banner()
         self._row_activated_connected = False
         self.pair_detail_panel.show_no_pairs()
@@ -423,6 +425,10 @@ class MainWindow(Adw.ApplicationWindow):
         # Immediately restore banner if this pair has active conflicts.
         conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
+        if pair_id in self._error_pair_ids:                             # Story 6-0d
+            self.pair_detail_panel.set_error_state(                    # Story 6-0d
+                pair_id, True, self._error_messages.get(pair_id, "")  # Story 6-0d
+            )                                                          # Story 6-0d
         self.nav_split_view.set_show_content(True)
 
     def select_pair(self, pair_id: str) -> None:
@@ -439,6 +445,10 @@ class MainWindow(Adw.ApplicationWindow):
         self.pair_detail_panel.show_pair(pair_data)
         conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
+        if pair_id in self._error_pair_ids:                             # Story 6-0d
+            self.pair_detail_panel.set_error_state(                    # Story 6-0d
+                pair_id, True, self._error_messages.get(pair_id, "")  # Story 6-0d
+            )                                                          # Story 6-0d
         self.nav_split_view.set_show_content(True)
 
     def on_offline(self) -> None:
@@ -527,14 +537,16 @@ class MainWindow(Adw.ApplicationWindow):
         toast.set_timeout(5)
         self.toast_overlay.add_toast(toast)
 
-    def on_pair_error(self, pair_id: str, _message: str) -> None:
-        """Handle engine error for a specific sync pair (Story 5-5 AC3, AC4; 5-9 AC3, AC5)."""
+    def on_pair_error(self, pair_id: str, message: str) -> None:
+        """Handle engine error for a specific sync pair (Story 5-5 AC3, AC4; 5-9 AC3, AC5; 6-0d AC1)."""
         row = self._sync_pair_rows.get(pair_id)
         if row is None:
             return
         row.set_state("error")
         self._error_pair_ids.add(pair_id)
         self._error_pending_cycle.add(pair_id)
+        self._error_messages[pair_id] = message          # Story 6-0d
+        self.pair_detail_panel.set_error_state(pair_id, True, message)  # Story 6-0d
         self._update_footer_error_state()
 
     def on_rate_limited(self, payload: dict[str, Any]) -> None:
@@ -595,6 +607,8 @@ class MainWindow(Adw.ApplicationWindow):
                     self._error_pending_cycle.discard(pair_id)  # reset for next cycle; keep error
                 else:
                     self._error_pair_ids.discard(pair_id)  # clean cycle — clear error
+                    self._error_messages.pop(pair_id, None)                     # Story 6-0d
+                    self.pair_detail_panel.set_error_state(pair_id, False)      # Story 6-0d
                     if pair_conflict_count > 0:
                         row.set_state("conflict", conflict_count=pair_conflict_count)
                     else:
