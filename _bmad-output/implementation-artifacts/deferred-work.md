@@ -19,18 +19,8 @@ All other items from Epics 1–4 have been closed (fixed, scoped to planned epic
 
 _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been removed — see sprint-status.yaml and epic-4-retro-2026-04-18.md for full triage._
 
-- **[4-0b W1]** Unbounded retry on persistent `delete_local` failures (EPERM/EACCES): `sync_state` is preserved on non-ENOENT errors so next cycle retries, but there is no retry counter or dead-letter mechanism — a permanently unreadable file will retry forever. Established engine pattern; no bounding mechanism exists yet. `engine/src/sync-engine.ts`
 - **[4-0b W2]** Local file modified + remote deleted → `delete_local` silently discards unsaved edits: `computeWorkList` does not compare `state.local_mtime` vs current `local.mtime` before pushing `delete_local`. A local edit after the last sync + a remote deletion in the same cycle will destroy the user's local changes without surfacing a conflict. `engine/src/sync-engine.ts`
-- **[2-5]** `walkLocalTree` follows symlinks without restriction — symlink cycle causes infinite recursion; add `followSymlinks: false` or visited-set before supporting symlinked folder trees. `engine/src/sync-engine.ts`
-- **[2-5]** `walkRemoteTree` unbounded recursion — no max-depth or cycle guard for circular folder references (e.g. Proton shared folders); risk is present today on every cold start via `startSyncAll`/`computeWorkList`, not gated on multi-user scenarios. Add depth cap. `engine/src/sync-engine.ts`
 - **[4-2/4-3]** Same-day conflict copy overwrite — `rename()` atomically replaces `<path>.conflict-YYYY-MM-DD` if it already exists from an earlier same-day collision. First conflict copy is silently destroyed. Known MVP limitation. `engine/src/sync-engine.ts`
-
----
-
-## Deferred from: code review of 5-2-re-auth-modal-with-queued-change-count (2026-04-19)
-
-- **[5-2 D1]** No default body in Blueprint — `reauth-dialog.blp` has no `body:` property; if any future call site calls `present()` without first calling `set_queued_changes()`, the dialog shows an empty body. Current code always calls `set_queued_changes()` before `present()`, so this is a latent footgun, not an active bug. `ui/data/ui/reauth-dialog.blp`
-- **[5-2 D2]** Stale queued-change count with rapid `token_expired` events — if the engine fires `token_expired` twice in quick succession, the second event's `queued_changes` count is not reflected in the already-showing dialog (idempotency guard blocks creation of a second dialog). Engine-level concern; engine should not emit `token_expired` more than once per session expiry. `ui/src/protondrive/main.py`
 
 ---
 
@@ -38,9 +28,6 @@ _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been remo
 
 - **[5-5 D1]** Test gap: Sites 1–5 DISK_FULL in main sync loop not directly tested — acknowledged in story dev notes as acceptable low-risk tradeoff. `engine/src/sync-engine.test.ts`
 - **[5-5 D2]** Multi-pair error: `on_pair_error` overwrites footer with last errored pair name — second DISK_FULL event for a different pair silently replaces the first. Story 5-9 priority ordering. `ui/src/protondrive/window.py`
-- **[5-5 D3]** `on_online` clears error state on offline→online transition — `on_online` calls `set_state("synced")` on error-state rows without guard. Story 5-9 priority ordering. `ui/src/protondrive/window.py`
-- **[5-5 D4]** `on_watcher_status("ready")` clears footer despite error rows — watcher restart calls `update_all_synced()` without checking for error-state rows. Story 5-9. `ui/src/protondrive/window.py`
-- **[5-5 D5]** Multiple DISK_FULL events per cycle → screen-reader flood — N files hitting ENOSPC emit N identical DISK_FULL events; UI announces with HIGH priority N times. Story 5-9 deduplication. `engine/src/sync-engine.ts`
 - **[5-5 D6]** No multi-entry test for `queue_replay_failed` suppression — if a later queue entry fails non-ENOSPC after DISK_FULL entries, both codes get emitted. Low risk / out of scope. `engine/src/sync-engine.test.ts`
 
 ---
@@ -49,7 +36,6 @@ _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been remo
 
 - **[5-6 D1]** Test coverage gap: Sites 2–5 in reconcilePair lack dedicated PERMISSION_DENIED tests — conflict_update download, collision rename, collision download, and main download loop catch sites not directly covered; Site 1 covered by updated pre-existing test, Site 6 by 6 new drainQueue tests; all 5 sites use identical emit pattern. `engine/src/sync-engine.test.ts`
 - **[5-6 D2]** stat() inner catch emits `queue_replay_failed` for EACCES/EPERM instead of `PERMISSION_DENIED` — inner try/catch at lines 794-818 fires before outer `isPermissionDenied` check at line 903; out of scope for the 6 specified catch sites in this story; code comment acknowledges EACCES/EPERM are user-actionable. `engine/src/sync-engine.ts:796-818`
-- **[5-6 D3]** Infinite retry on permanently permission-denied files — `continue` after PERMISSION_DENIED (like `sync_file_error`) means a permanently unreadable file retries on every drain cycle with no backoff, dead-letter, or retry cap; pre-existing architecture pattern also deferred from earlier stories. `engine/src/sync-engine.ts`
 
 ---
 
@@ -185,17 +171,11 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 ## Deferred from: code review of 5-0-pre-epic-5-debt-cleanup (2026-04-18)
 
 - **[5-0 CR W1]** `newFileCollisionItems` loop has same same-day overwrite gap as `conflictItems` but no uniqueness counter — uses bare `rename(localFilePath, conflictCopyPath)` with no existence probe; a second same-day collision on the same filename silently clobbers the first conflict copy. The kept [4-2/4-3] open item documents the `conflictItems` path but does not capture this parallel gap. `engine/src/sync-engine.ts:341-343`
-- **[5-0 CR W2]** `conflictCopyPath` uniqueness probe loop (`while (true)`) has no max-`n` iteration cap — re-probes `stat()` until it throws; an adversarial filesystem state or a directory with many existing `.conflict-*` entries could spin indefinitely. `engine/src/sync-engine.ts:271-283`
-
----
 
 ---
 
 ## Deferred from: code review of 5-1-401-detection-and-sync-halt (2026-04-19)
 
-- **[5-1 CR W1]** Banner has no re-auth action button — `Adw.Banner` in `window.blp` has no `button-label`/`action-name`; Story 5-2 will add the re-auth modal trigger from the banner. `ui/data/ui/window.blp`
-- **[5-1 CR W2]** `startSyncAll` comment misleads about 401 path — comment "NetworkMonitor will trigger a fresh drain on reconnect" is accurate for network-failure but does not note that 401 (`onTokenExpired`) does not reconnect-drain; documentation smell only. `engine/src/sync-engine.ts:~132`
-- **[5-1 CR W3]** Banner `revealed` state not reset on `logout()` — `logout()` hides main view via `show_pre_auth()` so banner is not visible; `on_session_ready` clears it on re-auth; only a gap if user somehow reaches main view without `on_session_ready`. `ui/src/protondrive/main.py`
 - **[5-1 CR W4]** `TestTokenExpiredResetsWatcherStatus` tests call `_on_token_expired` with full-message-shaped payload — pre-existing; old tests pass `{"payload": {...}}` while correct shape is `{"queued_changes": N}` directly; old tests don't check extracted values so pass regardless; harmless inconsistency. `ui/tests/test_main.py`
 - **[5-1 CR W5]** 401 during conflict download leaves orphaned `.conflict-YYYY-MM-DD` file — conflict copy written and `conflict_detected` emitted before download; if download throws `AuthExpiredError`, copy is orphaned on disk; next reconcile after re-auth may create a second conflict copy for the same file. `engine/src/sync-engine.ts:~335`
 
@@ -226,11 +206,8 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ## Deferred from: code review of 5-4-dirty-session-flag-and-crash-recovery (2026-04-19)
 
-- **[5-4 CR W1]** `cleanTmpFilesInDir` no depth limit — no stack-overflow guard for deep directory trees; mirrors [2-5] open items for `walkLocalTree`/`walkRemoteTree`. `engine/src/main.ts:cleanTmpFilesInDir`
-- **[5-4 CR W2]** Missing `session_state` row silently no-ops — `isDirtySession` returns false and `setDirtySession` no-ops on absent row; migration guarantees row via `INSERT OR IGNORE` so only abnormal DB corruption triggers this; consequence is pre-feature behavior (no recovery). `engine/src/state-db.ts`
 - **[5-4 CR W3]** `runCrashRecovery` clears dirty flag without try/finally guard — latent: `cleanTmpFilesInDir` swallows all errors so it cannot currently throw; if it ever does, flag is cleared despite incomplete cleanup. `engine/src/main.ts:runCrashRecovery`
 - **[5-4 CR W4]** `unlink` error suppression hides EACCES/EBUSY — bare `catch` silences all unlink errors; return count undercounts failures; return value unused by callers so no current functional impact. `engine/src/main.ts:cleanTmpFilesInDir`
-- **[5-4 CR W5]** `on_event` callback signature inconsistency — `_on_crash_recovery_complete` receives `payload` directly; older handlers receive full `message` dict; pre-existing inconsistency, no AC impact. `ui/src/protondrive/main.py`
 
 ---
 
@@ -240,5 +217,4 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 
 ## Deferred from: code review of 5-8-actionable-error-file-locked (2026-04-19)
 
-- **[5-8 CR W1]** Null guard test only asserts negative — Test at `sync-engine.test.ts:2539` verifies `FILE_LOCKED NOT emitted` on `throw null` but does not assert `SDK_ERROR IS emitted`. If null silently vanished from the error pipeline (regression), the test would not catch it. Low risk; null guard pattern is well-established. `engine/src/sync-engine.test.ts:2539`
 - **[5-8 CR W2]** `delete_local` catch: PERMISSION_DENIED and FILE_LOCKED not checked — `unlink()` failures at `sync-engine.ts:491` emit SDK_ERROR for all non-ENOENT errors including EPERM (directory became read-only). Story 5-8 spec explicitly excludes FILE_LOCKED for delete_local; Story 5-6 also omitted PERMISSION_DENIED here. Pre-existing gap. `engine/src/sync-engine.ts:491`

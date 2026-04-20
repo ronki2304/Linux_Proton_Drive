@@ -91,6 +91,12 @@ type WorkItem =
       remoteSize: number;
     };
 
+// ── Safety constants ─────────────────────────────────────────────────────────
+
+const MAX_DRAIN_ATTEMPTS = 5;    // dead-letter change_queue entry after N "failed" outcomes
+const MAX_REMOTE_TREE_DEPTH = 50; // guard against circular remote folder graphs
+const MAX_CONFLICT_SUFFIX = 100;  // cap same-day conflict copy uniqueness counter
+
 // ── SyncEngine ───────────────────────────────────────────────────────────────
 
 export class SyncEngine {
@@ -305,7 +311,7 @@ export class SyncEngine {
       {
         let n = 2;
         let candidate = conflictCopyPath;
-        while (true) {
+        while (n <= MAX_CONFLICT_SUFFIX) {
           try {
             await stat(candidate);
             // Path exists — try next counter suffix.
@@ -316,6 +322,9 @@ export class SyncEngine {
             break;
           }
         }
+        // If all suffixes 2–100 are taken (>100 same-day conflicts on one file),
+        // conflictCopyPath remains the initial base path; the rename below will
+        // atomically overwrite that slot. Extreme edge case — loop now terminates.
       }
       const tmpPath = `${conflictCopyPath}.protondrive-tmp-${Date.now()}`;
       try {
@@ -739,8 +748,15 @@ export class SyncEngine {
             failed++;
             diskFullAbort = true;
             break; // stop this pair's remaining entries
-          } else {
+          } else { // "failed"
             failed++;
+            const newAttempts = this.stateDb.incrementAttemptCount(entry.id);
+            if (newAttempts >= MAX_DRAIN_ATTEMPTS) {
+              this.stateDb.dequeue(entry.id);
+              debugLog(
+                `sync-engine: dead-lettered queue entry ${entry.id} (${entry.relative_path}) after ${newAttempts} attempts`,
+              );
+            }
           }
         }
         if (diskFullAbort) break; // stop all further pairs
@@ -1043,32 +1059,44 @@ export class SyncEngine {
   }> {
     const fileMap = new Map<string, LocalFile>();
     const dirSet = new Set<string>();
-    // Let readdir failures propagate — an inaccessible local path aborts the pair
-    // sync cycle via startSyncAll's catch, emitting sync_cycle_error. (F3)
-    const entries = await readdir(localPath, { withFileTypes: true, recursive: true });
-    for (const entry of entries) {
-      // entry.parentPath is Node.js 21.2+; fallback to entry.path for older versions
-      const dir = (entry as { parentPath?: string }).parentPath ?? (entry as { path?: string }).path ?? localPath;
-      if (entry.isDirectory()) {
-        const relDir = relative(localPath, join(dir, entry.name));
-        if (relDir) dirSet.add(relDir);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const fullPath = join(dir, entry.name);
-      const relPath = relative(localPath, fullPath);
+    const visited = new Set<string>([localPath]);
+
+    const walkDir = async (dirPath: string, isRoot: boolean): Promise<void> => {
+      let entries;
       try {
-        const s = await stat(fullPath);
-        fileMap.set(relPath, {
-          relativePath: relPath,
-          mtime: s.mtime.toISOString(),
-          size: s.size,
-        });
-      } catch {
-        // File deleted between readdir and stat — skip it.
-        debugLog(`sync-engine: stat failed for ${fullPath} — skipping`);
+        entries = await readdir(dirPath, { withFileTypes: true });
+      } catch (err) {
+        if (isRoot) throw err; // root failure propagates — inaccessible pair path aborts sync cycle
+        debugLog(`sync-engine: readdir failed for ${dirPath} — skipping`);
+        return;
       }
-    }
+      for (const entry of entries) {
+        if (entry.isSymbolicLink()) continue; // skip symlinks entirely — no traversal
+        const fullPath = join(dirPath, entry.name);
+        if (entry.isDirectory()) {
+          if (visited.has(fullPath)) continue; // cycle guard (bind-mounts, hard-linked dirs)
+          visited.add(fullPath);
+          const relDir = relative(localPath, fullPath);
+          if (relDir) dirSet.add(relDir);
+          await walkDir(fullPath, false);
+        } else if (entry.isFile()) {
+          const relPath = relative(localPath, fullPath);
+          try {
+            const s = await stat(fullPath);
+            fileMap.set(relPath, {
+              relativePath: relPath,
+              mtime: s.mtime.toISOString(),
+              size: s.size,
+            });
+          } catch {
+            // File deleted between readdir and stat — skip it.
+            debugLog(`sync-engine: stat failed for ${fullPath} — skipping`);
+          }
+        }
+      }
+    };
+
+    await walkDir(localPath, true);
     return { files: fileMap, dirs: dirSet };
   }
 
@@ -1076,7 +1104,13 @@ export class SyncEngine {
     folderId: string,
     prefix: string,
     client: DriveClient,
+    depth = 0,
   ): Promise<{ files: Map<string, RemoteFile>; folders: Map<string, string> }> {
+    if (depth >= MAX_REMOTE_TREE_DEPTH) {
+      debugLog(`sync-engine: walkRemoteTree depth cap (${MAX_REMOTE_TREE_DEPTH}) at "${prefix}" — subtree skipped`);
+      return { files: new Map(), folders: new Map() };
+    }
+
     const fileMap = new Map<string, RemoteFile>();
     const folderMap = new Map<string, string>();
 
@@ -1092,7 +1126,7 @@ export class SyncEngine {
     for (const sf of subfolders) {
       const relDir = prefix + sf.name;
       folderMap.set(relDir, sf.id);
-      const sub = await this.walkRemoteTree(sf.id, relDir + "/", client);
+      const sub = await this.walkRemoteTree(sf.id, relDir + "/", client, depth + 1);
       for (const [k, v] of sub.files) fileMap.set(k, v);
       for (const [k, v] of sub.folders) folderMap.set(k, v);
     }

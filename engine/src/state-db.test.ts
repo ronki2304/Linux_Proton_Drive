@@ -68,9 +68,9 @@ describe("StateDb — init", () => {
     expect(queue[0]!.queued_at).toBe("2026-04-09T10:00:00.000Z");
   });
 
-  it("sets user_version to 3 after migration (AC4)", () => {
-    // user_version tracks the schema version; after all migrations it must equal CURRENT_VERSION (3).
-    expect(db.pragma("user_version")).toBe(3);
+  it("sets user_version to 4 after migration (AC4)", () => {
+    // user_version tracks the schema version; after all migrations it must equal CURRENT_VERSION (4).
+    expect(db.pragma("user_version")).toBe(4);
   });
 });
 

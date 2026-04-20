@@ -31,6 +31,7 @@ export interface ChangeQueueEntry {
   relative_path: string;
   change_type: ChangeType;
   queued_at: string; // ISO 8601
+  attempt_count?: number; // migration v4, default 0 from DB
 }
 
 // ── Migration definitions ────────────────────────────────────────────────────
@@ -81,9 +82,13 @@ const MIGRATIONS: Migration[] = [
       INSERT OR IGNORE INTO session_state (id, dirty) VALUES (1, 0);
     `,
   },
+  {
+    version: 4,
+    up: `ALTER TABLE change_queue ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;`,
+  },
 ];
 
-const CURRENT_VERSION = 3;
+const CURRENT_VERSION = 4;
 
 // ── StateDb ──────────────────────────────────────────────────────────────────
 
@@ -302,6 +307,15 @@ export class StateDb {
       .prepare(`SELECT COUNT(*) AS cnt FROM change_queue WHERE pair_id = ?`)
       .get(pairId) as { cnt: number };
     return row.cnt;
+  }
+
+  incrementAttemptCount(id: number): number {
+    const row = this.db
+      .prepare(
+        `UPDATE change_queue SET attempt_count = attempt_count + 1 WHERE id = ? RETURNING attempt_count`
+      )
+      .get(id) as { attempt_count: number } | undefined;
+    return row?.attempt_count ?? 0;
   }
 
   setDirtySession(dirty: boolean): void {

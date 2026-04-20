@@ -760,6 +760,23 @@ describe("crash recovery helpers (Story 5-4)", () => {
     expect(count).toBe(0);
   });
 
+  it("cleanTmpFilesInDir depth cap: 51-level deep tree returns without throwing", async () => {
+    // Build a 51-level deep directory tree; depth cap fires at level 50
+    let deepDir = tmpDir;
+    for (let i = 0; i < 51; i++) {
+      deepDir = path.join(deepDir, "level");
+      fs.mkdirSync(deepDir);
+    }
+    // Place a tmp file at the deepest level — should not be reached due to depth cap
+    fs.writeFileSync(path.join(deepDir, "deep.protondrive-tmp-99999"), "data");
+
+    // Must complete without stack overflow or hang
+    const count = await cleanTmpFilesInDir(tmpDir);
+    // File at depth 51 was not cleaned (depth cap at 50 prevents reaching it)
+    expect(count).toBe(0);
+    expect(fs.existsSync(path.join(deepDir, "deep.protondrive-tmp-99999"))).toBe(true);
+  });
+
   it("runCrashRecovery returns false when dirty flag is not set", async () => {
     const db = new StateDb(":memory:");
     const result = await runCrashRecovery(db);

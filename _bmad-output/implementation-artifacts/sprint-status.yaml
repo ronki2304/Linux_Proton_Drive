@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-20  # epic-5-retrospective done
+last_updated: 2026-04-20  # 6-0e ready-for-dev
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -117,12 +117,12 @@ development_status:
   epic-5-retrospective: done
 
   # Epic 6: Multi-Pair Management & Validation
-  epic-6: backlog
-  6-0a-unbounded-loop-recursion-safety: backlog
-  6-0b-error-code-routing-correctness: backlog
-  6-0c-ui-state-correctness: backlog
-  6-0d-per-pair-error-detail-ux: backlog
-  6-0e-test-gap-closure: backlog
+  epic-6: in-progress
+  6-0a-unbounded-loop-recursion-safety: review
+  6-0b-error-code-routing-correctness: ready-for-dev
+  6-0c-ui-state-correctness: ready-for-dev
+  6-0d-per-pair-error-detail-ux: ready-for-dev
+  6-0e-test-gap-closure: ready-for-dev
   6-1-add-subsequent-sync-pair: backlog
   6-2-nesting-and-overlap-validation: backlog
   6-3-remove-sync-pair-with-confirmation: backlog

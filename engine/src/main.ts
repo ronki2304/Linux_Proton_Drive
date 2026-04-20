@@ -605,7 +605,13 @@ export async function handleCommand(
   };
 }
 
-export async function cleanTmpFilesInDir(dirPath: string): Promise<number> {
+const MAX_CLEAN_DEPTH = 50;
+
+export async function cleanTmpFilesInDir(dirPath: string, depth = 0): Promise<number> {
+  if (depth >= MAX_CLEAN_DEPTH) {
+    process.stderr.write(`[ENGINE] cleanTmpFilesInDir: depth cap (${MAX_CLEAN_DEPTH}) at "${dirPath}" — skipping\n`);
+    return 0;
+  }
   let count = 0;
   let entries;
   try {
@@ -616,7 +622,7 @@ export async function cleanTmpFilesInDir(dirPath: string): Promise<number> {
   for (const entry of entries) {
     const fullPath = join(dirPath, entry.name);
     if (entry.isDirectory()) {
-      count += await cleanTmpFilesInDir(fullPath);
+      count += await cleanTmpFilesInDir(fullPath, depth + 1);
     } else if (entry.name.includes(".protondrive-tmp-")) {
       try {
         await unlink(fullPath);

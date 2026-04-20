@@ -8,7 +8,7 @@
  */
 
 import { describe, it, mock, beforeEach, afterEach, expect } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, statSync, chmodSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, statSync, chmodSync, readFileSync, existsSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -2954,5 +2954,217 @@ describe("SyncEngine — SDK_ERROR (Story 5-9)", () => {
       (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "SDK_ERROR",
     );
     expect(sdkError).toBeUndefined();
+  });
+});
+
+// ── Story 6-0a: Safety mechanisms ───────────────────────────────────────────
+
+describe("SyncEngine — dead-letter (6-0a AC1)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `dead-letter-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("entry failing MAX_DRAIN_ATTEMPTS times is dead-lettered and absent from queue", async () => {
+    writeFileSync(join(tmpDir, "fail.txt"), "content");
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: "fail.txt",
+      change_type: "created",
+      queued_at: new Date().toISOString(),
+    });
+
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => { throw new Error("permanent failure"); }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    // Attempts 1–4: entry stays in queue (attempt_count < MAX_DRAIN_ATTEMPTS)
+    for (let i = 0; i < 4; i++) {
+      await engine.drainQueue();
+      expect(db.queueSize(PAIR_ID)).toBe(1);
+    }
+
+    // Attempt 5: attempt_count reaches MAX_DRAIN_ATTEMPTS → dead-lettered
+    await engine.drainQueue();
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+
+    // Subsequent call: no entry to process → failed count is 0
+    const result = await engine.drainQueue();
+    expect(result.failed).toBe(0);
+  });
+});
+
+describe("SyncEngine — walkRemoteTree depth cap (6-0a AC3)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `walk-remote-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+    mockClient = makeMockClient();
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("stops recursing at MAX_REMOTE_TREE_DEPTH and returns without throwing", async () => {
+    const infiniteClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+      listRemoteFolders: mock(async () => [{ id: "sub", name: "sub" }]),
+    });
+
+    const result = await (engine as any).walkRemoteTree("root-id", "", infiniteClient, 0);
+
+    expect(result).toBeDefined();
+    expect(result.folders.size).toBeLessThanOrEqual(50); // MAX_REMOTE_TREE_DEPTH
+  });
+});
+
+describe("SyncEngine — conflictCopyPath cap (6-0a AC5)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `conflict-cap-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("loop terminates when all suffix slots taken; uses base conflict path (overwrites it)", async () => {
+    writeFileSync(join(tmpDir, "conflict.txt"), "local content");
+
+    // Pre-create all 100 conflict copy candidates to make stat() always succeed
+    const d = new Date();
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const basePath = join(tmpDir, `conflict.txt.conflict-${date}`);
+    writeFileSync(basePath, "base-placeholder");
+    for (let n = 2; n <= 100; n++) {
+      writeFileSync(join(tmpDir, `conflict.txt.conflict-${date}-${n}`), `placeholder-${n}`);
+    }
+
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "conflict.txt",
+      local_mtime: "2020-01-01T00:00:00.000Z",
+      remote_mtime: "2020-01-01T00:00:00.000Z",
+      content_hash: null,
+    });
+
+    const downloadFn = mock(async (_uid: string, target: WritableStream<Uint8Array>) => {
+      const writer = target.getWriter();
+      await writer.write(new Uint8Array([1, 2, 3]));
+      await writer.close();
+    });
+
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("conflict.txt", "2026-04-10T00:00:00.000Z"),
+      ]),
+      downloadFile: downloadFn,
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    // Must complete without hanging (loop bounded by MAX_CONFLICT_SUFFIX=100)
+    await engine.startSyncAll();
+
+    // Base conflict path overwritten with local content (loop exhausted all suffixes)
+    const content = readFileSync(basePath, "utf-8");
+    expect(content).toBe("local content");
+  });
+});
+
+// NOTE: This describe block uses mock.module which leaks in Bun 1.3.11 — kept last to avoid contaminating other tests.
+describe("SyncEngine — walkLocalTree safety (6-0a AC2)", () => {
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(
+      tmpdir(),
+      `walk-local-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    );
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+    mockClient = makeMockClient();
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("symlink entry is skipped: not traversed, not in files or dirs", async () => {
+    writeFileSync(join(tmpDir, "real.txt"), "content");
+    symlinkSync("/nonexistent/target", join(tmpDir, "mylink")); // dangling symlink
+
+    const result = await (engine as any).walkLocalTree(tmpDir);
+
+    expect(result.files.has("real.txt")).toBe(true);
+    expect(result.files.has("mylink")).toBe(false);
+    expect(result.dirs.size).toBe(0);
+  });
+
+  it("cycle guard: already-visited path is not recursed into; dirs contains it exactly once", async () => {
+    let callCount = 0;
+
+    mock.module("node:fs/promises", () => ({
+      readdir: async (dirPath: string, _opts?: unknown) => {
+        callCount++;
+        if (dirPath === tmpDir) {
+          return [{ name: "subA", isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false }];
+        }
+        // subA: return entry whose join(subAPath, ".") === subAPath — a path cycle
+        return [{ name: ".", isDirectory: () => true, isFile: () => false, isSymbolicLink: () => false }];
+      },
+      stat: async () => ({ mtime: new Date(), size: 0 }),
+      rename: async () => {},
+      unlink: async () => {},
+      mkdir: async () => {},
+      copyFile: async () => {},
+    }));
+
+    // Engine re-created after mock so it picks up mocked imports
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await (engine as any).walkLocalTree(tmpDir);
+
+    expect(result.dirs.has("subA")).toBe(true);
+    expect(result.dirs.size).toBe(1); // subAPath not double-added
+    expect(callCount).toBe(2);        // root + subA, then cycle guard fires
   });
 });
