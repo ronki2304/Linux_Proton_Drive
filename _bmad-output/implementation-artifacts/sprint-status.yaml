@@ -122,7 +122,7 @@ development_status:
   6-0b-error-code-routing-correctness: review
   6-0c-ui-state-correctness: done
   6-0d-per-pair-error-detail-ux: review
-  6-0e-test-gap-closure: ready-for-dev
+  6-0e-test-gap-closure: review
   6-1-add-subsequent-sync-pair: backlog
   6-2-nesting-and-overlap-validation: backlog
   6-3-remove-sync-pair-with-confirmation: backlog

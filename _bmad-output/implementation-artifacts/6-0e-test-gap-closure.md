@@ -1,6 +1,6 @@
 # Story 6.0e: Test Gap Closure
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -38,43 +38,43 @@ so that DISK_FULL, PERMISSION_DENIED, and queue-replay edge cases are verified a
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 — DISK_FULL reconcilePair coverage (AC: 1)
-  - [ ] 1.1 — Add `describe("SyncEngine — DISK_FULL in reconcilePair (Story 6-0e)")` at the end of `sync-engine.test.ts` (after current last line ~2958)
-  - [ ] 1.2 — Add Site 5 test: new remote file, `downloadFile` throws ENOSPC → `DISK_FULL` emitted
-  - [ ] 1.3 — Add Site 4 test: local file + no sync_state + remote file, rename succeeds, `downloadFile` throws ENOSPC → `DISK_FULL` emitted
-  - [ ] 1.4 — Add Site 2 test: conflict scenario (both sides changed), `downloadFile` throws ENOSPC → `DISK_FULL` emitted
-  - [ ] 1.5 — Attempt Site 1 test via `mock.module('node:fs/promises', ...)` intercepting `copyFile`; if mock does not intercept (emitPairStatus not called with DISK_FULL), remove the test and add `[6-0e D1]` to deferred-work.md instead
-  - [ ] 1.6 — Attempt Site 3 test via `mock.module` intercepting `rename`; same fallback rule as 1.5
+- [x] Task 1 — DISK_FULL reconcilePair coverage (AC: 1)
+  - [x] 1.1 — Add `describe("SyncEngine — DISK_FULL in reconcilePair (Story 6-0e)")` at the end of `sync-engine.test.ts` (after current last line ~2958)
+  - [x] 1.2 — Add Site 5 test: new remote file, `downloadFile` throws ENOSPC → `DISK_FULL` emitted
+  - [x] 1.3 — Add Site 4 test: local file + no sync_state + remote file, rename succeeds, `downloadFile` throws ENOSPC → `DISK_FULL` emitted
+  - [x] 1.4 — Add Site 2 test: conflict scenario (both sides changed), `downloadFile` throws ENOSPC → `DISK_FULL` emitted
+  - [x] 1.5 — Attempt Site 1 test via `mock.module('node:fs/promises', ...)` intercepting `copyFile`; if mock does not intercept (emitPairStatus not called with DISK_FULL), remove the test and add `[6-0e D1]` to deferred-work.md instead
+  - [x] 1.6 — Attempt Site 3 test via `mock.module` intercepting `rename`; same fallback rule as 1.5
 
-- [ ] Task 2 — PERMISSION_DENIED Sites 1, 2, 4, 5 coverage (AC: 2)
-  - [ ] 2.1 — Add `describe("SyncEngine — PERMISSION_DENIED Sites 1,2,4,5 (Story 6-0e)")` block in `sync-engine.test.ts` (inside or immediately after the Task 1 block)
-  - [ ] 2.2 — Add Site 1 test: conflict scenario + `chmodSync(tmpDir, 0o555)` → `copyFile` throws EACCES → `PERMISSION_DENIED` emitted, `downloadFile` NOT called
-  - [ ] 2.3 — Add Site 2 test: conflict scenario, `downloadFile` throws EACCES → `PERMISSION_DENIED` emitted
-  - [ ] 2.4 — Add Site 4 test: collision scenario, `downloadFile` throws EACCES → `PERMISSION_DENIED` emitted
-  - [ ] 2.5 — Add Site 5 test: new remote file, `downloadFile` throws EACCES → `PERMISSION_DENIED` emitted
+- [x] Task 2 — PERMISSION_DENIED Sites 1, 2, 4, 5 coverage (AC: 2)
+  - [x] 2.1 — Add `describe("SyncEngine — PERMISSION_DENIED Sites 1,2,4,5 (Story 6-0e)")` block in `sync-engine.test.ts` (inside or immediately after the Task 1 block)
+  - [x] 2.2 — Add Site 1 test: conflict scenario + `chmodSync(tmpDir, 0o555)` → `copyFile` throws EACCES → `PERMISSION_DENIED` emitted, `downloadFile` NOT called
+  - [x] 2.3 — Add Site 2 test: conflict scenario, `downloadFile` throws EACCES → `PERMISSION_DENIED` emitted
+  - [x] 2.4 — Add Site 4 test: collision scenario, `downloadFile` throws EACCES → `PERMISSION_DENIED` emitted
+  - [x] 2.5 — Add Site 5 test: new remote file, `downloadFile` throws EACCES → `PERMISSION_DENIED` emitted
 
-- [ ] Task 3 — Queue replay edge cases (AC: 3)
-  - [ ] 3.1 — Locate `"SyncEngine — post-reauth queue drain (Story 5-3)"` describe block (~line 578 in `sync-engine.test.ts`); read it in full before adding tests to understand `enqueueFile()`/`db.enqueueChange()` pattern and existing `drainQueue` call conventions
-  - [ ] 3.2 — Add `change_type='deleted'` test inside that block: seed sync_state + remote, enqueue deletion, call `drainQueue`, assert `trashNode` called with correct node UID
-  - [ ] 3.3 — Add new-file test: no sync_state, no remote, write local file, enqueue as 'modified', call `drainQueue`, assert `uploadFile` called
-  - [ ] 3.4 — Add ENOENT mid-replay test: enqueue 'modified' for a file that does not exist on disk, call `drainQueue`, assert no throw, `uploadFile` NOT called, queue empty after drain
+- [x] Task 3 — Queue replay edge cases (AC: 3)
+  - [x] 3.1 — Locate `"SyncEngine — post-reauth queue drain (Story 5-3)"` describe block (~line 578 in `sync-engine.test.ts`); read it in full before adding tests to understand `enqueueFile()`/`db.enqueueChange()` pattern and existing `drainQueue` call conventions
+  - [x] 3.2 — Add `change_type='deleted'` test inside that block: seed sync_state + remote, enqueue deletion, call `drainQueue`, assert `trashNode` called with correct node UID
+  - [x] 3.3 — Add new-file test: no sync_state, no remote, write local file, enqueue as 'modified', call `drainQueue`, assert `uploadFile` called
+  - [x] 3.4 — Add ENOENT mid-replay test: enqueue 'modified' for a file that does not exist on disk, call `drainQueue`, assert no throw, `uploadFile` NOT called, queue empty after drain
 
-- [ ] Task 4 — Fix test_main.py payload shape (AC: 4)
-  - [ ] 4.1 — In `ui/tests/test_main.py`, find `TestTokenExpiredResetsWatcherStatus` (~line 41)
-  - [ ] 4.2 — Replace both occurrences of `app._on_token_expired({"payload": {"code": "SESSION_EXPIRED"}})` with `app._on_token_expired({"queued_changes": 0})`
-  - [ ] 4.3 — Run `.venv/bin/pytest ui/tests/test_main.py::TestTokenExpiredResetsWatcherStatus -v` and confirm both tests pass
+- [x] Task 4 — Fix test_main.py payload shape (AC: 4)
+  - [x] 4.1 — In `ui/tests/test_main.py`, find `TestTokenExpiredResetsWatcherStatus` (~line 41)
+  - [x] 4.2 — Replace both occurrences of `app._on_token_expired({"payload": {"code": "SESSION_EXPIRED"}})` with `app._on_token_expired({"queued_changes": 0})`
+  - [x] 4.3 — Run `.venv/bin/pytest ui/tests/test_main.py::TestTokenExpiredResetsWatcherStatus -v` and confirm both tests pass
 
-- [ ] Task 5 — deferred-work.md cleanup (AC: 5)
-  - [ ] 5.1 — Delete items `[5-5 D1]`, `[5-6 D1]`, `[5-3 CR W1]`, `[5-3 CR W2]`, `[5-3 CR W3]`, `[5-3 CR W4]`, `[5-1 CR W4]` from `_bmad-output/implementation-artifacts/deferred-work.md`
-  - [ ] 5.2 — Confirm items `[5-5 D6]`, `[5-3 CR W5]`, `[5-3 CR W6]`, `[5-3 CR W7]` remain (won't-fix)
+- [x] Task 5 — deferred-work.md cleanup (AC: 5)
+  - [x] 5.1 — Delete items `[5-5 D1]`, `[5-6 D1]`, `[5-3 CR W1]`, `[5-3 CR W2]`, `[5-3 CR W3]`, `[5-3 CR W4]`, `[5-1 CR W4]` from `_bmad-output/implementation-artifacts/deferred-work.md`
+  - [x] 5.2 — Confirm items `[5-5 D6]`, `[5-3 CR W5]`, `[5-3 CR W6]`, `[5-3 CR W7]` remain (won't-fix)
 
-- [ ] Task 6 — Full test suite validation (AC: 6)
-  - [ ] 6.1 — `cd engine && bun test` — all tests green, exit 0
-  - [ ] 6.2 — `.venv/bin/pytest ui/tests/` from project root — all tests green, exit 0
+- [x] Task 6 — Full test suite validation (AC: 6)
+  - [x] 6.1 — `cd engine && bun test` — all tests green, exit 0
+  - [x] 6.2 — `.venv/bin/pytest ui/tests/` from project root — all tests green, exit 0
 
-- [ ] Task 7 — Mark story for review (AC: 7)
-  - [ ] 7.1 — Update `sprint-status.yaml`: `6-0e-test-gap-closure: review`
-  - [ ] 7.2 — Do NOT self-merge or mark done
+- [x] Task 7 — Mark story for review (AC: 7)
+  - [x] 7.1 — Update `sprint-status.yaml`: `6-0e-test-gap-closure: review`
+  - [x] 7.2 — Do NOT self-merge or mark done
 
 ## Dev Notes
 
@@ -449,6 +449,41 @@ claude-sonnet-4-6
 
 ### Debug Log References
 
+N/A — no external debug logs referenced.
+
 ### Completion Notes List
 
+- **DISK_FULL Sites 1 & 3**: `mock.module("node:fs/promises", ...)` DOES intercept statically-imported bindings in Bun (contrary to dev notes). Both implemented via `mock.module` with `copyFile`/`rename` throwing ENOSPC.
+
+- **mock.module isolation issue**: `mock.restore()` resets mock function implementations but does NOT unregister `mock.module()` registrations from Bun's module registry. The cycle-guard test's readdir mock leaked into DISK_FULL Sites 2/4/5 and PD Sites 1/2/4. Fix: convert all tests in these blocks to use `mock.module` for full isolation.
+
+- **AC3 ENOENT claim vs. code**: Story said "queue entry is removed" after ENOENT; actual code in `processQueueEntry` routes ENOENT to "conflict" outcome (entry stays). Test written to match code: `skipped_conflicts=1`, `queueSize=1`.
+
+- **PD Site 1 approach**: Switched from `chmodSync(tmpDir, 0o555)` to `mock.module` with `copyFile: mock(async () => { throw eacces; })` — eliminates real-FS side effects and resolves mock.module contamination from earlier describe blocks.
+
 ### File List
+
+- `engine/src/sync-engine.test.ts` — added 13 new tests (3 inside existing post-reauth block; 5 DISK_FULL sites; 5 PD sites); converted 6 tests from real-fs to `mock.module` for isolation
+- `ui/tests/test_main.py` — fixed payload shape in `TestTokenExpiredResetsWatcherStatus` (2 calls)
+- `_bmad-output/implementation-artifacts/deferred-work.md` — removed 7 closed items
+- `_bmad-output/implementation-artifacts/sprint-status.yaml` — moved `6-0e-test-gap-closure` to `review`
+
+### Review Findings
+
+- [ ] [Review][Decision] AC3 ENOENT queue-entry behavior mismatch — AC3 states "queue entry is removed" after ENOENT mid-replay, but `processQueueEntry` routes ENOENT to `"conflict"` (entry stays, `skipped_conflicts++`). Test correctly asserts `queueSize=1`. Need human decision: (a) accept code behavior and update AC3 wording, or (b) change `processQueueEntry` to dequeue on ENOENT. [`engine/src/sync-engine.ts:888-894`, `engine/src/sync-engine.test.ts:887`]
+
+- [ ] [Review][Patch] drain-deleted test missing sync_state removal assertion — after `trashNode` succeeds, the `sync_state` row for the deleted file should be purged; test only checks `result.synced` and queue size but not `db.getSyncState(PAIR_ID, fileName) === undefined`. [`engine/src/sync-engine.test.ts:842`]
+
+- [ ] [Review][Patch] PERMISSION_DENIED Site 2 test missing `pair_id` assertion — Sites 4 and 5 in the PD describe block both assert `errorEvent.payload.pair_id === PAIR_ID`, but Site 2 stops at `expect(errorEvent).toBeTruthy()` — inconsistency would mask a bug where `pair_id` is absent from the Site 2 error payload. [`engine/src/sync-engine.test.ts`]
+
+- [ ] [Review][Patch] ENOENT drain test should assert no error event emitted — the "file missing on disk" test confirms `skipped_conflicts=1` and `queueSize=1` but does not assert `emittedEvents.filter(e => e.type === "error").length === 0`; silent conflict routing should produce no error event and this is unverified. [`engine/src/sync-engine.test.ts:882-888`]
+
+- [ ] [Review][Patch] DISK_FULL Site 1 test should assert `downloadFile` NOT called — when `copyFile` throws ENOSPC at Site 1 (conflict copy), the engine should short-circuit without calling `downloadFile`; test only asserts DISK_FULL was emitted, not that `downloadFile` was not invoked. [`engine/src/sync-engine.test.ts`]
+
+- [x] [Review][Defer] Site 3 DISK_FULL test doesn't assert `downloadFile` NOT called — secondary assertion quality; primary DISK_FULL emission check is correct — deferred, pre-existing [`engine/src/sync-engine.test.ts`]
+- [x] [Review][Defer] `mock.module` accumulates in Bun's module registry across tests — `mock.restore()` does not unregister `mock.module` registrations; DISK_FULL/PD describe blocks are last in file so no subsequent tests are contaminated — deferred, pre-existing Bun limitation [`engine/src/sync-engine.test.ts`]
+- [x] [Review][Defer] PERMISSION_DENIED Site 1 loop short-circuit not verified — test uses one conflict item, doesn't verify `continue` vs `break` loop semantics on error — deferred, out of scope for 6-0e ACs [`engine/src/sync-engine.test.ts`]
+- [x] [Review][Defer] EPERM variant of `isPermissionDenied` untested — all PD tests throw EACCES; EPERM path through `isPermissionDenied` has no test coverage — deferred, pre-existing gap [`engine/src/sync-engine.ts:33`]
+- [x] [Review][Defer] No multi-pair DISK_FULL loop-abort test — when `diskFull=true` on pair 1, subsequent pairs are skipped; no test verifies this — deferred, out of scope (Epic 6 multi-pair feature scope) [`engine/src/sync-engine.ts`]
+- [x] [Review][Defer] No `mkdir` ENOSPC test in `downloadOne` — `mkdir(dirname(dest), { recursive: true })` can throw ENOSPC before `downloadFile` is called; path is untested — deferred, out of scope for 6-0e [`engine/src/sync-engine.ts`]
+- [x] [Review][Defer] No `attempt_count` dead-lettering drain test — `drainQueue` dequeues after `MAX_DRAIN_ATTEMPTS` failures; no test exercises this path — deferred, out of scope for 6-0e [`engine/src/sync-engine.ts`]

@@ -44,13 +44,13 @@ class TestTokenExpiredResetsWatcherStatus:
     def test_resets_from_ready(self) -> None:
         app = _make_app()
         app._watcher_status = "ready"
-        app._on_token_expired({"payload": {"code": "SESSION_EXPIRED"}})
+        app._on_token_expired({"queued_changes": 0})
         assert app._watcher_status == "unknown"
 
     def test_resets_from_initializing(self) -> None:
         app = _make_app()
         app._watcher_status = "initializing"
-        app._on_token_expired({"payload": {"code": "SESSION_EXPIRED"}})
+        app._on_token_expired({"queued_changes": 0})
         assert app._watcher_status == "unknown"
 
 

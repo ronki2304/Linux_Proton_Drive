@@ -26,15 +26,8 @@ _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been remo
 
 ## Deferred from: code review of 5-5-actionable-error-disk-full (2026-04-19)
 
-- **[5-5 D1]** Test gap: Sites 1–5 DISK_FULL in main sync loop not directly tested — acknowledged in story dev notes as acceptable low-risk tradeoff. `engine/src/sync-engine.test.ts`
 - **[5-5 D2]** Multi-pair error: `on_pair_error` overwrites footer with last errored pair name — second DISK_FULL event for a different pair silently replaces the first. Story 5-9 priority ordering. `ui/src/protondrive/window.py`
 - **[5-5 D6]** No multi-entry test for `queue_replay_failed` suppression — if a later queue entry fails non-ENOSPC after DISK_FULL entries, both codes get emitted. Low risk / out of scope. `engine/src/sync-engine.test.ts`
-
----
-
-## Deferred from: code review of 5-6-actionable-error-permission-denied (2026-04-19)
-
-- **[5-6 D1]** Test coverage gap: Sites 2–5 in reconcilePair lack dedicated PERMISSION_DENIED tests — conflict_update download, collision rename, collision download, and main download loop catch sites not directly covered; Site 1 covered by updated pre-existing test, Site 6 by 6 new drainQueue tests; all 5 sites use identical emit pattern. `engine/src/sync-engine.test.ts`
 
 ---
 
@@ -173,16 +166,8 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ---
 
-## Deferred from: code review of 5-1-401-detection-and-sync-halt (2026-04-19)
-
-- **[5-1 CR W4]** `TestTokenExpiredResetsWatcherStatus` tests call `_on_token_expired` with full-message-shaped payload — pre-existing; old tests pass `{"payload": {...}}` while correct shape is `{"queued_changes": N}` directly; old tests don't check extracted values so pass regardless; harmless inconsistency. `ui/tests/test_main.py`
-
 ## Deferred from: code review of 5-3-change-queue-replay-after-re-auth (2026-04-19)
 
-- **[5-3 CR W1]** `failed` return value from `drainQueue` never asserted in any 5-3 test — stat errors (EACCES, EPERM, EIO) route to `failed`; counter is silently unchecked. `engine/src/sync-engine.test.ts`
-- **[5-3 CR W2]** `change_type='deleted'` queued during expiry window not covered — `trashNode` / `dequeue` paths in `processQueueEntry` are not exercised by the post-reauth drain tests. `engine/src/sync-engine.test.ts`
-- **[5-3 CR W3]** New file (no `sync_state`) queued during expiry not tested — `state === undefined && remote === undefined` → upload path not covered by Story 5-3 tests. `engine/src/sync-engine.test.ts`
-- **[5-3 CR W4]** ENOENT during drain mid-replay not tested — local file deleted between enqueue and drain routes to conflict in `processQueueEntry`; outcome unverified. `engine/src/sync-engine.test.ts`
 - **[5-3 CR W5]** `tmpDir` collision risk via `Date.now()` in test setup — two tests starting in the same millisecond share the same base path; `Math.random()` suffix reduces but does not eliminate risk. Pre-existing pattern across all test suites. `engine/src/sync-engine.test.ts`
 - **[5-3 CR W6]** `afterEach` cleanup ordering: if `db.close()` throws, `rmSync`/`mock.restore()` are skipped — pre-existing pattern across all test suites. `engine/src/sync-engine.test.ts`
 - **[5-3 CR W7]** AC4 UI toast coverage (`on_queue_replay_complete` → `AdwToast`) not verifiable from the Story 5-3 diff alone — pre-existing tests cited in Dev Note §7 (`test_window_routing.py:310–370`, `test_main.py:97–132`) cover this path; no action needed unless those tests are removed.
@@ -238,3 +223,15 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 
 - **[6-0c CR D3]** Missing test: rapid session-ready → token-expired sequence — `clear_token_expired_warning` followed immediately by `show_token_expired_warning(N)` is not tested. Current implementation handles it correctly (`set_revealed` always sets state). Pre-existing coverage gap. `ui/tests/test_window_routing.py`
 - **[6-0b CR D2]** Orphaned conflict copy on non-auth download errors — if `downloadOne` fails with DISK_FULL or PERMISSION_DENIED (not AuthExpiredError), the conflict copy is already on disk but `unlink(conflictCopyPath)` is not called; orphan persists. Story §5 dev note explicitly excludes this; rollback requires `rename(conflictCopyPath, localFilePath)`. Pre-existing gap. `engine/src/sync-engine.ts`
+
+---
+
+## Deferred from: code review of 6-0e-test-gap-closure (2026-04-20)
+
+- **[6-0e CR D1]** Site 3 DISK_FULL test doesn't assert `downloadFile` NOT called — when `rename` throws ENOSPC at Site 3, `downloadFile` should not be invoked; test only checks DISK_FULL emitted, not that download was skipped. Secondary assertion quality gap. `engine/src/sync-engine.test.ts`
+- **[6-0e CR D2]** `mock.module` accumulates in Bun's registry across tests — `mock.restore()` does not unregister `mock.module` registrations; DISK_FULL/PD describe blocks are last in file so no subsequent tests are contaminated, but future appended tests would inherit stale module mocks. Bun limitation; injectable fs would resolve. `engine/src/sync-engine.test.ts`
+- **[6-0e CR D3]** PERMISSION_DENIED Site 1 loop short-circuit not verified — test uses a single conflict item; doesn't confirm that the conflictItems loop continues to the next item (vs. aborts entirely) after a PERMISSION_DENIED on one item. Out of scope for 6-0e. `engine/src/sync-engine.test.ts`
+- **[6-0e CR D4]** EPERM variant of `isPermissionDenied` untested — all PD tests throw EACCES; the EPERM code path through `isPermissionDenied` has no test coverage. Pre-existing gap. `engine/src/sync-engine.ts:33`
+- **[6-0e CR D5]** No multi-pair DISK_FULL loop-abort test — when `diskFull=true` on pair 1, subsequent pairs are skipped; single-pair tests cannot verify this. Multi-pair scenario is Epic 6 scope. `engine/src/sync-engine.ts`
+- **[6-0e CR D6]** No `mkdir` ENOSPC test in `downloadOne` — `mkdir(dirname(dest), { recursive: true })` can throw ENOSPC before `downloadFile` is called; this path propagates correctly to DISK_FULL handling but has no dedicated test. `engine/src/sync-engine.ts`
+- **[6-0e CR D7]** No `attempt_count` dead-lettering drain test — `drainQueue` dequeues entries that fail `MAX_DRAIN_ATTEMPTS` times; no test exercises this dead-letter path. `engine/src/sync-engine.ts`

@@ -805,6 +805,87 @@ describe("SyncEngine — post-reauth queue drain (Story 5-3)", () => {
     expect(complete).toBeTruthy();
     expect((complete!.payload as { synced: number }).synced).toBe(1);
   });
+
+  // Story 6-0e AC3: queue replay edge cases
+
+  it("6-0e: drain — change_type='deleted' entry → trashNode called with remote node id", async () => {
+    const fileName = "deleted-file.txt";
+    const remoteUid = "uid-del";
+    const remoteMtime = "2026-04-10T10:00:00.000Z";
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: fileName,
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: remoteMtime,
+      content_hash: null,
+    });
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: fileName,
+      change_type: "deleted",
+      queued_at: new Date().toISOString(),
+    });
+    const trashNode = mock(async (_uid: string): Promise<void> => {});
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile(fileName, remoteMtime, 100, remoteUid),
+      ]),
+      trashNode: trashNode as unknown as DriveClient["trashNode"],
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.drainQueue();
+
+    expect(trashNode).toHaveBeenCalledWith(remoteUid);
+    expect(result.synced).toBe(1);
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+  });
+
+  it("6-0e: drain — new file (no sync_state, no remote) → uploadFile called", async () => {
+    const fileName = "brand-new.txt";
+    writeLocalFile(fileName, "new content");
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: fileName,
+      change_type: "modified",
+      queued_at: new Date().toISOString(),
+    });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.drainQueue();
+
+    expect(mockClient.uploadFile).toHaveBeenCalled();
+    expect(result.synced).toBe(1);
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+  });
+
+  it("6-0e: drain — file missing on disk (ENOENT) → no throw, uploadFile not called, entry skipped as conflict", async () => {
+    const fileName = "vanished.txt";
+    // File NOT written to disk — ENOENT on stat() in processQueueEntry
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: fileName,
+      change_type: "modified",
+      queued_at: new Date().toISOString(),
+    });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => []),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    const result = await engine.drainQueue();
+
+    expect(mockClient.uploadFile).not.toHaveBeenCalled();
+    // ENOENT routes to "conflict" in processQueueEntry — entry stays in queue
+    expect(result.skipped_conflicts).toBe(1);
+    expect(db.queueSize(PAIR_ID)).toBe(1);
+  });
 });
 
 describe("SyncEngine — sync_progress and sync_complete events (AC7)", () => {
@@ -3265,5 +3346,329 @@ describe("SyncEngine — walkLocalTree safety (6-0a AC2)", () => {
     expect(result.dirs.has("subA")).toBe(true);
     expect(result.dirs.size).toBe(1); // subAPath not double-added
     expect(callCount).toBe(2);        // root + subA, then cycle guard fires
+  });
+});
+
+// ── Story 6-0e: DISK_FULL reconcilePair coverage ─────────────────────────────
+
+describe("SyncEngine — DISK_FULL in reconcilePair (Story 6-0e)", () => {
+  beforeEach(() => {
+    mock.restore(); // clear any module mock leaks from previous describe blocks
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(tmpdir(), `disk-full-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("Site 5 — downloadItems: downloadFile ENOSPC → DISK_FULL emitted", async () => {
+    const enospc = Object.assign(new Error("ENOSPC"), { code: "ENOSPC" }) as NodeJS.ErrnoException;
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async () => []),
+      stat: mock(async () => ({ mtime: new Date(), size: 100 })),
+      rename: mock(async () => {}),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => {}),
+    }));
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("newfile.txt", new Date().toISOString(), 100, "uid-5"),
+      ]),
+      downloadFile: mock(async () => { throw enospc; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const errorEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+  });
+
+  it("Site 4 — newFileCollisionItems: rename succeeds, downloadFile ENOSPC → DISK_FULL emitted", async () => {
+    const enospc = Object.assign(new Error("ENOSPC"), { code: "ENOSPC" }) as NodeJS.ErrnoException;
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async () => [
+        { name: "collide.txt", isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
+      ]),
+      stat: mock(async () => ({ mtime: new Date(), size: 100 })),
+      rename: mock(async () => {}),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => {}),
+    }));
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("collide.txt", new Date().toISOString(), 100, "uid-4"),
+      ]),
+      downloadFile: mock(async () => { throw enospc; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const errorEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+  });
+
+  it("Site 2 — conflictItems: copyFile succeeds, downloadFile ENOSPC → DISK_FULL emitted", async () => {
+    const enospc = Object.assign(new Error("ENOSPC"), { code: "ENOSPC" }) as NodeJS.ErrnoException;
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async () => [
+        { name: "conflict.txt", isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
+      ]),
+      stat: mock(async () => ({ mtime: new Date("2026-04-10T12:00:00.000Z"), size: 100 })),
+      rename: mock(async () => {}),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => {}),
+    }));
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "conflict.txt",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("conflict.txt", "2026-04-10T11:00:00.000Z", 100, "uid-2"),
+      ]),
+      downloadFile: mock(async () => { throw enospc; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const errorEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+  });
+
+  it("Site 1 — conflictItems: copyFile ENOSPC → DISK_FULL emitted", async () => {
+    const enospc = Object.assign(new Error("ENOSPC"), { code: "ENOSPC" }) as NodeJS.ErrnoException;
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async (_dirPath: string) => [
+        { name: "conflict.txt", isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
+      ]),
+      stat: mock(async (_path: string) => ({ mtime: new Date("1970-01-01T00:00:00.000Z"), size: 100 })),
+      rename: mock(async () => {}),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => { throw enospc; }),
+    }));
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "conflict.txt",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("conflict.txt", "2026-04-10T11:00:00.000Z", 100, "uid-1a"),
+      ]),
+      downloadFile: mock(async () => {}),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const diskFullEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFullEvent).toBeTruthy();
+  });
+
+  it("Site 3 — newFileCollisionItems: rename ENOSPC → DISK_FULL emitted", async () => {
+    const enospc = Object.assign(new Error("ENOSPC"), { code: "ENOSPC" }) as NodeJS.ErrnoException;
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async (_dirPath: string) => [
+        { name: "collide.txt", isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
+      ]),
+      stat: mock(async (_path: string) => ({ mtime: new Date(), size: 100 })),
+      rename: mock(async () => { throw enospc; }),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => {}),
+    }));
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("collide.txt", new Date().toISOString(), 100, "uid-3a"),
+      ]),
+      downloadFile: mock(async () => {}),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const diskFullEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
+    );
+    expect(diskFullEvent).toBeTruthy();
+  });
+});
+
+// ── Story 6-0e: PERMISSION_DENIED reconcilePair coverage ─────────────────────
+
+describe("SyncEngine — PERMISSION_DENIED Sites 1,2,4,5 (Story 6-0e)", () => {
+  beforeEach(() => {
+    mock.restore(); // clear any module mock leaks from previous describe blocks
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = join(tmpdir(), `perm-denied-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(tmpDir, { recursive: true });
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("Site 1 — conflictItems: copyFile EACCES → PERMISSION_DENIED emitted, downloadFile NOT called", async () => {
+    const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" }) as NodeJS.ErrnoException;
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async () => [
+        { name: "conflict.txt", isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
+      ]),
+      stat: mock(async () => ({ mtime: new Date("2026-04-10T12:00:00.000Z"), size: 100 })),
+      rename: mock(async () => {}),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => { throw eacces; }),
+    }));
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "conflict.txt",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    const downloadFile = mock(async () => {});
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("conflict.txt", "2026-04-10T11:00:00.000Z", 100, "uid-p1"),
+      ]),
+      downloadFile,
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const errorEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+    expect(downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("Site 2 — conflictItems: copyFile succeeds, downloadFile EACCES → PERMISSION_DENIED emitted", async () => {
+    const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" }) as NodeJS.ErrnoException;
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async () => [
+        { name: "conflict.txt", isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
+      ]),
+      stat: mock(async () => ({ mtime: new Date("2026-04-10T12:00:00.000Z"), size: 100 })),
+      rename: mock(async () => {}),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => {}),
+    }));
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "conflict.txt",
+      local_mtime: "2026-04-10T10:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("conflict.txt", "2026-04-10T11:00:00.000Z", 100, "uid-p2"),
+      ]),
+      downloadFile: mock(async () => { throw eacces; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const errorEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+  });
+
+  it("Site 4 — newFileCollisionItems: rename succeeds, downloadFile EACCES → PERMISSION_DENIED emitted", async () => {
+    const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" }) as NodeJS.ErrnoException;
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async () => [
+        { name: "collide.txt", isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false },
+      ]),
+      stat: mock(async () => ({ mtime: new Date(), size: 100 })),
+      rename: mock(async () => {}),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => {}),
+    }));
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("collide.txt", new Date().toISOString(), 100, "uid-p4"),
+      ]),
+      downloadFile: mock(async () => { throw eacces; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const errorEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+  });
+
+  it("Site 5 — downloadItems: downloadFile EACCES → PERMISSION_DENIED emitted", async () => {
+    const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" }) as NodeJS.ErrnoException;
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("remote.txt", new Date().toISOString(), 100, "uid-p5"),
+      ]),
+      downloadFile: mock(async () => { throw eacces; }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const errorEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "PERMISSION_DENIED",
+    );
+    expect(errorEvent).toBeTruthy();
+    expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
   });
 });
