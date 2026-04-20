@@ -35,7 +35,6 @@ _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been remo
 ## Deferred from: code review of 5-6-actionable-error-permission-denied (2026-04-19)
 
 - **[5-6 D1]** Test coverage gap: Sites 2–5 in reconcilePair lack dedicated PERMISSION_DENIED tests — conflict_update download, collision rename, collision download, and main download loop catch sites not directly covered; Site 1 covered by updated pre-existing test, Site 6 by 6 new drainQueue tests; all 5 sites use identical emit pattern. `engine/src/sync-engine.test.ts`
-- **[5-6 D2]** stat() inner catch emits `queue_replay_failed` for EACCES/EPERM instead of `PERMISSION_DENIED` — inner try/catch at lines 794-818 fires before outer `isPermissionDenied` check at line 903; out of scope for the 6 specified catch sites in this story; code comment acknowledges EACCES/EPERM are user-actionable. `engine/src/sync-engine.ts:796-818`
 
 ---
 
@@ -177,7 +176,6 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 ## Deferred from: code review of 5-1-401-detection-and-sync-halt (2026-04-19)
 
 - **[5-1 CR W4]** `TestTokenExpiredResetsWatcherStatus` tests call `_on_token_expired` with full-message-shaped payload — pre-existing; old tests pass `{"payload": {...}}` while correct shape is `{"queued_changes": N}` directly; old tests don't check extracted values so pass regardless; harmless inconsistency. `ui/tests/test_main.py`
-- **[5-1 CR W5]** 401 during conflict download leaves orphaned `.conflict-YYYY-MM-DD` file — conflict copy written and `conflict_detected` emitted before download; if download throws `AuthExpiredError`, copy is orphaned on disk; next reconcile after re-auth may create a second conflict copy for the same file. `engine/src/sync-engine.ts:~335`
 
 ## Deferred from: code review of 5-3-change-queue-replay-after-re-auth (2026-04-19)
 
@@ -197,13 +195,6 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ---
 
-## Deferred from: code review of 5-7-actionable-error-inotify-limit-exceeded (2026-04-19)
-
-- **[5-7 CR W1]** INOTIFY_LIMIT error emitted without `stopped` check — `emitEvent()` in the ENOSPC catch branch fires regardless of `this.stopped` state; if `stop()` is called concurrently during `setupPairWatches`, the error event is emitted after the watcher claims to be stopped. `engine/src/watcher.ts:66-76`
-- **[5-7 CR W2]** Pending debounce timers from pre-ENOSPC watchers not cleared on ENOSPC — when `break` exits the inner dir loop after ENOSPC, existing debounce timers for already-registered watchers remain active and may fire `onChangesDetected` after the error is emitted; only `stop()` clears them. `engine/src/watcher.ts:77`
-
----
-
 ## Deferred from: code review of 5-4-dirty-session-flag-and-crash-recovery (2026-04-19)
 
 - **[5-4 CR W3]** `runCrashRecovery` clears dirty flag without try/finally guard — latent: `cleanTmpFilesInDir` swallows all errors so it cannot currently throw; if it ever does, flag is cleared despite incomplete cleanup. `engine/src/main.ts:runCrashRecovery`
@@ -215,12 +206,6 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 
 ---
 
-## Deferred from: code review of 5-8-actionable-error-file-locked (2026-04-19)
-
-- **[5-8 CR W2]** `delete_local` catch: PERMISSION_DENIED and FILE_LOCKED not checked — `unlink()` failures at `sync-engine.ts:491` emit SDK_ERROR for all non-ENOENT errors including EPERM (directory became read-only). Story 5-8 spec explicitly excludes FILE_LOCKED for delete_local; Story 5-6 also omitted PERMISSION_DENIED here. Pre-existing gap. `engine/src/sync-engine.ts:491`
-
----
-
 ## Deferred from: code review of 6-0a-unbounded-loop-recursion-safety (2026-04-20)
 
 - **[6-0a CR D1]** Silent depth cap for deep remote trees gives no user-visible error — `walkRemoteTree` returns an empty map with only a `debugLog` when depth >= 50. Users with legitimate remote folder trees >50 levels deep will silently lose sync coverage with no UI signal. `engine/src/sync-engine.ts:1109`
@@ -228,3 +213,10 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 - **[6-0a CR D2]** `walkLocalTree` stat() race silently skips files — pre-existing behavior. A file deleted between `readdir` and `stat` is silently skipped with only a `debugLog`, leaving stale `sync_state` rows. `engine/src/sync-engine.ts:1084`
 
 - **[6-0a CR D3]** `cleanTmpFilesInDir` exported with optional `depth` parameter — external callers could pass a non-zero depth, causing unexpected early cap at `MAX_CLEAN_DEPTH - depth` levels instead of 50. Theoretical; only internal caller uses the default. `engine/src/main.ts:608`
+
+---
+
+## Deferred from: code review of 6-0b-error-code-routing-correctness (2026-04-20)
+
+- **[6-0b CR D1]** `trash_remote` catch missing PERMISSION_DENIED/FILE_LOCKED routing — handler only checks `isAuthExpired()` then blanket-routes to SDK_ERROR; a permission-denied or locked remote trash operation produces an indistinguishable error. Pre-existing gap; out of scope for this story. `engine/src/sync-engine.ts`
+- **[6-0b CR D2]** Orphaned conflict copy on non-auth download errors — if `downloadOne` fails with DISK_FULL or PERMISSION_DENIED (not AuthExpiredError), the conflict copy is already on disk but `unlink(conflictCopyPath)` is not called; orphan persists. Story §5 dev note explicitly excludes this; rollback requires `rename(conflictCopyPath, localFilePath)`. Pre-existing gap. `engine/src/sync-engine.ts`

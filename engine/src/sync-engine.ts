@@ -384,7 +384,13 @@ export class SyncEngine {
           content_hash: hash,
         });
       } catch (err) {
-        if (isAuthExpired(err)) throw err;
+        if (isAuthExpired(err)) {
+          // Auth expired mid-conflict-resolution. Undo the orphaned conflict copy —
+          // the original file is unchanged; next reconcile after re-auth creates one
+          // correct copy instead of two.
+          try { await unlink(conflictCopyPath); } catch { /* best-effort */ }
+          throw err;
+        }
         const msg = err instanceof Error ? err.message : String(err);
         debugLog(`sync-engine: conflict download failed for ${item.relativePath}: ${msg}`);
         if (isDiskFull(err)) {
@@ -507,11 +513,19 @@ export class SyncEngine {
         const code = (err as NodeJS.ErrnoException)?.code;
         if (code !== "ENOENT") {
           const errMsg = err instanceof Error ? err.message : "unknown";
+          debugLog(`sync-engine: delete_local failed for ${item.relativePath}: ${errMsg}`);
+          if (isPermissionDenied(err)) {
+            this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
+            continue;
+          }
+          if (isFileLocked(err)) {
+            this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
+            continue;
+          }
           const errCode = (err as NodeJS.ErrnoException)?.code;
           const message = errCode
             ? `Sync error ${errCode} — try again or check ProtonDrive status`
             : "Sync error — try again or check ProtonDrive status";
-          debugLog(`sync-engine: delete_local failed for ${item.relativePath}: ${errMsg}`);
           this.emitEvent({ type: "error", payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id } });
           continue;  // keep sync_state so next cycle retries
         }
@@ -882,6 +896,18 @@ export class SyncEngine {
             debugLog(
               `sync-engine: replay upload ${entry.relative_path} — stat failed (${code ?? "no-code"}): ${msg}`,
             );
+            if (isPermissionDenied(err)) {
+              this.emitEvent({
+                type: "error",
+                payload: {
+                  code: "PERMISSION_DENIED",
+                  message: `Check folder permissions for ${join(pair.local_path, entry.relative_path)}`,
+                  pair_id: pair.pair_id,
+                  relative_path: entry.relative_path,
+                },
+              });
+              return "failed";
+            }
             const message = code
               ? `Sync error ${code} — try again or check ProtonDrive status`
               : "Sync error — try again or check ProtonDrive status";

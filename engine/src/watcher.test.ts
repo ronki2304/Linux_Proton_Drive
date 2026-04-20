@@ -248,7 +248,7 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
     );
   });
 
-  it("already-registered watchers still fire change events after ENOSPC", async () => {
+  it("already-registered watchers still fire change events after ENOSPC (onChanges NOT called — AC3 guard)", async () => {
     const mockWatchers: FSWatcher[] = [];
     let callCount = 0;
     const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => {
@@ -277,11 +277,81 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
     const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
     listener("change", "file.txt");
 
-    // Await debounce (50ms) + buffer — proves watcher is still operational
+    // Await debounce (50ms) + buffer
+    // Listener fires (watcher is operational), but scheduleSync returns early
+    // due to inotifyExhausted guard (AC3) — onChangesDetected NOT called.
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
-    expect(onChanges.mock.calls.length).toBe(1);
+    expect(onChanges.mock.calls.length).toBe(0);
 
     fw.stop();
+  });
+
+  // AC2 (Story 6-0b): stopped=true before ENOSPC fires → no INOTIFY_LIMIT event
+  it("stopped=true before ENOSPC fires → INOTIFY_LIMIT error NOT emitted", async () => {
+    // Setup: root dir only (no subdirs in beforeEach creates sub1+sub2, but we only need 1 dir)
+    // Use a fresh tmpDir with no subdirs so mockWatch fires for root only
+    const singleDir = join(tmpdir(), `watcher-stopped-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(singleDir, { recursive: true });
+    try {
+      const mockWatch = mock((_path: string, _listener: unknown): FSWatcher => {
+        throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      });
+      const emittedEvents: IpcPushEvent[] = [];
+      const pair = makeTestPair(singleDir);
+      const fw = new FileWatcher(
+        [pair],
+        mock(async (_pairId: string) => {}),
+        (e) => emittedEvents.push(e),
+        mockWatch as unknown as WatchFn,
+        50,
+      );
+
+      // stop() before initialize() — stopped is true when ENOSPC fires
+      fw.stop();
+      await fw.initialize();
+
+      const errorEvent = emittedEvents.find(
+        (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "INOTIFY_LIMIT",
+      );
+      expect(errorEvent).toBeUndefined();
+    } finally {
+      rmSync(singleDir, { recursive: true, force: true });
+    }
+  });
+
+  // AC3 (Story 6-0b): file-watcher callback fires after inotifyExhausted → onChangesDetected NOT called
+  it("watcher callback fires after inotifyExhausted → onChangesDetected NOT called", async () => {
+    // Use the 3-dir setup from beforeEach: root + sub1 + sub2
+    // mockWatch: 1st call (root) succeeds and captures listener, 2nd (sub1) throws ENOSPC
+    const listeners: WatchListener<string>[] = [];
+    const mockWatch = mock((_path: string, listener: unknown): FSWatcher => {
+      if (listeners.length === 1) {
+        // 2nd call (sub1) → ENOSPC; inotifyExhausted set to true
+        throw Object.assign(new Error("ENOSPC"), { code: "ENOSPC" });
+      }
+      // 1st call (root) succeeds; capture listener
+      listeners.push(listener as WatchListener<string>);
+      return makeMockWatcher();
+    });
+    const onChanges = mock(async (_pairId: string) => {});
+    const pair = makeTestPair(tmpDir);
+    const fw = new FileWatcher(
+      [pair],
+      onChanges,
+      (_e) => {},
+      mockWatch as unknown as WatchFn,
+      50,
+    );
+
+    await fw.initialize();  // inotifyExhausted = true after ENOSPC on sub1
+
+    expect(listeners.length).toBe(1);
+    // Fire the root watcher's listener — this calls scheduleSync which should be guarded
+    listeners[0]!("change", "file.txt");
+
+    // Wait debounce + buffer
+    await new Promise<void>((resolve) => setTimeout(resolve, 150));
+    expect(onChanges.mock.calls.length).toBe(0);
   });
 
   it("ENOSPC on pair-1 dir → pair-2 dirs not watched", async () => {

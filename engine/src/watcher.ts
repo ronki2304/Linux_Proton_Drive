@@ -65,15 +65,17 @@ export class FileWatcher {
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === "ENOSPC") {
           this.inotifyExhausted = true;
-          this.emitEvent({
-            type: "error",
-            payload: {
-              code: "INOTIFY_LIMIT",
-              message:
-                "Too many files to watch — close other apps or increase system inotify limit",
-              pair_id: pair.pair_id,
-            },
-          });
+          if (!this.stopped) {
+            this.emitEvent({
+              type: "error",
+              payload: {
+                code: "INOTIFY_LIMIT",
+                message:
+                  "Too many files to watch — close other apps or increase system inotify limit",
+                pair_id: pair.pair_id,
+              },
+            });
+          }
           break;
         } else {
           debugLog(`watcher: fs.watch failed for ${dir}: ${(err as Error).message}`);
@@ -103,10 +105,11 @@ export class FileWatcher {
   }
 
   private scheduleSync(pairId: string): void {
+    if (this.stopped || this.inotifyExhausted) return;
     const existing = this.debounceTimers.get(pairId);
     if (existing !== undefined) clearTimeout(existing);
     const timer = setTimeout(() => {
-      if (this.stopped) return;
+      if (this.stopped || this.inotifyExhausted) return;
       this.debounceTimers.delete(pairId);
       this.onChangesDetected(pairId).catch((e) =>
         debugLog(`watcher: onChangesDetected failed for ${pairId}: ${(e as Error).message}`),
