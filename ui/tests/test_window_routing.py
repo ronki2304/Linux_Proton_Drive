@@ -879,3 +879,111 @@ class TestErrorStatePersistence:
         assert last_call_args is not None
         assert "2 pairs" in last_call_args[0][0]
 
+
+# ---------------------------------------------------------------------------
+# Story 6-0c — error_pending_cycle clearance on offline / queue replay
+# ---------------------------------------------------------------------------
+
+
+class TestErrorPendingCycleClearance:
+    """_error_pending_cycle is cleared on offline and queue_replay_complete (Story 6-0c AC1)."""
+
+    def test_on_offline_clears_error_pending_cycle(self):
+        win = _make_window()
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win._error_pending_cycle.add("p1")
+        win.on_offline()
+        assert win._error_pending_cycle == set()
+
+    def test_on_offline_preserves_error_pair_ids(self):
+        win = _make_window()
+        row = _make_row()
+        win._sync_pair_rows["p1"] = row
+        win._error_pair_ids.add("p1")
+        win._error_pending_cycle.add("p1")
+        win.on_offline()
+        assert "p1" in win._error_pair_ids  # error visual state preserved
+
+    def test_on_queue_replay_complete_clears_stale_flag(self):
+        win = _make_window()
+        win._error_pending_cycle.add("p1")  # stale flag from before replay
+        win.on_queue_replay_complete({"synced": 0, "skipped_conflicts": 0})
+        assert win._error_pending_cycle == set()
+
+    def test_error_clears_after_one_sync_complete_following_offline(self):
+        """Offline clears flag → one clean sync_complete removes the error (not two)."""
+        win = _make_window()
+        row = _make_row()
+        row.state = "error"
+        win._sync_pair_rows["p1"] = row
+
+        win.on_pair_error("p1", "Sync error ETIMEDOUT")
+        assert "p1" in win._error_pending_cycle
+
+        win.on_offline()
+        assert "p1" not in win._error_pending_cycle
+        assert "p1" in win._error_pair_ids
+
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:00.000Z"})
+        assert "p1" not in win._error_pair_ids  # cleared after ONE cycle
+
+    def test_error_clears_after_one_sync_complete_following_clean_replay(self):
+        """Clean replay clears flag → one clean sync_complete removes the error (not two)."""
+        win = _make_window()
+        row = _make_row()
+        row.state = "error"
+        win._sync_pair_rows["p1"] = row
+
+        win.on_pair_error("p1", "Sync error ETIMEDOUT")
+        assert "p1" in win._error_pending_cycle
+
+        win.on_queue_replay_complete({"synced": 0, "skipped_conflicts": 0})
+        assert "p1" not in win._error_pending_cycle
+        assert "p1" in win._error_pair_ids
+
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:00.000Z"})
+        assert "p1" not in win._error_pair_ids  # cleared after ONE cycle
+
+
+# ---------------------------------------------------------------------------
+# Story 6-0c — session-expired banner queued-change count
+# ---------------------------------------------------------------------------
+
+
+class TestSessionExpiredBannerCount:
+    """show_token_expired_warning updates banner title with queued-change count (Story 6-0c AC2)."""
+
+    def test_nonzero_count_shows_plural(self):
+        win = _make_window()
+        win.session_expired_banner = MagicMock()
+        win.show_token_expired_warning(3)
+        win.session_expired_banner.set_title.assert_called_once_with(
+            "Session expired — 3 changes queued"
+        )
+        win.session_expired_banner.set_revealed.assert_called_once_with(True)
+
+    def test_one_count_shows_singular(self):
+        win = _make_window()
+        win.session_expired_banner = MagicMock()
+        win.show_token_expired_warning(1)
+        win.session_expired_banner.set_title.assert_called_once_with(
+            "Session expired — 1 change queued"
+        )
+
+    def test_zero_count_shows_default_text(self):
+        win = _make_window()
+        win.session_expired_banner = MagicMock()
+        win.show_token_expired_warning(0)
+        win.session_expired_banner.set_title.assert_called_once_with(
+            "Session expired — sign in to resume sync"
+        )
+
+    def test_no_arg_shows_default_text(self):
+        win = _make_window()
+        win.session_expired_banner = MagicMock()
+        win.show_token_expired_warning()
+        win.session_expired_banner.set_title.assert_called_once_with(
+            "Session expired — sign in to resume sync"
+        )
+

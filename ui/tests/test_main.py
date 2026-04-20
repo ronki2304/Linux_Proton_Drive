@@ -289,7 +289,7 @@ class TestTokenExpiredCallsWarning:
     def test_calls_show_token_expired_warning(self) -> None:
         app = _make_app()
         app._on_token_expired({"queued_changes": 3})
-        app._window.show_token_expired_warning.assert_called_once_with()
+        app._window.show_token_expired_warning.assert_called_once_with(3)
 
     def test_does_not_call_show_pre_auth(self) -> None:
         app = _make_app()
@@ -312,7 +312,7 @@ class TestTokenExpiredCallsWarning:
         app = _make_app()
         app._window.is_auth_browser_active.return_value = True
         app._on_token_expired({"queued_changes": 1})
-        app._window.show_token_expired_warning.assert_called_once_with()
+        app._window.show_token_expired_warning.assert_called_once_with(1)
 
 
 # ---------------------------------------------------------------------------

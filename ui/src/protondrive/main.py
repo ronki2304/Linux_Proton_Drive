@@ -438,7 +438,7 @@ class Application(Adw.Application):
         self._last_token_expired_queued_count = queued_changes
 
         if self._window is not None:
-            self._window.show_token_expired_warning()
+            self._window.show_token_expired_warning(queued_changes)
             self.show_reauth_dialog()
 
     def show_reauth_dialog(self) -> None:

@@ -305,8 +305,14 @@ class MainWindow(Adw.ApplicationWindow):
         )
         about.present(self)
 
-    def show_token_expired_warning(self) -> None:
-        """Show the session-expired banner. Called by Application on token_expired."""
+    def show_token_expired_warning(self, queued_changes: int = 0) -> None:
+        """Show the session-expired banner with optional queued-change count."""
+        if queued_changes > 0:
+            noun = "change" if queued_changes == 1 else "changes"
+            title = f"Session expired — {queued_changes} {noun} queued"
+        else:
+            title = "Session expired — sign in to resume sync"
+        self.session_expired_banner.set_title(title)
         self.session_expired_banner.set_revealed(True)
 
     def clear_token_expired_warning(self) -> None:
@@ -437,6 +443,7 @@ class MainWindow(Adw.ApplicationWindow):
 
     def on_offline(self) -> None:
         """Shift all pair rows and footer bar to offline state."""
+        self._error_pending_cycle.clear()  # offline ends any in-progress sync cycle
         for pair_id, row in self._sync_pair_rows.items():
             last_synced_text = self._pairs_data.get(pair_id, {}).get("last_synced_text")
             row.set_state("offline", last_synced_text=last_synced_text)
@@ -512,6 +519,7 @@ class MainWindow(Adw.ApplicationWindow):
         # sync_complete event via its regression guard (see on_sync_complete
         # below). AC7 row 1 resolves there — doing it here would flash before
         # sync_complete.
+        self._error_pending_cycle.clear()  # replay is a complete sync cycle; stale flags clear
 
     def on_crash_recovery_complete(self) -> None:
         """Show crash recovery toast (Story 5-4 FR44)."""

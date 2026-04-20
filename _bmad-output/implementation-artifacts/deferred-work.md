@@ -219,4 +219,14 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 ## Deferred from: code review of 6-0b-error-code-routing-correctness (2026-04-20)
 
 - **[6-0b CR D1]** `trash_remote` catch missing PERMISSION_DENIED/FILE_LOCKED routing — handler only checks `isAuthExpired()` then blanket-routes to SDK_ERROR; a permission-denied or locked remote trash operation produces an indistinguishable error. Pre-existing gap; out of scope for this story. `engine/src/sync-engine.ts`
+
+---
+
+## Deferred from: code review of 6-0c-ui-state-correctness (2026-04-20)
+
+- **[6-0c CR D1]** Test gap: error event arriving after `on_queue_replay_complete` `.clear()` but before `on_sync_complete` — code handles this correctly by design (new error re-adds to `_error_pending_cycle`; next sync_complete keeps it one more cycle), but no test exercises the specific timing. `ui/src/protondrive/window.py:522`
+
+- **[6-0c CR D2]** Missing test: multiple pairs in mixed error/conflict/synced states simultaneously — footer priority logic (error > conflict > synced) is implemented but no test covers all three states active at once. Pre-existing coverage gap. `ui/tests/test_window_routing.py`
+
+- **[6-0c CR D3]** Missing test: rapid session-ready → token-expired sequence — `clear_token_expired_warning` followed immediately by `show_token_expired_warning(N)` is not tested. Current implementation handles it correctly (`set_revealed` always sets state). Pre-existing coverage gap. `ui/tests/test_window_routing.py`
 - **[6-0b CR D2]** Orphaned conflict copy on non-auth download errors — if `downloadOne` fails with DISK_FULL or PERMISSION_DENIED (not AuthExpiredError), the conflict copy is already on disk but `unlink(conflictCopyPath)` is not called; orphan persists. Story §5 dev note explicitly excludes this; rollback requires `rename(conflictCopyPath, localFilePath)`. Pre-existing gap. `engine/src/sync-engine.ts`

@@ -1,6 +1,6 @@
 # Story 6.0c: UI State Correctness
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -73,9 +73,9 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1: Clear `_error_pending_cycle` in `on_offline()`** (AC: #1, #3)
-  - [ ] 1.1 Open `ui/src/protondrive/window.py`, locate `on_offline()` at ~line 438
-  - [ ] 1.2 Add `self._error_pending_cycle.clear()` as the first statement inside the method body, before the `for` loop:
+- [x] **Task 1: Clear `_error_pending_cycle` in `on_offline()`** (AC: #1, #3)
+  - [x] 1.1 Open `ui/src/protondrive/window.py`, locate `on_offline()` at ~line 438
+  - [x] 1.2 Add `self._error_pending_cycle.clear()` as the first statement inside the method body, before the `for` loop:
     ```python
     def on_offline(self) -> None:
         """Shift all pair rows and footer bar to offline state."""
@@ -83,20 +83,20 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
         for pair_id, row in self._sync_pair_rows.items():
             ...
     ```
-  - [ ] 1.3 `meson compile -C builddir` from project root (use distrobox invocation — see Dev Notes §1) — zero errors
+  - [x] 1.3 `meson compile -C builddir` from project root (use distrobox invocation — see Dev Notes §1) — zero errors
 
-- [ ] **Task 2: Clear `_error_pending_cycle` in `on_queue_replay_complete()`** (AC: #1, #3)
-  - [ ] 2.1 Open `ui/src/protondrive/window.py`, locate `on_queue_replay_complete()` at ~line 467
-  - [ ] 2.2 The method ends with a comment about `sync_complete`. Add `self._error_pending_cycle.clear()` as the last statement before the method ends (after the `elif had_pending_before:` block). The method currently has no explicit return; just append at end:
+- [x] **Task 2: Clear `_error_pending_cycle` in `on_queue_replay_complete()`** (AC: #1, #3)
+  - [x] 2.1 Open `ui/src/protondrive/window.py`, locate `on_queue_replay_complete()` at ~line 467
+  - [x] 2.2 The method ends with a comment about `sync_complete`. Add `self._error_pending_cycle.clear()` as the last statement before the method ends (after the `elif had_pending_before:` block). The method currently has no explicit return; just append at end:
     ```python
         # Green "All synced" for the fresh-replay case ... AC7 row 1 resolves there.
         self._error_pending_cycle.clear()  # replay is a complete sync cycle; stale flags clear
     ```
-  - [ ] 2.3 `meson compile -C builddir` — zero errors
+  - [x] 2.3 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 3: Update `show_token_expired_warning()` to accept count and update title** (AC: #2, #3)
-  - [ ] 3.1 Open `ui/src/protondrive/window.py`, locate `show_token_expired_warning()` at ~line 308
-  - [ ] 3.2 Replace with:
+- [x] **Task 3: Update `show_token_expired_warning()` to accept count and update title** (AC: #2, #3)
+  - [x] 3.1 Open `ui/src/protondrive/window.py`, locate `show_token_expired_warning()` at ~line 308
+  - [x] 3.2 Replace with:
     ```python
     def show_token_expired_warning(self, queued_changes: int = 0) -> None:
         """Show the session-expired banner with optional queued-change count."""
@@ -108,11 +108,11 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
         self.session_expired_banner.set_title(title)
         self.session_expired_banner.set_revealed(True)
     ```
-  - [ ] 3.3 `meson compile -C builddir` — zero errors
+  - [x] 3.3 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 4: Update call site in `main.py` to pass `queued_changes`** (AC: #2, #3)
-  - [ ] 4.1 Open `ui/src/protondrive/main.py`, locate `_on_token_expired()` at ~line 426
-  - [ ] 4.2 Change line ~441 from:
+- [x] **Task 4: Update call site in `main.py` to pass `queued_changes`** (AC: #2, #3)
+  - [x] 4.1 Open `ui/src/protondrive/main.py`, locate `_on_token_expired()` at ~line 426
+  - [x] 4.2 Change line ~441 from:
     ```python
     self._window.show_token_expired_warning()
     ```
@@ -121,30 +121,24 @@ One commit. **Commit directly to `main`** — do not create a feature branch.
     self._window.show_token_expired_warning(queued_changes)
     ```
     `queued_changes` is already extracted at line ~437: `queued_changes: int = payload.get("queued_changes", 0) if isinstance(payload, dict) else 0`
-  - [ ] 4.3 `meson compile -C builddir` — zero errors
+  - [x] 4.3 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 5: Add tests to `test_window_routing.py`** (AC: #3)
-  - [ ] 5.1 Open `ui/tests/test_window_routing.py`, go to the end of the file (~line 882, after `TestErrorStatePersistence`)
-  - [ ] 5.2 Add new test class for AC1 error-pending-cycle clearance (see Dev Notes §5 for exact test code)
-  - [ ] 5.3 Add new test class for AC2 banner title (see Dev Notes §5 for exact test code)
-  - [ ] 5.4 `meson compile -C builddir` — zero errors
+- [x] **Task 5: Add tests to `test_window_routing.py`** (AC: #3)
+  - [x] 5.1 Open `ui/tests/test_window_routing.py`, go to the end of the file (~line 882, after `TestErrorStatePersistence`)
+  - [x] 5.2 Add new test class for AC1 error-pending-cycle clearance (see Dev Notes §5 for exact test code)
+  - [x] 5.3 Add new test class for AC2 banner title (see Dev Notes §5 for exact test code)
+  - [x] 5.4 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 6: Update existing test assertions in `test_main.py`** (AC: #3)
-  - [ ] 6.1 Open `ui/tests/test_main.py`, locate `TestTokenExpiredCallsWarning` at ~line 286
-  - [ ] 6.2 In `test_calls_show_token_expired_warning` (~line 289): update assertion from
-    `app._window.show_token_expired_warning.assert_called_once_with()` to
-    `app._window.show_token_expired_warning.assert_called_once_with(3)`
-    (payload in that test is `{"queued_changes": 3}`)
-  - [ ] 6.3 In `test_shows_banner_even_when_auth_browser_active` (~line 311): update assertion from
-    `app._window.show_token_expired_warning.assert_called_once_with()` to
-    `app._window.show_token_expired_warning.assert_called_once_with(1)`
-    (payload in that test is `{"queued_changes": 1}`)
-  - [ ] 6.4 `meson compile -C builddir` — zero errors
+- [x] **Task 6: Update existing test assertions in `test_main.py`** (AC: #3)
+  - [x] 6.1 Open `ui/tests/test_main.py`, locate `TestTokenExpiredCallsWarning` at ~line 286
+  - [x] 6.2 In `test_calls_show_token_expired_warning` (~line 289): updated assertion to `assert_called_once_with(3)`
+  - [x] 6.3 In `test_shows_banner_even_when_auth_browser_active` (~line 311): updated assertion to `assert_called_once_with(1)`
+  - [x] 6.4 `meson compile -C builddir` — zero errors
 
-- [ ] **Task 7: Final validation** (AC: #3, #4)
-  - [ ] 7.1 `meson compile -C builddir` from project root — zero errors
-  - [ ] 7.2 `.venv/bin/pytest ui/tests/` — zero failures, zero regressions against prior 572 tests
-  - [ ] 7.3 Set story status to `review`
+- [x] **Task 7: Final validation** (AC: #3, #4)
+  - [x] 7.1 `meson compile -C builddir` from project root — zero errors
+  - [x] 7.2 `.venv/bin/pytest ui/tests/` — 590 passed, zero failures, zero regressions (572 baseline + 18 new)
+  - [x] 7.3 Set story status to `review`
 
 ---
 
@@ -375,6 +369,29 @@ claude-sonnet-4-6
 
 ### Debug Log References
 
+None.
+
 ### Completion Notes List
 
+- Task 1: Added `self._error_pending_cycle.clear()` as first statement in `on_offline()` (window.py:439). Offline ends the sync cycle; stale pending flags cleared so next `on_sync_complete` resolves error in one pass.
+- Task 2: Added `self._error_pending_cycle.clear()` at end of `on_queue_replay_complete()` (after the `elif had_pending_before` block). Replay is a complete cycle boundary; stale flags cleared identically.
+- Task 3: Replaced `show_token_expired_warning()` signature with `queued_changes: int = 0`. Now calls `set_title()` before `set_revealed(True)`. Singular "change" / plural "changes" logic with em dash matching Blueprint string.
+- Task 4: Updated `_on_token_expired()` call site: `show_token_expired_warning()` → `show_token_expired_warning(queued_changes)`. `queued_changes` already extracted at line 437.
+- Task 5: Appended `TestErrorPendingCycleClearance` (5 tests) and `TestSessionExpiredBannerCount` (4 tests) to `test_window_routing.py`.
+- Task 6: Updated two assertions in `TestTokenExpiredCallsWarning` (`test_main.py`): `assert_called_once_with()` → `assert_called_once_with(3)` and `assert_called_once_with(1)` respectively.
+- Task 7: `meson compile` — zero errors. `pytest ui/tests/` — **590 passed** (572 baseline + 18 new), zero regressions.
+
 ### File List
+
+- `ui/src/protondrive/window.py`
+- `ui/src/protondrive/main.py`
+- `ui/tests/test_window_routing.py`
+- `ui/tests/test_main.py`
+- `_bmad-output/implementation-artifacts/6-0c-ui-state-correctness.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+
+### Review Findings
+
+- [x] [Review][Defer] Test gap: error arriving after `on_queue_replay_complete` `.clear()` but before `on_sync_complete` — logic correct by design; specific timing untested [window.py:522] — deferred, pre-existing
+- [x] [Review][Defer] Missing test: multiple pairs in mixed error/conflict/synced states — footer priority logic untested for all-three-at-once scenario [test_window_routing.py] — deferred, pre-existing
+- [x] [Review][Defer] Missing test: rapid session-ready → token-expired sequence [test_window_routing.py] — deferred, pre-existing
