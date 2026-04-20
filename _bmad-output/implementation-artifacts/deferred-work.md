@@ -218,3 +218,13 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 ## Deferred from: code review of 5-8-actionable-error-file-locked (2026-04-19)
 
 - **[5-8 CR W2]** `delete_local` catch: PERMISSION_DENIED and FILE_LOCKED not checked — `unlink()` failures at `sync-engine.ts:491` emit SDK_ERROR for all non-ENOENT errors including EPERM (directory became read-only). Story 5-8 spec explicitly excludes FILE_LOCKED for delete_local; Story 5-6 also omitted PERMISSION_DENIED here. Pre-existing gap. `engine/src/sync-engine.ts:491`
+
+---
+
+## Deferred from: code review of 6-0a-unbounded-loop-recursion-safety (2026-04-20)
+
+- **[6-0a CR D1]** Silent depth cap for deep remote trees gives no user-visible error — `walkRemoteTree` returns an empty map with only a `debugLog` when depth >= 50. Users with legitimate remote folder trees >50 levels deep will silently lose sync coverage with no UI signal. `engine/src/sync-engine.ts:1109`
+
+- **[6-0a CR D2]** `walkLocalTree` stat() race silently skips files — pre-existing behavior. A file deleted between `readdir` and `stat` is silently skipped with only a `debugLog`, leaving stale `sync_state` rows. `engine/src/sync-engine.ts:1084`
+
+- **[6-0a CR D3]** `cleanTmpFilesInDir` exported with optional `depth` parameter — external callers could pass a non-zero depth, causing unexpected early cap at `MAX_CLEAN_DEPTH - depth` levels instead of 50. Theoretical; only internal caller uses the default. `engine/src/main.ts:608`

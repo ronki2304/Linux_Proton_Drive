@@ -565,6 +565,14 @@ For the dead-letter test, the cleanest approach: create a real in-memory StateDb
 - Existing `cleanTmpFilesInDir` tests: `engine/src/main.test.ts:732–753`
 - Deferred work (pre-triage): `_bmad-output/implementation-artifacts/deferred-work.md`
 
+## Review Findings
+
+- [ ] [Review][Decision] `attempt_count` field declared optional (`?`) but AC1 requires it required — `ChangeQueueEntry.attempt_count` is `attempt_count?: number` in state-db.ts; spec AC1 says `attempt_count: number` (non-optional). Dev noted backward-compat reason: existing test fixtures use `Omit<ChangeQueueEntry, "id">` and adding a required field would break them. Decision needed: make it required + update all affected test fixtures, or accept optional as the implementation choice. `[engine/src/state-db.ts:34]`
+
+- [x] [Review][Defer] Silent depth cap for deep remote trees gives no user-visible error `[engine/src/sync-engine.ts:1109]` — deferred, pre-existing design; spec explicitly specifies debugLog-only signal (AC3). Legitimate remote folders >50 levels deep will silently lose sync coverage.
+- [x] [Review][Defer] walkLocalTree stat() race between readdir and stat silently skips files `[engine/src/sync-engine.ts:1084]` — deferred, pre-existing behavior predating this story
+- [x] [Review][Defer] cleanTmpFilesInDir second parameter is exported; external callers could pass non-zero depth for unexpected early cap `[engine/src/main.ts:608]` — deferred, theoretical; only internal caller uses default
+
 ## Dev Agent Record
 
 ### Agent Model Used
