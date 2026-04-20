@@ -475,4 +475,4 @@ class TestSetErrorState:
         panel.set_error_state("p1", True, "Sync error")
         panel.error_banner.reset_mock()
         panel.show_pair({"pair_id": "p2", "local_path": "/home/user/Docs"})
-        panel.error_banner.set_revealed.assert_called_with(False)
+        panel.error_banner.set_revealed.assert_called_once_with(False)

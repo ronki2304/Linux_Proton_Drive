@@ -17,7 +17,7 @@ so that DISK_FULL, PERMISSION_DENIED, and queue-replay edge cases are verified a
 3. **Queue replay edge cases**: Three tests are added inside the existing `"SyncEngine — post-reauth queue drain (Story 5-3)"` describe block:
    - `change_type='deleted'` entry in queue → `client.trashNode` is called during drain
    - New file (no sync_state) with `change_type='modified'` → `client.uploadFile` is called during drain
-   - File queued for upload but missing on disk at drain time → drain completes without throwing, `uploadFile` is NOT called, queue entry is removed
+   - File queued for upload but missing on disk at drain time → drain completes without throwing, `uploadFile` is NOT called, entry routed to "conflict" (stays in queue for retry — file may reappear)
 
 4. **`test_main.py` payload shape**: Both calls `app._on_token_expired({"payload": {"code": "SESSION_EXPIRED"}})` in `TestTokenExpiredResetsWatcherStatus` are replaced with `app._on_token_expired({"queued_changes": 0})`. Both tests must still pass after the fix.
 
@@ -470,15 +470,15 @@ N/A — no external debug logs referenced.
 
 ### Review Findings
 
-- [ ] [Review][Decision] AC3 ENOENT queue-entry behavior mismatch — AC3 states "queue entry is removed" after ENOENT mid-replay, but `processQueueEntry` routes ENOENT to `"conflict"` (entry stays, `skipped_conflicts++`). Test correctly asserts `queueSize=1`. Need human decision: (a) accept code behavior and update AC3 wording, or (b) change `processQueueEntry` to dequeue on ENOENT. [`engine/src/sync-engine.ts:888-894`, `engine/src/sync-engine.test.ts:887`]
+- [x] [Review][Decision] AC3 ENOENT queue-entry behavior mismatch — RESOLVED: update spec AC3 wording to match code behavior (entry stays as conflict, not removed). Code behavior is safer — vanished file may reappear. [`engine/src/sync-engine.ts:888-894`, `engine/src/sync-engine.test.ts:887`]
 
 - [ ] [Review][Patch] drain-deleted test missing sync_state removal assertion — after `trashNode` succeeds, the `sync_state` row for the deleted file should be purged; test only checks `result.synced` and queue size but not `db.getSyncState(PAIR_ID, fileName) === undefined`. [`engine/src/sync-engine.test.ts:842`]
 
-- [ ] [Review][Patch] PERMISSION_DENIED Site 2 test missing `pair_id` assertion — Sites 4 and 5 in the PD describe block both assert `errorEvent.payload.pair_id === PAIR_ID`, but Site 2 stops at `expect(errorEvent).toBeTruthy()` — inconsistency would mask a bug where `pair_id` is absent from the Site 2 error payload. [`engine/src/sync-engine.test.ts`]
+- [x] [Review][Patch] PERMISSION_DENIED Site 2 test — already had `pair_id` assertion (verified, no change needed) [`engine/src/sync-engine.test.ts`] ✓ VERIFIED
 
-- [ ] [Review][Patch] ENOENT drain test should assert no error event emitted — the "file missing on disk" test confirms `skipped_conflicts=1` and `queueSize=1` but does not assert `emittedEvents.filter(e => e.type === "error").length === 0`; silent conflict routing should produce no error event and this is unverified. [`engine/src/sync-engine.test.ts:882-888`]
+- [x] [Review][Patch] ENOENT drain test — added no-error-event assertion [`engine/src/sync-engine.test.ts:888`] ✓ APPLIED
 
-- [ ] [Review][Patch] DISK_FULL Site 1 test should assert `downloadFile` NOT called — when `copyFile` throws ENOSPC at Site 1 (conflict copy), the engine should short-circuit without calling `downloadFile`; test only asserts DISK_FULL was emitted, not that `downloadFile` was not invoked. [`engine/src/sync-engine.test.ts`]
+- [x] [Review][Patch] DISK_FULL Site 1 test — added `downloadFile` NOT called assertion [`engine/src/sync-engine.test.ts:3501`] ✓ APPLIED
 
 - [x] [Review][Defer] Site 3 DISK_FULL test doesn't assert `downloadFile` NOT called — secondary assertion quality; primary DISK_FULL emission check is correct — deferred, pre-existing [`engine/src/sync-engine.test.ts`]
 - [x] [Review][Defer] `mock.module` accumulates in Bun's module registry across tests — `mock.restore()` does not unregister `mock.module` registrations; DISK_FULL/PD describe blocks are last in file so no subsequent tests are contaminated — deferred, pre-existing Bun limitation [`engine/src/sync-engine.test.ts`]

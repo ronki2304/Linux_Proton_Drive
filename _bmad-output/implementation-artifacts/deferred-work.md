@@ -176,7 +176,7 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ## Deferred from: code review of 5-9-actionable-error-sdk-api-error-and-error-state-components (2026-04-19)
 
-- **[5-9 CR W1]** `_error_pending_cycle` persists one extra cycle after offline→online boundary — when an error arrives then the device goes offline→online, the `_error_pending_cycle` flag is still set from before offline; first clean `on_sync_complete` consumes the flag but keeps error; second clean cycle finally clears it. Effect: error lingers one extra cycle. Same applies if `queue_replay_complete` fires without a subsequent `sync_complete` for that pair. Fix: clear `_error_pending_cycle` entries in `on_offline()` and/or `on_queue_replay_complete()`; requires design decision to avoid introducing regressions. `ui/src/protondrive/window.py`
+- ~~**[5-9 CR W1]**~~ **RESOLVED by Story 6-0c** — `_error_pending_cycle` cleared in `on_offline()` and `on_queue_replay_complete()`. `ui/src/protondrive/window.py`
 
 ---
 
@@ -212,6 +212,16 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 ## Deferred from: code review of 6-0b-error-code-routing-correctness (2026-04-20)
 
 - **[6-0b CR D1]** `trash_remote` catch missing PERMISSION_DENIED/FILE_LOCKED routing — handler only checks `isAuthExpired()` then blanket-routes to SDK_ERROR; a permission-denied or locked remote trash operation produces an indistinguishable error. Pre-existing gap; out of scope for this story. `engine/src/sync-engine.ts`
+
+---
+
+## Deferred from: code review 6-0x cross-story (2026-04-20)
+
+- **[6-0x CR D3]** `walkLocalTree` cycle guard uses string path, not inode — bind mounts mapping the same physical directory to two different mount points produce different path strings and defeat the `visited` Set. Requires `stat()` per directory to compare `dev:ino` pairs. Exotic edge case (bind mounts inside a user's sync root); acceptable risk for now. `engine/src/sync-engine.ts:1088-1103`
+- **[6-0x CR W1]** Symlink skip in `walkLocalTree` is silent — `entry.isSymbolicLink()` skips entries with no logging or user-facing event. Users who symlink directories into their sync root get no feedback that those files are excluded. `engine/src/sync-engine.ts:1095`
+- **[6-0x CR W2]** `walkRemoteTree` depth cap returns empty maps — indistinguishable from a legitimately empty remote folder. Could cause sync engine to interpret deep remote files as "deleted" and propagate deletions locally. Same item as [6-0a CR D1] but from a data-loss angle. `engine/src/sync-engine.ts:1109`
+- **[6-0x CR W3]** ENOSPC emission path not guarded by `inotifyExhausted` — the `INOTIFY_LIMIT` error event emission is guarded by `!this.stopped` but not by `inotifyExhausted`; if the error fires multiple times before the flag is set, duplicate events may be emitted. `engine/src/watcher.ts:65-76`
+- **[6-0x CR W4]** `[5-9 CR W1]` in deferred-work.md describes the exact bug fixed by Story 6-0c — should be marked resolved. Housekeeping gap, not a code issue.
 
 ---
 

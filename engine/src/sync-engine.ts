@@ -95,7 +95,6 @@ type WorkItem =
 
 const MAX_DRAIN_ATTEMPTS = 5;    // dead-letter change_queue entry after N "failed" outcomes
 const MAX_REMOTE_TREE_DEPTH = 50; // guard against circular remote folder graphs
-const MAX_CONFLICT_SUFFIX = 100;  // cap same-day conflict copy uniqueness counter
 
 // ── SyncEngine ───────────────────────────────────────────────────────────────
 
@@ -305,26 +304,14 @@ export class SyncEngine {
       const localFilePath = join(pair.local_path, item.relativePath);
       const d = new Date();
       const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      // Ensure uniqueness: a second conflict on the same file within the same
-      // calendar day would otherwise silently overwrite the first copy.
-      let conflictCopyPath = `${localFilePath}.conflict-${date}`;
-      {
-        let n = 2;
-        let candidate = conflictCopyPath;
-        while (n <= MAX_CONFLICT_SUFFIX) {
-          try {
-            await stat(candidate);
-            // Path exists — try next counter suffix.
-            candidate = `${localFilePath}.conflict-${date}-${n}`;
-            n++;
-          } catch {
-            conflictCopyPath = candidate;
-            break;
-          }
-        }
-        // If all suffixes 2–100 are taken (>100 same-day conflicts on one file),
-        // conflictCopyPath remains the initial base path; the rename below will
-        // atomically overwrite that slot. Extreme edge case — loop now terminates.
+      // Ensure uniqueness via epoch-ms timestamp — eliminates suffix exhaustion risk.
+      let conflictCopyPath = `${localFilePath}.conflict-${date}-${Date.now()}`;
+      try {
+        await stat(conflictCopyPath);
+        // Extremely unlikely: same millisecond collision — append random suffix.
+        conflictCopyPath = `${localFilePath}.conflict-${date}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      } catch {
+        // Path does not exist — safe to use.
       }
       const tmpPath = `${conflictCopyPath}.protondrive-tmp-${Date.now()}`;
       try {
@@ -422,7 +409,7 @@ export class SyncEngine {
       const localFilePath = join(pair.local_path, item.relativePath);
       const d = new Date();
       const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const conflictCopyPath = `${localFilePath}.conflict-${date}`;
+      const conflictCopyPath = `${localFilePath}.conflict-${date}-${Date.now()}`;
       try {
         await rename(localFilePath, conflictCopyPath);
       } catch (err) {
@@ -766,7 +753,19 @@ export class SyncEngine {
             failed++;
             const newAttempts = this.stateDb.incrementAttemptCount(entry.id);
             if (newAttempts >= MAX_DRAIN_ATTEMPTS) {
-              this.stateDb.dequeue(entry.id);
+              this.stateDb.deadLetter(
+                { id: entry.id, pair_id: entry.pair_id, relative_path: entry.relative_path, change_type: entry.change_type },
+                `Failed ${newAttempts} times`,
+              );
+              this.emitEvent({
+                type: "error",
+                payload: {
+                  code: "DEAD_LETTER",
+                  message: `"${entry.relative_path}" failed to sync after ${newAttempts} attempts and was removed from the queue`,
+                  pair_id: entry.pair_id,
+                  relative_path: entry.relative_path,
+                },
+              });
               debugLog(
                 `sync-engine: dead-lettered queue entry ${entry.id} (${entry.relative_path}) after ${newAttempts} attempts`,
               );
@@ -903,6 +902,20 @@ export class SyncEngine {
                   code: "PERMISSION_DENIED",
                   message: `Check folder permissions for ${join(pair.local_path, entry.relative_path)}`,
                   pair_id: pair.pair_id,
+                  relative_path: entry.relative_path,
+                },
+              });
+              // Permission errors are permanent — dead-letter immediately instead of retrying.
+              this.stateDb.deadLetter(
+                { id: entry.id, pair_id: entry.pair_id, relative_path: entry.relative_path, change_type: entry.change_type },
+                "PERMISSION_DENIED",
+              );
+              this.emitEvent({
+                type: "error",
+                payload: {
+                  code: "DEAD_LETTER",
+                  message: `"${entry.relative_path}" cannot sync due to permission error and was removed from the queue`,
+                  pair_id: entry.pair_id,
                   relative_path: entry.relative_path,
                 },
               });

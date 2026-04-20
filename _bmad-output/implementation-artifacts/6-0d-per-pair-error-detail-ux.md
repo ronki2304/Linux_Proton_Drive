@@ -518,6 +518,11 @@ All changes are in `ui/`. The engine already emits correct messages — `on_pair
 - Engine error message extraction: `ui/src/protondrive/engine.py:319-323`
 - Error message call chain: engine.py `_emit_error()` → main.py `_on_engine_error()` → window.py `on_pair_error()`
 
+### Review Findings (CR 6-0x cross-story, 2026-04-20)
+
+- [x] [Review][Patch] P1: Missing `select_pair()` test for error banner restore — added `TestSelectPairRestoresErrorBanner` class `[ui/tests/test_window_routing.py]` ✓ APPLIED
+- [x] [Review][Patch] P2: Weak `assert_called_with(False)` → `assert_called_once_with(False)` `[ui/tests/test_pair_detail_panel.py]` ✓ APPLIED
+
 ## Dev Agent Record
 
 ### Agent Model Used

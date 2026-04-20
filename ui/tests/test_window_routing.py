@@ -1117,6 +1117,34 @@ class TestRowActivatedRestoresErrorBanner:
 
 
 # ---------------------------------------------------------------------------
+# Story 6-0d — select_pair restores error banner (CR 6-0x P1)
+# ---------------------------------------------------------------------------
+
+class TestSelectPairRestoresErrorBanner:
+    """select_pair restores error banner for errored pairs (Story 6-0d AC2)."""
+
+    def test_selecting_error_pair_calls_set_error_state(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win._error_pair_ids.add("p1")
+        win._error_messages["p1"] = "Free up space on /dev/sda1"
+        win._pairs_data["p1"] = {"pair_id": "p1", "local_path": "/home/user/Docs"}
+        win.select_pair("p1")
+        win.pair_detail_panel.set_error_state.assert_called_once_with(
+            "p1", True, "Free up space on /dev/sda1"
+        )
+
+    def test_selecting_non_error_pair_does_not_call_set_error_state(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win._pairs_data["p1"] = {"pair_id": "p1", "local_path": "/home/user/Docs"}
+        win.select_pair("p1")
+        win.pair_detail_panel.set_error_state.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Story 6-0d — clear_session resets _error_messages
 # ---------------------------------------------------------------------------
 

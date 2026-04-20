@@ -8,7 +8,7 @@
  */
 
 import { describe, it, mock, beforeEach, afterEach, expect } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, statSync, chmodSync, readFileSync, existsSync, symlinkSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, statSync, chmodSync, readFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -249,7 +249,8 @@ describe("SyncEngine — delta detection (AC1)", () => {
     // Conflict copy created
     const d = new Date();
     const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    expect(existsSync(join(tmpDir, `file.txt.conflict-${localDate}`))).toBe(true);
+    const conflictCopies = readdirSync(tmpDir).filter((f) => f.startsWith(`file.txt.conflict-${localDate}-`));
+    expect(conflictCopies.length).toBeGreaterThanOrEqual(1);
   });
 
   it("new local file only → upload", async () => {
@@ -320,15 +321,16 @@ describe("SyncEngine — delta detection (AC1)", () => {
     expect(uploadFn.mock.calls.length).toBe(0);
     // download IS called (remote version fetched to original path)
     expect(downloadFn.mock.calls.length).toBe(1);
-    // conflict copy exists (original local content preserved)
-    expect(existsSync(join(tmpDir, "conflict.txt.conflict-" + date))).toBe(true);
+    // conflict copy exists (original local content preserved) — timestamp-suffixed
+    const conflictCopies = readdirSync(tmpDir).filter((f) => f.startsWith(`conflict.txt.conflict-${date}-`));
+    expect(conflictCopies.length).toBeGreaterThanOrEqual(1);
     // original path re-populated with remote version (downloaded)
     expect(existsSync(join(tmpDir, "conflict.txt"))).toBe(true);
     // conflict_detected event emitted
     const conflictEvent = emittedEvents.find((e) => e.type === "conflict_detected");
     expect(conflictEvent).toBeTruthy();
     expect((conflictEvent!.payload as Record<string, unknown>).local_path).toBe(join(tmpDir, "conflict.txt"));
-    expect((conflictEvent!.payload as Record<string, unknown>).conflict_copy_path).toBe(join(tmpDir, "conflict.txt.conflict-" + date));
+    expect((conflictEvent!.payload as Record<string, unknown>).conflict_copy_path).toContain(`conflict.txt.conflict-${date}-`);
     // upsertSyncState called (from collision download handler)
     const state = db.getSyncState(PAIR_ID, "conflict.txt");
     expect(state).toBeTruthy();
@@ -885,6 +887,8 @@ describe("SyncEngine — post-reauth queue drain (Story 5-3)", () => {
     // ENOENT routes to "conflict" in processQueueEntry — entry stays in queue
     expect(result.skipped_conflicts).toBe(1);
     expect(db.queueSize(PAIR_ID)).toBe(1);
+    // Silent conflict routing should produce no error event
+    expect(emittedEvents.filter((e) => e.type === "error").length).toBe(0);
   });
 });
 
@@ -2074,13 +2078,14 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
     // Conflict copy must exist (preserving local "local content")
     const d = new Date();
     const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    expect(existsSync(join(tmpDir, `conflict.txt.conflict-${localDate}`))).toBe(true);
+    const conflictCopies = readdirSync(tmpDir).filter((f) => f.startsWith(`conflict.txt.conflict-${localDate}-`));
+    expect(conflictCopies.length).toBeGreaterThanOrEqual(1);
 
     // conflict_detected event emitted
     const conflictEvent = emittedEvents.find((e) => e.type === "conflict_detected");
     expect(conflictEvent).toBeTruthy();
     expect((conflictEvent!.payload as Record<string, unknown>).local_path).toBe(join(tmpDir, "conflict.txt"));
-    expect((conflictEvent!.payload as Record<string, unknown>).conflict_copy_path).toBe(join(tmpDir, `conflict.txt.conflict-${localDate}`));
+    expect((conflictEvent!.payload as Record<string, unknown>).conflict_copy_path).toContain(`conflict.txt.conflict-${localDate}-`);
 
     // Remote version was downloaded to original path
     expect(downloadFn.mock.calls.length).toBe(1);
@@ -3085,6 +3090,14 @@ describe("SyncEngine — dead-letter (6-0a AC1)", () => {
     await engine.drainQueue();
     expect(db.queueSize(PAIR_ID)).toBe(0);
 
+    // DEAD_LETTER event emitted with relative_path
+    const deadLetterEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DEAD_LETTER",
+    );
+    expect(deadLetterEvent).toBeTruthy();
+    expect((deadLetterEvent!.payload as Record<string, unknown>).relative_path).toBe("fail.txt");
+    expect((deadLetterEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+
     // Subsequent call: no entry to process → failed count is 0
     const result = await engine.drainQueue();
     expect(result.failed).toBe(0);
@@ -3143,17 +3156,8 @@ describe("SyncEngine — conflictCopyPath cap (6-0a AC5)", () => {
     mock.restore();
   });
 
-  it("loop terminates when all suffix slots taken; uses base conflict path (overwrites it)", async () => {
+  it("conflict copy uses timestamp suffix — no overwrite of existing copies", async () => {
     writeFileSync(join(tmpDir, "conflict.txt"), "local content");
-
-    // Pre-create all 100 conflict copy candidates to make stat() always succeed
-    const d = new Date();
-    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-    const basePath = join(tmpDir, `conflict.txt.conflict-${date}`);
-    writeFileSync(basePath, "base-placeholder");
-    for (let n = 2; n <= 100; n++) {
-      writeFileSync(join(tmpDir, `conflict.txt.conflict-${date}-${n}`), `placeholder-${n}`);
-    }
 
     db.upsertSyncState({
       pair_id: PAIR_ID,
@@ -3178,12 +3182,15 @@ describe("SyncEngine — conflictCopyPath cap (6-0a AC5)", () => {
     engine = new SyncEngine(db, (e) => emittedEvents.push(e));
     engine.setDriveClient(mockClient);
 
-    // Must complete without hanging (loop bounded by MAX_CONFLICT_SUFFIX=100)
     await engine.startSyncAll();
 
-    // Base conflict path overwritten with local content (loop exhausted all suffixes)
-    const content = readFileSync(basePath, "utf-8");
-    expect(content).toBe("local content");
+    // Conflict copy should exist with timestamp-based suffix (date + epoch ms)
+    const d = new Date();
+    const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const conflictFiles = readdirSync(tmpDir).filter((f) => f.startsWith(`conflict.txt.conflict-${date}-`));
+    expect(conflictFiles.length).toBeGreaterThanOrEqual(1);
+    // Original file should still exist (overwritten with remote content)
+    expect(existsSync(join(tmpDir, "conflict.txt"))).toBe(true);
   });
 });
 
@@ -3248,6 +3255,16 @@ describe("SyncEngine — error routing (Story 6-0b)", () => {
     expect(sdkError).toBeUndefined();
 
     expect(uploadFile.mock.calls.length).toBe(0);
+
+    // D4 (CR 6-0x): PERMISSION_DENIED immediately dead-lettered — entry removed from queue
+    expect(db.queueSize(PAIR_ID)).toBe(0);
+
+    // DEAD_LETTER event emitted
+    const deadLetterEvent = emittedEvents.find(
+      (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DEAD_LETTER",
+    );
+    expect(deadLetterEvent).toBeTruthy();
+    expect((deadLetterEvent!.payload as Record<string, unknown>).relative_path).toBe("file.txt");
   });
 
   // AC4 (new): delete_local EBUSY → FILE_LOCKED emitted (code path only)
@@ -3279,9 +3296,11 @@ describe("SyncEngine — error routing (Story 6-0b)", () => {
 
     await engine.startSyncAll();  // resolves normally — AuthExpiredError handled internally
 
+    // Auth-expired orphan cleanup: no conflict copy should remain
     const today = new Date();
     const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
-    expect(existsSync(join(tmpDir, `shared.txt.conflict-${date}`))).toBe(false);
+    const orphanCopies = readdirSync(tmpDir).filter((f) => f.startsWith(`shared.txt.conflict-${date}-`));
+    expect(orphanCopies.length).toBe(0);
   });
 });
 
@@ -3496,6 +3515,8 @@ describe("SyncEngine — DISK_FULL in reconcilePair (Story 6-0e)", () => {
       (e) => e.type === "error" && (e.payload as Record<string, unknown>).code === "DISK_FULL",
     );
     expect(diskFullEvent).toBeTruthy();
+    // copyFile ENOSPC should short-circuit before calling downloadFile
+    expect(mockClient.downloadFile).not.toHaveBeenCalled();
   });
 
   it("Site 3 — newFileCollisionItems: rename ENOSPC → DISK_FULL emitted", async () => {

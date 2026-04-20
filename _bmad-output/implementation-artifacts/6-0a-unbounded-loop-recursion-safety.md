@@ -573,6 +573,13 @@ For the dead-letter test, the cleanest approach: create a real in-memory StateDb
 - [x] [Review][Defer] walkLocalTree stat() race between readdir and stat silently skips files `[engine/src/sync-engine.ts:1084]` — deferred, pre-existing behavior predating this story
 - [x] [Review][Defer] cleanTmpFilesInDir second parameter is exported; external callers could pass non-zero depth for unexpected early cap `[engine/src/main.ts:608]` — deferred, theoretical; only internal caller uses default
 
+### Review Findings (CR 6-0x cross-story, 2026-04-20)
+
+- [x] [Review][Patch] D1: Conflict suffix cap overwrites first conflict copy — replaced sequential counter with epoch-ms timestamp suffix `[engine/src/sync-engine.ts:310-327]` ✓ APPLIED
+- [x] [Review][Patch] D2: Dead-lettered entries silently lost — added `DEAD_LETTER` error event + `dead_letter` table (migration v5) `[engine/src/sync-engine.ts:767-773, engine/src/state-db.ts]` ✓ APPLIED
+- [x] [Review][Patch] D4: PERMISSION_DENIED dead-lettered after 5 retries — now dead-letters immediately with `DEAD_LETTER` event `[engine/src/sync-engine.ts:896-907]` ✓ APPLIED
+- [x] [Review][Defer] D3: walkLocalTree cycle guard uses string path, not inode — bind mounts mapping same dir to two different paths defeat the `visited` Set; exotic edge case, acceptable risk for this sprint `[engine/src/sync-engine.ts:1088-1103]`
+
 ## Dev Agent Record
 
 ### Agent Model Used

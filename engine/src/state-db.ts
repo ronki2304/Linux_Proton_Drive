@@ -86,9 +86,22 @@ const MIGRATIONS: Migration[] = [
     version: 4,
     up: `ALTER TABLE change_queue ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;`,
   },
+  {
+    version: 5,
+    up: `
+      CREATE TABLE IF NOT EXISTS dead_letter (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        pair_id       TEXT NOT NULL,
+        relative_path TEXT NOT NULL,
+        change_type   TEXT NOT NULL,
+        reason        TEXT NOT NULL,
+        dead_at       TEXT NOT NULL
+      );
+    `,
+  },
 ];
 
-const CURRENT_VERSION = 4;
+const CURRENT_VERSION = 5;
 
 // ── StateDb ──────────────────────────────────────────────────────────────────
 
@@ -316,6 +329,15 @@ export class StateDb {
       )
       .get(id) as { attempt_count: number } | undefined;
     return row?.attempt_count ?? 0;
+  }
+
+  deadLetter(entry: { id: number; pair_id: string; relative_path: string; change_type: string }, reason: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO dead_letter (pair_id, relative_path, change_type, reason, dead_at) VALUES (?, ?, ?, ?, ?)`
+      )
+      .run(entry.pair_id, entry.relative_path, entry.change_type, reason, new Date().toISOString());
+    this.dequeue(entry.id);
   }
 
   setDirtySession(dirty: boolean): void {
