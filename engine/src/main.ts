@@ -128,7 +128,7 @@ import { createDriveClient } from "./sdk.js";
 import type { DriveClient } from "./sdk.js";
 import { StateDb } from "./state-db.js";
 import type { SyncPair } from "./state-db.js";
-import { writeConfigYaml } from "./config.js";
+import { writeConfigYaml, removeFromConfigYaml } from "./config.js";
 import { SyncEngine } from "./sync-engine.js";
 import { FileWatcher } from "./watcher.js";
 import { NetworkMonitor } from "./network-monitor.js";
@@ -634,6 +634,77 @@ export async function handleCommand(
       type: "add_pair_result",
       id: command.id,
       payload: { pair_id: pairId },
+    };
+  }
+
+  if (command.type === "remove_pair") {
+    if (!stateDb) {
+      return {
+        type: "remove_pair_result",
+        id: command.id,
+        payload: { error: "engine_not_ready" },
+      };
+    }
+
+    const pairId = command.payload?.["pair_id"] as string | undefined;
+    if (!pairId) {
+      return {
+        type: "remove_pair_result",
+        id: command.id,
+        payload: { error: "invalid_payload" },
+      };
+    }
+
+    const existingPairs = stateDb.listPairs();
+    if (!existingPairs.some((p) => p.pair_id === pairId)) {
+      return {
+        type: "remove_pair_result",
+        id: command.id,
+        payload: { error: "pair_not_found" },
+      };
+    }
+
+    try {
+      stateDb.deletePair(pairId);
+    } catch {
+      return {
+        type: "remove_pair_result",
+        id: command.id,
+        payload: { error: "db_write_failed" },
+      };
+    }
+
+    try {
+      removeFromConfigYaml(pairId);
+    } catch {
+      return {
+        type: "remove_pair_result",
+        id: command.id,
+        payload: { error: "config_write_failed" },
+      };
+    }
+
+    // Restart FileWatcher with remaining pairs (stops watching the removed dir).
+    if (driveClient) {
+      fileWatcher?.stop();
+      fileWatcher = new FileWatcher(
+        stateDb.listPairs(),
+        async (_pId) => {
+          void syncEngine?.drainQueue();
+        },
+        (e) => server.emitEvent(e),
+        undefined,
+        undefined,
+        () => networkMonitor?.isCurrentlyOnline ?? true,
+        (e) => stateDb!.enqueue(e),
+      );
+      void fileWatcher.initialize();
+    }
+
+    return {
+      type: "remove_pair_result",
+      id: command.id,
+      payload: {},
     };
   }
 

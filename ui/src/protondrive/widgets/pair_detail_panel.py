@@ -38,6 +38,7 @@ class PairDetailPanel(Adw.Bin):
     __gsignals__ = {
         "setup-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "view-conflict-log": (GObject.SignalFlags.RUN_FIRST, None, ()),  # Story 4-6
+        "remove-pair-requested": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
     }
 
     detail_stack: Gtk.Stack = Gtk.Template.Child()
@@ -55,6 +56,7 @@ class PairDetailPanel(Adw.Bin):
     view_conflict_log_btn: Gtk.Button = Gtk.Template.Child()
     conflict_log_slot: Gtk.Box = Gtk.Template.Child()
     conflict_log_back_btn: Gtk.Button = Gtk.Template.Child()
+    remove_pair_button: Gtk.Button = Gtk.Template.Child()
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -69,6 +71,7 @@ class PairDetailPanel(Adw.Bin):
             "clicked", lambda _: self.emit("view-conflict-log")
         )
         self.conflict_log_back_btn.connect("clicked", self._on_conflict_log_back)
+        self.remove_pair_button.connect("clicked", self._on_remove_pair_clicked)
 
     def _on_conflict_banner_dismissed(self, _banner: Adw.Banner) -> None:
         """Hide the conflict banner when user clicks Dismiss."""
@@ -81,6 +84,10 @@ class PairDetailPanel(Adw.Bin):
     def _on_conflict_log_back(self, _btn: Gtk.Button) -> None:
         """Return to the detail view from the conflict log panel."""
         self.detail_stack.set_visible_child_name("detail")
+
+    def _on_remove_pair_clicked(self, _button: Gtk.Button) -> None:
+        if self._current_pair_id is not None:
+            self.emit("remove-pair-requested", self._current_pair_id)
 
     def show_conflict_log_page(self, entries: list[dict]) -> None:
         """Populate and show the conflict log page.

@@ -423,6 +423,27 @@ class Application(Adw.Application):
                     {"type": "get_status"}, self._on_get_status_result
                 )
 
+    def _on_remove_pair_confirmed(self, pair_id: str) -> None:
+        if self._engine is not None:
+            self._engine.send_command_with_response(
+                {"type": "remove_pair", "payload": {"pair_id": pair_id}},
+                lambda payload: self._on_remove_pair_result(payload, pair_id),
+            )
+
+    def _on_remove_pair_result(self, payload: dict[str, Any], pair_id: str) -> None:
+        if payload.get("error"):
+            if self._window is not None:
+                toast = Adw.Toast.new("Failed to remove sync pair")
+                toast.set_timeout(3)
+                self._window.toast_overlay.add_toast(toast)
+            return
+        if self._window is not None:
+            self._window.on_pair_removed(pair_id)
+        if self._engine is not None:
+            self._engine.send_command_with_response(
+                {"type": "get_status"}, self._on_get_status_result
+            )
+
     def _on_add_pair_complete(self, pair_id: str) -> None:
         """Called by window after AddPairDialog creates a pair — refresh sidebar and select new row."""
         if self._engine is not None:

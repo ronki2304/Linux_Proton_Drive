@@ -80,10 +80,14 @@ class MainWindow(Adw.ApplicationWindow):
         # date is extracted from conflict_copy_path suffix "filename.ext.conflict-YYYY-MM-DD".
         self._conflict_log_entries: list[dict] = []
         self._row_activated_connected: bool = False
+        self._pending_remove_pair_id: str | None = None
         self.add_pair_button.connect("clicked", self._on_add_pair_clicked)
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
         self.pair_detail_panel.connect(
             "view-conflict-log", self._on_view_conflict_log
+        )
+        self.pair_detail_panel.connect(
+            "remove-pair-requested", self._on_remove_pair_requested
         )
 
     def _on_close_request(self, window: Gtk.Window) -> bool:
@@ -184,6 +188,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._error_pair_ids = set()
         self._error_pending_cycle = set()
         self._error_messages = {}  # Story 6-0d
+        self._pending_remove_pair_id = None
         self.hide_engine_crashed_banner()
         self._row_activated_connected = False
         self.add_pair_button.set_sensitive(False)
@@ -252,6 +257,38 @@ class MainWindow(Adw.ApplicationWindow):
     def _on_view_conflict_log(self, _panel: object) -> None:
         """Handle view-conflict-log signal — populate and show conflict log page."""
         self.pair_detail_panel.show_conflict_log_page(self._conflict_log_entries)
+
+    def _on_remove_pair_requested(self, _panel: object, pair_id: str) -> None:
+        pair_data = self._pairs_data.get(pair_id, {})
+        local_path = pair_data.get("local_path", pair_id)
+        remote_path = pair_data.get("remote_path", "").lstrip("/")
+        body = (
+            f"Local files in {local_path} will not be affected. "
+            f"Remote files in ProtonDrive/{remote_path} will not be affected. "
+            "Sync will simply stop."
+        )
+        self._pending_remove_pair_id = pair_id
+        dialog = Adw.AlertDialog(
+            heading="Stop syncing this folder pair?",
+            body=body,
+        )
+        dialog.add_response("cancel", "Cancel")
+        dialog.add_response("remove", "Remove")
+        dialog.set_response_appearance("cancel", Adw.ResponseAppearance.SUGGESTED)
+        dialog.set_response_appearance("remove", Adw.ResponseAppearance.DESTRUCTIVE)
+        dialog.set_default_response("cancel")
+        dialog.set_close_response("cancel")
+        dialog.connect("response", self._on_remove_pair_response)
+        dialog.present(self)
+
+    def _on_remove_pair_response(self, _dialog: Adw.AlertDialog, response: str) -> None:
+        pair_id = self._pending_remove_pair_id
+        self._pending_remove_pair_id = None
+        if response != "remove" or pair_id is None:
+            return
+        app = self.get_application()
+        if app is not None and hasattr(app, "_on_remove_pair_confirmed"):
+            app._on_remove_pair_confirmed(pair_id)
 
     def _on_setup_requested(self, widget: object) -> None:
         """Handle setup-requested signal from PairDetailPanel."""
@@ -469,6 +506,14 @@ class MainWindow(Adw.ApplicationWindow):
                 pair_id, True, self._error_messages.get(pair_id, "")  # Story 6-0d
             )                                                          # Story 6-0d
         self.nav_split_view.set_show_content(True)
+
+    def on_pair_removed(self, pair_id: str) -> None:
+        self._error_pair_ids.discard(pair_id)
+        self._error_pending_cycle.discard(pair_id)
+        self._error_messages.pop(pair_id, None)
+        self._conflict_copies_by_pair.pop(pair_id, None)
+        self._sync_pair_rows.pop(pair_id, None)
+        self._pairs_data.pop(pair_id, None)
 
     def on_offline(self) -> None:
         """Shift all pair rows and footer bar to offline state."""

@@ -29,6 +29,7 @@ def _make_window() -> MainWindow:
     win._error_pending_cycle = set()
     win._error_messages = {}
     win._row_activated_connected = False
+    win._pending_remove_pair_id = None
     win._settings = MagicMock()
     return win
 
@@ -1157,3 +1158,58 @@ class TestClearSessionResetsErrorMessages:
         win.clear_session()
         assert win._error_messages == {}
 
+
+
+# ---------------------------------------------------------------------------
+# TestRemovePairFlow
+# ---------------------------------------------------------------------------
+
+class TestRemovePairFlow:
+    def test_on_remove_pair_requested_stores_pending_id_and_shows_dialog(self):
+        win = _make_window()
+        win._pairs_data = {
+            "pair-x": {"local_path": "/home/user/Docs", "remote_path": "/Documents"},
+        }
+        with patch("protondrive.window.Adw") as mock_adw:
+            mock_dialog = MagicMock()
+            mock_adw.AlertDialog.return_value = mock_dialog
+            win._on_remove_pair_requested(MagicMock(), "pair-x")
+        assert win._pending_remove_pair_id == "pair-x"
+        mock_dialog.present.assert_called_once_with(win)
+
+    def test_on_remove_pair_response_cancel_does_not_call_app(self):
+        win = _make_window()
+        win._pending_remove_pair_id = "pair-x"
+        app = MagicMock()
+        win.get_application = MagicMock(return_value=app)
+        win._on_remove_pair_response(MagicMock(), "cancel")
+        assert win._pending_remove_pair_id is None
+        app._on_remove_pair_confirmed.assert_not_called()
+
+    def test_on_remove_pair_response_remove_calls_app_confirmed(self):
+        win = _make_window()
+        win._pending_remove_pair_id = "pair-x"
+        app = MagicMock()
+        app._on_remove_pair_confirmed = MagicMock()
+        win.get_application = MagicMock(return_value=app)
+        win._on_remove_pair_response(MagicMock(), "remove")
+        assert win._pending_remove_pair_id is None
+        app._on_remove_pair_confirmed.assert_called_once_with("pair-x")
+
+    def test_on_pair_removed_clears_tracking_state(self):
+        win = _make_window()
+        win._error_pair_ids = {"pair-x", "pair-y"}
+        win._error_pending_cycle = {"pair-x"}
+        win._error_messages = {"pair-x": "DISK_FULL", "pair-y": "PERMISSION_DENIED"}
+        win._conflict_copies_by_pair = {"pair-x": ["/tmp/a.conflict-2026-01-01"]}
+        win._sync_pair_rows = {"pair-x": MagicMock(), "pair-y": MagicMock()}
+        win._pairs_data = {"pair-x": {"local_path": "/foo"}, "pair-y": {"local_path": "/bar"}}
+        win.on_pair_removed("pair-x")
+        assert "pair-x" not in win._error_pair_ids
+        assert "pair-y" in win._error_pair_ids  # other pair unaffected
+        assert "pair-x" not in win._error_messages
+        assert "pair-x" not in win._conflict_copies_by_pair
+        assert "pair-x" not in win._sync_pair_rows
+        assert "pair-y" in win._sync_pair_rows  # other pair row unaffected
+        assert "pair-x" not in win._pairs_data
+        assert "pair-y" in win._pairs_data  # other pair data unaffected

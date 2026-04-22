@@ -273,3 +273,12 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 ## Deferred from: code review of 6-1-add-subsequent-sync-pair (2026-04-22)
 
 - **[6-1 CR D1]** `_update_add_button` not wired to remote path changes — `AddPairDialog` calls `_update_add_button()` once after local folder selection (using default pre-fill path); if user then changes the remote path, the button sensitivity is not re-evaluated. Happy path is unaffected (default `/{basename}` pre-fill makes button sensitive on folder selection). Edge case: local folder at root "/" defaults remote to "/" → button stays insensitive even after valid remote path is typed. Fix requires adding a path-changed signal to `RemoteFolderPicker` (scope-expanding). `ui/src/protondrive/widgets/add_pair_dialog.py`, `ui/src/protondrive/widgets/remote_folder_picker.py`
+
+---
+
+## Deferred from: code review of 6-3-remove-sync-pair-with-confirmation (2026-04-22)
+
+- **[6-3 CR D1]** No sync/queue drain before `deletePair` — in-flight engine sync operations for the removed pair may race with DB deletion. SQLite `ON DELETE CASCADE` handles orphaned rows, but the engine may log errors for the now-deleted pair until its operation completes. Pre-existing architectural concern; fix requires per-pair pause/drain API in SyncEngine. `engine/src/main.ts`
+- **[6-3 CR D2]** `readConfigYaml` reads from disk on every call — concurrent writes to config.yaml produce last-writer-wins with no file locking. This is the same pre-existing design as `writeConfigYaml`. A file lock or in-memory config manager would eliminate the race. `engine/src/config.ts`
+- **[6-3 CR D3]** DB delete succeeds / config write fails → torn state on restart — if `removeFromConfigYaml` throws after `stateDb.deletePair` succeeds, the pair is gone from DB but still in config.yaml; on cold-start the engine re-imports from YAML. The `config_write_failed` error is surfaced to UI (user must retry). Explicitly documented as acceptable trade-off in Story 6-3 Task 2.4. `engine/src/main.ts`
+- **[6-3 CR D4]** `fileWatcher.initialize()` errors swallowed via `void` — if inotify limit or permission issue prevents the new FileWatcher from initializing after pair removal, the error is silently discarded and the client sees a success response. Consistent with the same pattern in the `add_pair` handler. `engine/src/main.ts`

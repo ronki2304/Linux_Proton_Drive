@@ -17,13 +17,16 @@ import {
   _setDriveClientForTests,
   _setStateDbForTests,
   _setServerForTests,
+  _setFileWatcherForTests,
   createNetworkMonitorCallback,
   cleanTmpFilesInDir,
   runCrashRecovery,
 } from "./main.js";
+import { writeConfigYaml, readConfigYaml } from "./config.js";
 import { StateDb } from "./state-db.js";
 import { SyncEngine } from "./sync-engine.js";
 import { NetworkMonitor } from "./network-monitor.js";
+import { FileWatcher } from "./watcher.js";
 
 function tmpSocketPath(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "main-test-"));
@@ -532,6 +535,139 @@ describe("add_pair command", () => {
       payload: { local_path: "/home/user/Photos", remote_path: "/Documents" },
     });
     expect(response!.payload["error"]).toBe("remote_nesting");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// remove_pair command (Story 6.3)
+// ---------------------------------------------------------------------------
+describe("remove_pair command", () => {
+  let tmpDir: string;
+  let origXdg: string | undefined;
+  let removePairServer: IpcServer;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "remove-pair-test-"));
+    origXdg = process.env["XDG_CONFIG_HOME"];
+    process.env["XDG_CONFIG_HOME"] = tmpDir;
+    _setStateDbForTests(new StateDb(":memory:"));
+    removePairServer = new IpcServer(tmpSocketPath(), handleCommand);
+    removePairServer.emitEvent = () => {};
+    _setServerForTests(removePairServer);
+  });
+
+  afterEach(() => {
+    _setDriveClientForTests(null);
+    _setStateDbForTests(undefined);
+    if (origXdg === undefined) {
+      delete process.env["XDG_CONFIG_HOME"];
+    } else {
+      process.env["XDG_CONFIG_HOME"] = origXdg;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("success: existing pair → removed from DB and config, returns {}", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "pair-to-remove",
+      local_path: "/home/user/Docs",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    // Pre-populate config.yaml so removeFromConfigYaml has something to remove.
+    writeConfigYaml("pair-to-remove", "/home/user/Docs", "/Documents");
+
+    const response = await handleCommand({
+      type: "remove_pair",
+      id: "rp-1",
+      payload: { pair_id: "pair-to-remove" },
+    });
+
+    expect(response!.type).toBe("remove_pair_result");
+    expect(response!.id).toBe("rp-1");
+    expect(response!.payload).toEqual({});
+    // Verify pair is gone from DB.
+    expect(db.listPairs().some((p) => p.pair_id === "pair-to-remove")).toBe(false);
+    // Verify config.yaml was also updated (AC2 — removeFromConfigYaml ran).
+    const remaining = readConfigYaml();
+    expect(remaining.pairs.some((p) => p.pair_id === "pair-to-remove")).toBe(false);
+  });
+
+  it("stateDb undefined → engine_not_ready", async () => {
+    _setStateDbForTests(undefined);
+    const response = await handleCommand({
+      type: "remove_pair",
+      id: "rp-2",
+      payload: { pair_id: "any-id" },
+    });
+    expect(response!.payload).toEqual({ error: "engine_not_ready" });
+  });
+
+  it("missing pair_id payload → invalid_payload", async () => {
+    const response = await handleCommand({
+      type: "remove_pair",
+      id: "rp-3",
+      payload: {},
+    });
+    expect(response!.type).toBe("remove_pair_result");
+    expect(response!.payload).toEqual({ error: "invalid_payload" });
+  });
+
+  it("non-existent pair_id → pair_not_found", async () => {
+    const response = await handleCommand({
+      type: "remove_pair",
+      id: "rp-4",
+      payload: { pair_id: "does-not-exist" },
+    });
+    expect(response!.type).toBe("remove_pair_result");
+    expect(response!.payload).toEqual({ error: "pair_not_found" });
+  });
+
+  it("FileWatcher restarted with remaining pairs after removal", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    // Insert two pairs; remove one; watcher should restart with remaining one.
+    db.insertPair({
+      pair_id: "pair-keep",
+      local_path: "/home/user/Keep",
+      remote_path: "/Keep",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    db.insertPair({
+      pair_id: "pair-remove",
+      local_path: "/home/user/Remove",
+      remote_path: "/Remove",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    writeConfigYaml("pair-keep", "/home/user/Keep", "/Keep");
+    writeConfigYaml("pair-remove", "/home/user/Remove", "/Remove");
+
+    const mockClient = {} as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+
+    const fwStops: string[] = [];
+    const mockFw = { stop: () => { fwStops.push("stopped"); }, initialize: async () => {} } as unknown as FileWatcher;
+    _setFileWatcherForTests(mockFw);
+
+    await handleCommand({
+      type: "remove_pair",
+      id: "rp-5",
+      payload: { pair_id: "pair-remove" },
+    });
+
+    // FileWatcher was stopped and re-created (we can verify the stop was called).
+    expect(fwStops.length).toBe(1);
+    // Only the kept pair remains in DB.
+    expect(db.listPairs().length).toBe(1);
+    expect(db.listPairs()[0]!.pair_id).toBe("pair-keep");
   });
 });
 

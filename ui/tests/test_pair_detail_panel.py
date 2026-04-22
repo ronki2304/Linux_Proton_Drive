@@ -32,6 +32,7 @@ def _make_panel() -> PairDetailPanel:
     panel.view_conflict_log_btn = MagicMock()
     panel.conflict_log_slot = MagicMock()
     panel.conflict_log_back_btn = MagicMock()
+    panel.remove_pair_button = MagicMock()
     panel._conflict_log = None
     return panel
 
@@ -476,3 +477,27 @@ class TestSetErrorState:
         panel.error_banner.reset_mock()
         panel.show_pair({"pair_id": "p2", "local_path": "/home/user/Docs"})
         panel.error_banner.set_revealed.assert_called_once_with(False)
+
+
+# ---------------------------------------------------------------------------
+# remove_pair_button
+# ---------------------------------------------------------------------------
+
+class TestRemovePairButton:
+    def test_clicked_emits_remove_pair_requested_with_current_pair_id(self):
+        panel = _make_panel()
+        panel._current_pair_id = "pair-abc"
+        emitted = []
+        panel.emit = lambda signal, *args: emitted.append((signal, args))
+        panel._on_remove_pair_clicked(MagicMock())
+        assert len(emitted) == 1
+        assert emitted[0][0] == "remove-pair-requested"
+        assert emitted[0][1] == ("pair-abc",)
+
+    def test_clicked_with_no_current_pair_does_not_emit(self):
+        panel = _make_panel()
+        panel._current_pair_id = None
+        emitted = []
+        panel.emit = lambda signal, *args: emitted.append((signal, args))
+        panel._on_remove_pair_clicked(MagicMock())
+        assert len(emitted) == 0

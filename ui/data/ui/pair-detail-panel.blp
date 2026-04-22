@@ -108,6 +108,18 @@ template $ProtonDrivePairDetailPanel: Adw.Bin {
               orientation: vertical;
               margin-top: 8;
             }
+
+            Gtk.Box remove_pair_row {
+              orientation: horizontal;
+              halign: end;
+              margin-top: 24;
+              margin-bottom: 8;
+
+              Gtk.Button remove_pair_button {
+                label: _("Remove pair");
+                styles ["destructive-action"]
+              }
+            }
           };
         }
       };
