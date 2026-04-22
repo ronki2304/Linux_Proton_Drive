@@ -6,6 +6,7 @@ structurally embedded in the dialog (not a coordination dependency).
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
@@ -86,9 +87,23 @@ class AddPairDialog(Adw.Dialog):
             self.emit("pair-created", payload["pair_id"])
             self.close()
         else:
-            self.error_label.set_label("Failed to add sync pair. Please try again.")
+            self.error_label.set_label(self._format_pair_error(payload))
             self.error_label.set_visible(True)
             self.add_pair_button.set_sensitive(True)
+
+    def _format_pair_error(self, payload: dict[str, Any]) -> str:
+        error = payload.get("error", "")
+        conflicting_local = payload.get("conflicting_local_path") or ""
+        pair_name = os.path.basename(conflicting_local.rstrip("/")) or conflicting_local or "existing pair"
+        if error == "local_nesting":
+            return f"This folder is inside your ‘{pair_name}’ sync pair — syncing a subfolder separately would cause duplicate files"
+        if error == "local_overlap":
+            return f"Your ‘{pair_name}’ sync pair folder is inside this folder — this would cause duplicate files"
+        if error == "remote_nesting":
+            return f"This remote folder is inside your ‘{pair_name}’ sync pair — syncing a subfolder separately would cause duplicate files"
+        if error == "remote_exact":
+            return f"Already in use by ‘{pair_name}’"
+        return "Failed to add sync pair. Please try again."
 
     def _on_cancel_clicked(self, _button: Gtk.Button) -> None:
         self.close()

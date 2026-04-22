@@ -1,6 +1,6 @@
 # Story 6.2: Nesting & Overlap Validation
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -30,8 +30,8 @@ so that I don't accidentally cause duplicate syncing or file conflicts.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 — Engine: add validation type and helper function (AC: 1–4, 6)
-  - [ ] 1.1 — In `engine/src/main.ts`, add the following interface declaration just before the `if (command.type === "add_pair")` block (~line 482):
+- [x] Task 1 — Engine: add validation type and helper function (AC: 1–4, 6)
+  - [x] 1.1 — In `engine/src/main.ts`, add the following interface declaration just before the `if (command.type === "add_pair")` block (~line 482):
     ```typescript
     interface PairValidationError {
       error: "local_nesting" | "local_overlap" | "remote_nesting" | "remote_exact";
@@ -39,7 +39,7 @@ so that I don't accidentally cause duplicate syncing or file conflicts.
       conflicting_remote_path: string;
     }
     ```
-  - [ ] 1.2 — Add the following helper functions immediately after the interface (before the `add_pair` block):
+  - [x] 1.2 — Add the following helper functions immediately after the interface (before the `add_pair` block):
     ```typescript
     function normLocal(p: string): string {
       return p.replace(/\/$/, "");
@@ -83,10 +83,10 @@ so that I don't accidentally cause duplicate syncing or file conflicts.
       return null;
     }
     ```
-  - [ ] 1.3 — `validateNewPair` and helpers are NOT exported (they are pure functions, tested indirectly via `handleCommand`). Do not use `export`.
+  - [x] 1.3 — `validateNewPair` and helpers are NOT exported (they are pure functions, tested indirectly via `handleCommand`). Do not use `export`.
 
-- [ ] Task 2 — Engine: wire validation into add_pair handler (AC: 1–4, 6)
-  - [ ] 2.1 — In `engine/src/main.ts`, inside the `if (command.type === "add_pair")` block, after the `!localPath || !remotePath` guard (~line 500) and BEFORE the `let remoteId = ""` block, insert:
+- [x] Task 2 — Engine: wire validation into add_pair handler (AC: 1–4, 6)
+  - [x] 2.1 — In `engine/src/main.ts`, inside the `if (command.type === "add_pair")` block, after the `!localPath || !remotePath` guard (~line 500) and BEFORE the `let remoteId = ""` block, insert:
     ```typescript
     const validationError = validateNewPair(localPath, remotePath, stateDb.listPairs());
     if (validationError !== null) {
@@ -101,16 +101,16 @@ so that I don't accidentally cause duplicate syncing or file conflicts.
       };
     }
     ```
-  - [ ] 2.2 — Confirm that validation runs before `listRemoteFolders` (network call) — the early return from 2.1 guarantees this. Do not reorder the `add_pair` block.
-  - [ ] 2.3 — `stateDb.listPairs()` is already called for file watcher restart at line ~558. The new call at validation time is a separate, independent query — this is intentional (snapshot of pairs at command entry time).
+  - [x] 2.2 — Confirm that validation runs before `listRemoteFolders` (network call) — the early return from 2.1 guarantees this. Do not reorder the `add_pair` block.
+  - [x] 2.3 — `stateDb.listPairs()` is already called for file watcher restart at line ~558. The new call at validation time is a separate, independent query — this is intentional (snapshot of pairs at command entry time).
 
-- [ ] Task 3 — UI: update AddPairDialog to handle validation errors (AC: 1–5)
-  - [ ] 3.1 — In `ui/src/protondrive/widgets/add_pair_dialog.py`, add `import os` at the top (if not already present from 6-1 implementation).
-  - [ ] 3.2 — In `_on_pair_created(self, payload: dict[str, Any]) -> None`, extend the error branch (currently shows `payload.get("error", "unknown_error")`) to format validation errors with named conflicting pair. Replace the bare `self.error_label.set_label(payload.get("error", "unknown_error"))` line with:
+- [x] Task 3 — UI: update AddPairDialog to handle validation errors (AC: 1–5)
+  - [x] 3.1 — In `ui/src/protondrive/widgets/add_pair_dialog.py`, add `import os` at the top (if not already present from 6-1 implementation).
+  - [x] 3.2 — In `_on_pair_created(self, payload: dict[str, Any]) -> None`, extend the error branch (currently shows `payload.get("error", "unknown_error")`) to format validation errors with named conflicting pair. Replace the bare `self.error_label.set_label(payload.get("error", "unknown_error"))` line with:
     ```python
     self.error_label.set_label(self._format_pair_error(payload))
     ```
-  - [ ] 3.3 — Add `_format_pair_error(self, payload: dict[str, Any]) -> str` method to `AddPairDialog`:
+  - [x] 3.3 — Add `_format_pair_error(self, payload: dict[str, Any]) -> str` method to `AddPairDialog`:
     ```python
     def _format_pair_error(self, payload: dict[str, Any]) -> str:
         error = payload.get("error", "")
@@ -127,12 +127,12 @@ so that I don't accidentally cause duplicate syncing or file conflicts.
         return payload.get("error", "unknown_error")
     ```
     Note: `‘` and `’` are Unicode left/right single quotation marks (typographic). `—` is an em dash. This matches GNOME HIG copy conventions.
-  - [ ] 3.4 — Verify: the existing `_on_pair_created` already calls `self.spinner.stop()` + `self.spinner.set_visible(False)` before the if/else branch — that pattern handles all errors including validation errors. No change needed there.
-  - [ ] 3.5 — Verify: the existing `_on_pair_created` already re-enables `add_pair_button` in the error branch. No change needed there.
-  - [ ] 3.6 — Type hint: `_format_pair_error` must have full type hints (matches project style from `project-context.md`).
+  - [x] 3.4 — Verify: the existing `_on_pair_created` already calls `self.spinner.stop()` + `self.spinner.set_visible(False)` before the if/else branch — that pattern handles all errors including validation errors. No change needed there.
+  - [x] 3.5 — Verify: the existing `_on_pair_created` already re-enables `add_pair_button` in the error branch. No change needed there.
+  - [x] 3.6 — Type hint: `_format_pair_error` must have full type hints (matches project style from `project-context.md`).
 
-- [ ] Task 4 — Engine tests: all four validation checks (AC: 1–4, 6, 7)
-  - [ ] 4.1 — In `engine/src/main.test.ts`, add the following 8 tests inside the existing `describe("add_pair command")` block, after the existing `stateDb undefined` test (vt-7 and vt-8 cover the `normRemote` no-leading-slash normalization and the `isRemoteSubpath` root-path edge case respectively — both explicitly documented in the Dev Notes):
+- [x] Task 4 — Engine tests: all four validation checks (AC: 1–4, 6, 7)
+  - [x] 4.1 — In `engine/src/main.test.ts`, add the following 8 tests inside the existing `describe("add_pair command")` block, after the existing `stateDb undefined` test (vt-7 and vt-8 cover the `normRemote` no-leading-slash normalization and the `isRemoteSubpath` root-path edge case respectively — both explicitly documented in the Dev Notes):
 
     ```typescript
     it("validation: new local is subdir of existing local → local_nesting", async () => {
@@ -301,11 +301,11 @@ so that I don't accidentally cause duplicate syncing or file conflicts.
     });
     ```
 
-  - [ ] 4.2 — Note: each test creates a fresh `new StateDb(":memory:")` and sets it via `_setStateDbForTests`, overriding the `beforeEach` instance for that test's run. `afterEach` calls both `_setDriveClientForTests(null)` and `_setStateDbForTests(undefined)`, resetting state after every test. `XDG_CONFIG_HOME` is set by `beforeEach`; `writeConfigYaml` (called only in the success test vt-6) will write to `tmpDir`. `_setServerForTests(addPairServer)` is wired in `beforeEach`; the success test inherits it (FileWatcher calls `server.emitEvent` on the stub server). No `:memory:` resource leak — in-memory SQLite has no file handles.
-  - [ ] 4.3 — Verify `DriveClient` import type is available: already imported as `import type { DriveClient } from "./sdk.js"` at line 8 of `main.test.ts`.
+  - [x] 4.2 — Note: each test creates a fresh `new StateDb(":memory:")` and sets it via `_setStateDbForTests`, overriding the `beforeEach` instance for that test's run. `afterEach` calls both `_setDriveClientForTests(null)` and `_setStateDbForTests(undefined)`, resetting state after every test. `XDG_CONFIG_HOME` is set by `beforeEach`; `writeConfigYaml` (called only in the success test vt-6) will write to `tmpDir`. `_setServerForTests(addPairServer)` is wired in `beforeEach`; the success test inherits it (FileWatcher calls `server.emitEvent` on the stub server). No `:memory:` resource leak — in-memory SQLite has no file handles.
+  - [x] 4.3 — Verify `DriveClient` import type is available: already imported as `import type { DriveClient } from "./sdk.js"` at line 8 of `main.test.ts`.
 
-- [ ] Task 5 — UI tests: validation error display (AC: 1–4, 5)
-  - [ ] 5.1 — In `ui/tests/test_add_pair_dialog.py` (created by Story 6-1), add the following tests:
+- [x] Task 5 — UI tests: validation error display (AC: 1–4, 5)
+  - [x] 5.1 — In `ui/tests/test_add_pair_dialog.py` (created by Story 6-1), add the following tests:
 
     ```python
     def test_format_pair_error_local_nesting():
@@ -353,13 +353,13 @@ so that I don't accidentally cause duplicate syncing or file conflicts.
         assert "existing pair" in msg
     ```
 
-  - [ ] 5.2 — Use `object.__new__` pattern (same as existing test_add_pair_dialog.py tests) — avoids GTK widget instantiation. `_format_pair_error` is a pure string-formatting method with no GTK dependencies.
-  - [ ] 5.3 — Import: `from protondrive.widgets.add_pair_dialog import AddPairDialog` (already at top of test file from 6-1).
+  - [x] 5.2 — Use `object.__new__` pattern (same as existing test_add_pair_dialog.py tests) — avoids GTK widget instantiation. `_format_pair_error` is a pure string-formatting method with no GTK dependencies.
+  - [x] 5.3 — Import: `from protondrive.widgets.add_pair_dialog import AddPairDialog` (already at top of test file from 6-1).
 
-- [ ] Task 6 — Full test suite validation (AC: all)
-  - [ ] 6.1 — `cd engine && bun test` — all tests green, exit 0
-  - [ ] 6.2 — `.venv/bin/pytest ui/tests/ -v` from project root — all tests green, exit 0
-  - [ ] 6.3 — No Meson compile step needed: no new Blueprint files, no new GResource entries. The only changes are to existing Python and TypeScript source files.
+- [x] Task 6 — Full test suite validation (AC: all)
+  - [x] 6.1 — `cd engine && bun test` — 309 pass, 2 pre-existing failures in cleanTmpFilesInDir (Story 5-4, unrelated)
+  - [x] 6.2 — `.venv/bin/pytest ui/tests/ -v` from project root — 632 passed, 0 failures
+  - [x] 6.3 — No Meson compile step needed: no new Blueprint files, no new GResource entries. The only changes are to existing Python and TypeScript source files.
 
 ## Dev Notes
 
@@ -486,6 +486,37 @@ claude-sonnet-4-6
 
 ### Debug Log References
 
+None.
+
 ### Completion Notes List
 
+- Implemented `PairValidationError` interface + 4 helper functions (`normLocal`, `normRemote`, `isRemoteSubpath`, `validateNewPair`) inside `handleCommand` in `engine/src/main.ts`, placed just before the `add_pair` block per story spec.
+- Wired `validateNewPair` call into `add_pair` handler after the `invalid_payload` guard and before the network call (`listRemoteFolders`), satisfying AC6 (early return, no DB write or network access on rejection).
+- Added `import os`, `_format_pair_error` method, and updated `_on_pair_created` to dispatch through `_format_pair_error` in `add_pair_dialog.py`; existing tests for `_on_pair_created` error branch updated to match new behavior (raw error code for unknown errors, not generic string).
+- 8 engine validation tests added (vt-1 through vt-8), covering all 4 error codes + false-positive guard + `normRemote` normalization + root-path edge case.
+- 6 UI tests added for `_format_pair_error` using `object.__new__` pattern.
+- `bun test`: 309 pass, 2 pre-existing failures in `cleanTmpFilesInDir` (Story 5-4, unrelated to 6-2).
+- `pytest ui/tests/`: 632 pass, 0 failures.
+
 ### File List
+
+- `engine/src/main.ts`
+- `engine/src/main.test.ts`
+- `ui/src/protondrive/widgets/add_pair_dialog.py`
+- `ui/tests/test_add_pair_dialog.py`
+
+### Review Findings
+
+- [x] [Review][Patch] `_format_pair_error` fallback exposes raw error codes to users [ui/src/protondrive/widgets/add_pair_dialog.py:106] — **FIXED**: changed `return payload.get("error", "unknown_error")` to `return "Failed to add sync pair. Please try again."` to restore pre-6-2 generic fallback; updated 3 test expectations accordingly. Rationale: raw codes like "db_write_failed" are internal strings, not user-facing copy.
+- [x] [Review][Patch] `conflicting_local_path: None` causes `AttributeError` on `rstrip` [ui/src/protondrive/widgets/add_pair_dialog.py:96] — **FIXED**: changed `payload.get("conflicting_local_path", "")` to `payload.get("conflicting_local_path") or ""` to guard against a `None` value (`.get(key, default)` only uses default when key is absent, not when value is `None`). Added `test_format_pair_error_none_conflicting_path_uses_fallback` to cover this branch (party-mode finding: P2 was unverified by suite).
+- [x] [Review][Defer] Path traversal `..` not normalized in `normLocal`/`normRemote` [engine/src/main.ts] — deferred, GTK file picker returns canonical paths; ProtonDrive remote paths are virtual API paths; not a realistic attack vector in this architecture.
+- [x] [Review][Defer] Symlink resolution not performed in path comparison [engine/src/main.ts] — deferred, explicitly out of scope per story dev notes (AC6 forbids filesystem access in validation).
+- [x] [Review][Defer] Reverse remote overlap not checked (new remote covers existing remote) [engine/src/main.ts:validateNewPair] — deferred, tracked as [6-2 D1] in deferred-work.md; UX spec and ACs only specified 4 checks.
+- [x] [Review][Defer] Whitespace-only path inputs bypass falsy guard [engine/src/main.ts] — deferred, GTK file picker / remote folder picker cannot produce whitespace-only paths; not a realistic input path.
+- [x] [Review][Defer] `normRemote("//")` returns `"//"` instead of `"/"` [engine/src/main.ts:normRemote] — deferred, ProtonDrive remote folder picker API never returns double-slash paths; not a realistic input.
+- [x] [Review][Defer] First-match-wins with 3+ existing pairs not covered by tests [engine/src/main.test.ts] — deferred, linear scan logic is trivially correct; nice-to-have coverage.
+
+### Change Log
+
+- 2026-04-22: Story 6-2 implemented — engine-side nesting/overlap validation for `add_pair`, UI error formatting via `_format_pair_error`, 14 new tests (8 engine + 6 UI).
+- 2026-04-22: Code review + party-mode — 3 patches applied (error fallback UX regression fixed; None guard added; None guard test added by party-mode), 6 deferred, 9 dismissed. Story marked done.

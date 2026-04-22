@@ -479,6 +479,54 @@ export async function handleCommand(
     }
   }
 
+  interface PairValidationError {
+    error: "local_nesting" | "local_overlap" | "remote_nesting" | "remote_exact";
+    conflicting_local_path: string;
+    conflicting_remote_path: string;
+  }
+
+  function normLocal(p: string): string {
+    return p.replace(/\/$/, "");
+  }
+
+  function normRemote(p: string): string {
+    const s = (p.startsWith("/") ? p : "/" + p).replace(/\/$/, "");
+    return s === "" ? "/" : s;
+  }
+
+  function isRemoteSubpath(newRemote: string, parentRemote: string): boolean {
+    if (parentRemote === "/") return newRemote !== "/";
+    return newRemote.startsWith(parentRemote + "/");
+  }
+
+  function validateNewPair(
+    localPath: string,
+    remotePath: string,
+    existingPairs: SyncPair[],
+  ): PairValidationError | null {
+    const newLocal = normLocal(localPath);
+    const newRemote = normRemote(remotePath);
+    for (const pair of existingPairs) {
+      const exLocal = normLocal(pair.local_path);
+      const exRemote = normRemote(pair.remote_path);
+      if (newLocal === exLocal || newLocal.startsWith(exLocal + "/")) {
+        return { error: "local_nesting", conflicting_local_path: pair.local_path, conflicting_remote_path: pair.remote_path };
+      }
+      if (exLocal.startsWith(newLocal + "/")) {
+        return { error: "local_overlap", conflicting_local_path: pair.local_path, conflicting_remote_path: pair.remote_path };
+      }
+      if (newRemote === exRemote) {
+        return { error: "remote_exact", conflicting_local_path: pair.local_path, conflicting_remote_path: pair.remote_path };
+      }
+      if (isRemoteSubpath(newRemote, exRemote)) {
+        return { error: "remote_nesting", conflicting_local_path: pair.local_path, conflicting_remote_path: pair.remote_path };
+      }
+      // TODO(deferred 6-2 D1): reverse remote overlap not checked — if exRemote is a
+      // strict subdirectory of newRemote, no error is returned. See deferred-work.md [6-2 D1].
+    }
+    return null;
+  }
+
   if (command.type === "add_pair") {
     if (!driveClient || !stateDb) {
       return {
@@ -496,6 +544,19 @@ export async function handleCommand(
         type: "add_pair_result",
         id: command.id,
         payload: { error: "invalid_payload" },
+      };
+    }
+
+    const validationError = validateNewPair(localPath, remotePath, stateDb.listPairs());
+    if (validationError !== null) {
+      return {
+        type: "add_pair_result",
+        id: command.id,
+        payload: {
+          error: validationError.error,
+          conflicting_local_path: validationError.conflicting_local_path,
+          conflicting_remote_path: validationError.conflicting_remote_path,
+        },
       };
     }
 

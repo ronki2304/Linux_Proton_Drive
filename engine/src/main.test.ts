@@ -368,6 +368,171 @@ describe("add_pair command", () => {
     expect(response!.type).toBe("add_pair_result");
     expect(response!.payload).toEqual({ error: "engine_not_ready" });
   });
+
+  it("validation: new local is subdir of existing local → local_nesting", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "existing-1",
+      local_path: "/home/user/Docs",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    const mockClient = { listRemoteFolders: mock(async () => []) } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const response = await handleCommand({
+      type: "add_pair", id: "vt-1",
+      payload: { local_path: "/home/user/Docs/Sub", remote_path: "/Other" },
+    });
+    expect(response!.payload["error"]).toBe("local_nesting");
+    expect(response!.payload["conflicting_local_path"]).toBe("/home/user/Docs");
+  });
+
+  it("validation: new local equals existing local → local_nesting (exact-match case)", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "existing-2",
+      local_path: "/home/user/Docs",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    const mockClient = { listRemoteFolders: mock(async () => []) } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const response = await handleCommand({
+      type: "add_pair", id: "vt-2",
+      payload: { local_path: "/home/user/Docs", remote_path: "/Other" },
+    });
+    expect(response!.payload["error"]).toBe("local_nesting");
+  });
+
+  it("validation: existing local is subdir of new local → local_overlap", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "existing-3",
+      local_path: "/home/user/Docs/Sub",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    const mockClient = { listRemoteFolders: mock(async () => []) } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const response = await handleCommand({
+      type: "add_pair", id: "vt-3",
+      payload: { local_path: "/home/user/Docs", remote_path: "/Other" },
+    });
+    expect(response!.payload["error"]).toBe("local_overlap");
+    expect(response!.payload["conflicting_local_path"]).toBe("/home/user/Docs/Sub");
+  });
+
+  it("validation: new remote equals existing remote → remote_exact", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "existing-4",
+      local_path: "/home/user/Docs",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    const mockClient = { listRemoteFolders: mock(async () => []) } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const response = await handleCommand({
+      type: "add_pair", id: "vt-4",
+      payload: { local_path: "/home/user/Photos", remote_path: "/Documents" },
+    });
+    expect(response!.payload["error"]).toBe("remote_exact");
+    expect(response!.payload["conflicting_local_path"]).toBe("/home/user/Docs");
+  });
+
+  it("validation: new remote is subdir of existing remote → remote_nesting", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "existing-5",
+      local_path: "/home/user/Docs",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    const mockClient = { listRemoteFolders: mock(async () => []) } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const response = await handleCommand({
+      type: "add_pair", id: "vt-5",
+      payload: { local_path: "/home/user/Photos", remote_path: "/Documents/Work" },
+    });
+    expect(response!.payload["error"]).toBe("remote_nesting");
+    expect(response!.payload["conflicting_local_path"]).toBe("/home/user/Docs");
+  });
+
+  it("validation: no-overlap paths → success (no false positives)", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "existing-6",
+      local_path: "/home/user/Docs",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    const mockClient = { listRemoteFolders: mock(async () => []) } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const response = await handleCommand({
+      type: "add_pair", id: "vt-6",
+      payload: { local_path: "/home/user/Photos", remote_path: "/Pictures" },
+    });
+    expect(response!.payload["error"]).toBeUndefined();
+    expect(response!.payload["pair_id"]).toBeTruthy();
+  });
+
+  it("validation: new remote without leading slash equals existing remote → remote_exact (normRemote normalization)", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "existing-7",
+      local_path: "/home/user/Docs",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    const mockClient = { listRemoteFolders: mock(async () => []) } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const response = await handleCommand({
+      type: "add_pair", id: "vt-7",
+      payload: { local_path: "/home/user/Photos", remote_path: "Documents" }, // no leading slash
+    });
+    expect(response!.payload["error"]).toBe("remote_exact");
+  });
+
+  it("validation: existing remote is root '/' → any new non-root remote is remote_nesting", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "existing-8",
+      local_path: "/home/user/Docs",
+      remote_path: "/",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    const mockClient = { listRemoteFolders: mock(async () => []) } as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const response = await handleCommand({
+      type: "add_pair", id: "vt-8",
+      payload: { local_path: "/home/user/Photos", remote_path: "/Documents" },
+    });
+    expect(response!.payload["error"]).toBe("remote_nesting");
+  });
 });
 
 // ---------------------------------------------------------------------------

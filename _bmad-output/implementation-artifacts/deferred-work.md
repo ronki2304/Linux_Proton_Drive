@@ -195,6 +195,16 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ---
 
+## Deferred from: code review of 6-2-nesting-and-overlap-validation (2026-04-22)
+
+- **[6-2 CR D1]** Path traversal `..` not normalized — `normLocal`/`normRemote` strip trailing slashes only; `..` components are not resolved. Not a realistic vector since local paths come from GTK file picker (canonical) and remote paths are virtual ProtonDrive API paths. Harden if the validation ever accepts untrusted IPC input from outside the app. `engine/src/main.ts:normLocal, normRemote`
+- **[6-2 CR D2]** Symlink resolution not performed — paths are compared as strings; two paths that resolve to the same physical directory via a symlink can both be accepted. Explicitly out of scope per dev notes (AC6 prohibits filesystem access in validation). Revisit if symlink-aware sync is ever added. `engine/src/main.ts:validateNewPair`
+- **[6-2 CR D3]** `normRemote("//")` returns `"//"` instead of `"/"` — double-slash remote paths would evade root-path detection. Not a realistic input from the remote folder picker API. Add a `path.replace(/\/+/g, "/")` normalization pass if remote paths ever accept user-typed strings. `engine/src/main.ts:normRemote`
+- **[6-2 CR D4]** Whitespace-only path inputs bypass `!localPath || !remotePath` falsy guard — `" "` is truthy in JS; would proceed past validation and fail at remote ID resolution with a less helpful error. GTK file picker cannot produce whitespace paths; not a realistic input. `engine/src/main.ts:add_pair handler`
+- **[6-2 CR D5]** First-match-wins with 3+ existing pairs not covered by tests — the `validateNewPair` linear scan is trivially correct, but no test inserts 2+ conflicting pairs and verifies which conflict is reported first. `engine/src/main.test.ts`
+
+---
+
 ## Deferred from: party-mode validation of 6-2-nesting-and-overlap-validation (2026-04-22)
 
 - **[6-2 D1]** Reverse remote overlap not checked — `validateNewPair` detects when the *new* remote path is inside an *existing* pair's remote path (`remote_nesting`) but does NOT detect the inverse: when an *existing* pair's remote path is a strict subdirectory of the *new* remote path. A user can create pair A (`remote: /Documents/Work`) then create pair B (`remote: /Documents`), ending up with B's root containing A's entire tree — a silent duplicate-sync hazard. The UX spec (UX-DR14) and ACs only specified the 4 implemented checks; this direction was explicitly descoped. A `remote_overlap` error code and corresponding UI message would be needed. `engine/src/main.ts:validateNewPair`

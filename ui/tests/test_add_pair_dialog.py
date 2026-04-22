@@ -187,6 +187,61 @@ class TestOnCancelClicked:
         dialog.close.assert_called_once()
 
 
+# --- 6-2: _format_pair_error validation error messages ---
+
+
+class TestFormatPairError:
+
+    def test_format_pair_error_local_nesting(self) -> None:
+        dialog = object.__new__(_mod.AddPairDialog)
+        msg = dialog._format_pair_error({
+            "error": "local_nesting",
+            "conflicting_local_path": "/home/user/Documents",
+        })
+        assert "Documents" in msg
+        assert "subfolder" in msg.lower() or "inside" in msg.lower()
+
+    def test_format_pair_error_local_overlap(self) -> None:
+        dialog = object.__new__(_mod.AddPairDialog)
+        msg = dialog._format_pair_error({
+            "error": "local_overlap",
+            "conflicting_local_path": "/home/user/Documents/Work",
+        })
+        assert "Work" in msg
+
+    def test_format_pair_error_remote_exact(self) -> None:
+        dialog = object.__new__(_mod.AddPairDialog)
+        msg = dialog._format_pair_error({
+            "error": "remote_exact",
+            "conflicting_local_path": "/home/user/Photos",
+        })
+        assert "Photos" in msg
+        assert "Already in use" in msg or "already in use" in msg.lower()
+
+    def test_format_pair_error_remote_nesting(self) -> None:
+        dialog = object.__new__(_mod.AddPairDialog)
+        msg = dialog._format_pair_error({
+            "error": "remote_nesting",
+            "conflicting_local_path": "/home/user/Documents",
+        })
+        assert "Documents" in msg
+
+    def test_format_pair_error_unknown_falls_back_to_generic_message(self) -> None:
+        dialog = object.__new__(_mod.AddPairDialog)
+        msg = dialog._format_pair_error({"error": "db_write_failed"})
+        assert msg == "Failed to add sync pair. Please try again."
+
+    def test_format_pair_error_empty_conflicting_path_uses_fallback(self) -> None:
+        dialog = object.__new__(_mod.AddPairDialog)
+        msg = dialog._format_pair_error({"error": "local_nesting", "conflicting_local_path": ""})
+        assert "existing pair" in msg
+
+    def test_format_pair_error_none_conflicting_path_uses_fallback(self) -> None:
+        dialog = object.__new__(_mod.AddPairDialog)
+        msg = dialog._format_pair_error({"error": "local_nesting", "conflicting_local_path": None})
+        assert "existing pair" in msg
+
+
 # --- 8.10: _on_folder_chosen cancellation guard ---
 
 
