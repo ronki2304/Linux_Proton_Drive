@@ -16,5 +16,6 @@
     <file alias="ui/key-unlock-dialog.ui" preprocess="xml-stripblanks">key-unlock-dialog.ui</file>
     <file alias="ui/conflict-log.ui" preprocess="xml-stripblanks">conflict-log.ui</file>
     <file alias="ui/reauth-dialog.ui" preprocess="xml-stripblanks">reauth-dialog.ui</file>
+    <file alias="ui/add-pair-dialog.ui" preprocess="xml-stripblanks">add-pair-dialog.ui</file>
   </gresource>
 </gresources>

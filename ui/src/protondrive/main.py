@@ -423,6 +423,20 @@ class Application(Adw.Application):
                     {"type": "get_status"}, self._on_get_status_result
                 )
 
+    def _on_add_pair_complete(self, pair_id: str) -> None:
+        """Called by window after AddPairDialog creates a pair — refresh sidebar and select new row."""
+        if self._engine is not None:
+            self._engine.send_command_with_response(
+                {"type": "get_status"},
+                lambda payload: self._on_add_pair_status_result(payload, pair_id),
+            )
+
+    def _on_add_pair_status_result(self, payload: dict[str, Any], new_pair_id: str) -> None:
+        """Handle get_status after add_pair — populate sidebar and auto-select new pair."""
+        self._on_get_status_result(payload)
+        if self._window is not None:
+            self._window.select_pair(new_pair_id)
+
     def _on_token_expired(self, payload: dict[str, Any]) -> None:
         """Token expired mid-sync — show warning banner and re-auth dialog.
 

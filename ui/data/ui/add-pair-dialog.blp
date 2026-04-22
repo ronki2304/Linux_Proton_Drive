@@ -1,0 +1,68 @@
+using Gtk 4.0;
+using Adw 1;
+
+template $ProtonDriveAddPairDialog: Adw.Dialog {
+  title: _("Add Sync Pair");
+  content-width: 420;
+
+  child: Adw.ToolbarView {
+    [top]
+    Adw.HeaderBar {}
+
+    content: Gtk.Box {
+      orientation: vertical;
+      spacing: 12;
+      margin-top: 24;
+      margin-bottom: 24;
+      margin-start: 24;
+      margin-end: 24;
+
+      Gtk.Button choose_local_button {
+        label: _("Choose local folder…");
+      }
+
+      Gtk.Label local_path_label {
+        label: _("(no folder selected)");
+        xalign: 0;
+        ellipsize: end;
+      }
+
+      Gtk.Box remote_picker_box {
+        orientation: vertical;
+      }
+
+      Gtk.Label error_label {
+        label: "";
+        visible: false;
+        xalign: 0;
+
+        styles [
+          "error",
+        ]
+      }
+
+      Gtk.Spinner spinner {
+        visible: false;
+      }
+
+      Gtk.Box {
+        orientation: horizontal;
+        spacing: 8;
+        halign: end;
+
+        Gtk.Button cancel_button {
+          label: _("Cancel");
+        }
+
+        Gtk.Button add_pair_button {
+          label: _("Add Pair");
+          sensitive: false;
+
+          styles [
+            "suggested-action",
+          ]
+        }
+      }
+    };
+  };
+}

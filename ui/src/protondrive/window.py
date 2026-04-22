@@ -33,6 +33,7 @@ class MainWindow(Adw.ApplicationWindow):
     pair_detail_panel: PairDetailPanel = Gtk.Template.Child()
     session_expired_banner: Adw.Banner = Gtk.Template.Child()
     engine_crashed_banner: Adw.Banner = Gtk.Template.Child()
+    add_pair_button: Gtk.Button = Gtk.Template.Child()
 
     def __init__(self, settings: Gio.Settings, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -79,6 +80,7 @@ class MainWindow(Adw.ApplicationWindow):
         # date is extracted from conflict_copy_path suffix "filename.ext.conflict-YYYY-MM-DD".
         self._conflict_log_entries: list[dict] = []
         self._row_activated_connected: bool = False
+        self.add_pair_button.connect("clicked", self._on_add_pair_clicked)
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
         self.pair_detail_panel.connect(
             "view-conflict-log", self._on_view_conflict_log
@@ -158,6 +160,20 @@ class MainWindow(Adw.ApplicationWindow):
         self._setup_wizard = None
         self.show_pre_auth()
 
+    def _on_add_pair_clicked(self, _button: Gtk.Button) -> None:
+        from protondrive.widgets.add_pair_dialog import AddPairDialog
+        app = self.get_application()
+        if app is None or not hasattr(app, "_engine") or app._engine is None:
+            return
+        dialog = AddPairDialog(engine_client=app._engine)
+        dialog.connect("pair-created", self._on_add_pair_complete)
+        dialog.present(self)
+
+    def _on_add_pair_complete(self, _dialog: object, pair_id: str) -> None:
+        app = self.get_application()
+        if app is not None and hasattr(app, "_on_add_pair_complete"):
+            app._on_add_pair_complete(pair_id)
+
     def clear_session(self) -> None:
         """Clear cached session data on logout."""
         self._session_data = None
@@ -170,6 +186,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._error_messages = {}  # Story 6-0d
         self.hide_engine_crashed_banner()
         self._row_activated_connected = False
+        self.add_pair_button.set_sensitive(False)
         self.pair_detail_panel.show_no_pairs()
         self.status_footer_bar.update_all_synced()
 
@@ -368,6 +385,8 @@ class MainWindow(Adw.ApplicationWindow):
             storage_total=payload.get("storage_total", 1),
             plan=payload.get("plan", ""),
         )
+
+        self.add_pair_button.set_sensitive(True)
 
         # Post-auth confirmation toast (UX-DR3)
         name = payload.get("display_name", "your account")

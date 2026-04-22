@@ -111,12 +111,19 @@ blueprints_reauth_dialog = custom_target(
   command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
 )
 
+blueprints_add_pair_dialog = custom_target(
+  'blueprint-add-pair-dialog',
+  input: files('data/ui/add-pair-dialog.blp'),
+  output: 'add-pair-dialog.ui',
+  command: [blueprint_compiler, 'compile', '--output', '@OUTPUT@', '@INPUT@'],
+)
+
 # --- GResource bundle ---
 resource_conf = configuration_data()
 gresource = gnome.compile_resources(
   'protondrive-resources',
   'data/protondrive.gresource.xml',
-  dependencies: [blueprints_window, blueprints_pre_auth, blueprints_auth_window, blueprints_account_header_bar, blueprints_settings, blueprints_remote_folder_picker, blueprints_setup_wizard, blueprints_sync_pair_row, blueprints_status_footer_bar, blueprints_sync_progress_card, blueprints_pair_detail_panel, blueprints_key_unlock_dialog, blueprints_conflict_log, blueprints_reauth_dialog],
+  dependencies: [blueprints_window, blueprints_pre_auth, blueprints_auth_window, blueprints_account_header_bar, blueprints_settings, blueprints_remote_folder_picker, blueprints_setup_wizard, blueprints_sync_pair_row, blueprints_status_footer_bar, blueprints_sync_progress_card, blueprints_pair_detail_panel, blueprints_key_unlock_dialog, blueprints_conflict_log, blueprints_reauth_dialog, blueprints_add_pair_dialog],
   gresource_bundle: true,
   source_dir: [meson.current_build_dir(), 'data'],
   install: true,

@@ -195,6 +195,18 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ---
 
+## Deferred from: party-mode validation of 6-2-nesting-and-overlap-validation (2026-04-22)
+
+- **[6-2 D1]** Reverse remote overlap not checked — `validateNewPair` detects when the *new* remote path is inside an *existing* pair's remote path (`remote_nesting`) but does NOT detect the inverse: when an *existing* pair's remote path is a strict subdirectory of the *new* remote path. A user can create pair A (`remote: /Documents/Work`) then create pair B (`remote: /Documents`), ending up with B's root containing A's entire tree — a silent duplicate-sync hazard. The UX spec (UX-DR14) and ACs only specified the 4 implemented checks; this direction was explicitly descoped. A `remote_overlap` error code and corresponding UI message would be needed. `engine/src/main.ts:validateNewPair`
+
+---
+
+## Deferred from: party-mode validation of 6-1-add-subsequent-sync-pair (2026-04-22)
+
+- **[6-1 PM D1]** Spinner show/hide behavior in `_on_add_pair_clicked` not covered by unit tests — Task 3.9 specifies `add_pair_button` disabled + spinner shown/started + `error_label` hidden on click, but no test in Task 8 verifies the spinner state transitions. Scope-expanding to add now; carry into 6-1 test pass or address in a future test-gap closure story. `ui/tests/test_add_pair_dialog.py`
+
+---
+
 _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 — see epic-4-retro-2026-04-18.md for full list._
 
 ---
@@ -245,3 +257,9 @@ _Won't-fix items from Epics 1–4 closed during Epic 4 retrospective 2026-04-18 
 - **[6-0e CR D5]** No multi-pair DISK_FULL loop-abort test — when `diskFull=true` on pair 1, subsequent pairs are skipped; single-pair tests cannot verify this. Multi-pair scenario is Epic 6 scope. `engine/src/sync-engine.ts`
 - **[6-0e CR D6]** No `mkdir` ENOSPC test in `downloadOne` — `mkdir(dirname(dest), { recursive: true })` can throw ENOSPC before `downloadFile` is called; this path propagates correctly to DISK_FULL handling but has no dedicated test. `engine/src/sync-engine.ts`
 - **[6-0e CR D7]** No `attempt_count` dead-lettering drain test — `drainQueue` dequeues entries that fail `MAX_DRAIN_ATTEMPTS` times; no test exercises this dead-letter path. `engine/src/sync-engine.ts`
+
+---
+
+## Deferred from: code review of 6-1-add-subsequent-sync-pair (2026-04-22)
+
+- **[6-1 CR D1]** `_update_add_button` not wired to remote path changes — `AddPairDialog` calls `_update_add_button()` once after local folder selection (using default pre-fill path); if user then changes the remote path, the button sensitivity is not re-evaluated. Happy path is unaffected (default `/{basename}` pre-fill makes button sensitive on folder selection). Edge case: local folder at root "/" defaults remote to "/" → button stays insensitive even after valid remote path is typed. Fix requires adding a path-changed signal to `RemoteFolderPicker` (scope-expanding). `ui/src/protondrive/widgets/add_pair_dialog.py`, `ui/src/protondrive/widgets/remote_folder_picker.py`

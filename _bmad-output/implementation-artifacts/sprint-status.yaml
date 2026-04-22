@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-20  # CR 6-0x complete
+last_updated: 2026-04-22  # 6-1 review complete
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -123,10 +123,10 @@ development_status:
   6-0c-ui-state-correctness: done
   6-0d-per-pair-error-detail-ux: done
   6-0e-test-gap-closure: done
-  6-1-add-subsequent-sync-pair: backlog
-  6-2-nesting-and-overlap-validation: backlog
-  6-3-remove-sync-pair-with-confirmation: backlog
-  6-4-local-folder-missing-detection-and-recovery: backlog
+  6-1-add-subsequent-sync-pair: done
+  6-2-nesting-and-overlap-validation: ready-for-dev
+  6-3-remove-sync-pair-with-confirmation: ready-for-dev
+  6-4-local-folder-missing-detection-and-recovery: ready-for-dev
   epic-6-retrospective: optional
 
   # Epic 7: Packaging & Distribution
