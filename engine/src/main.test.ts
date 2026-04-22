@@ -18,6 +18,7 @@ import {
   _setStateDbForTests,
   _setServerForTests,
   _setFileWatcherForTests,
+  _setSyncEngineForTests,
   createNetworkMonitorCallback,
   cleanTmpFilesInDir,
   runCrashRecovery,
@@ -668,6 +669,132 @@ describe("remove_pair command", () => {
     // Only the kept pair remains in DB.
     expect(db.listPairs().length).toBe(1);
     expect(db.listPairs()[0]!.pair_id).toBe("pair-keep");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// update_pair_path command (Story 6.4)
+// ---------------------------------------------------------------------------
+describe("update_pair_path command", () => {
+  let tmpDir: string;
+  let origXdg: string | undefined;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "update-path-test-"));
+    origXdg = process.env["XDG_CONFIG_HOME"];
+    process.env["XDG_CONFIG_HOME"] = tmpDir;
+    _setStateDbForTests(new StateDb(":memory:"));
+  });
+
+  afterEach(() => {
+    _setDriveClientForTests(null);
+    _setStateDbForTests(undefined);
+    _setSyncEngineForTests(undefined);
+    if (origXdg === undefined) {
+      delete process.env["XDG_CONFIG_HOME"];
+    } else {
+      process.env["XDG_CONFIG_HOME"] = origXdg;
+    }
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("success: updates local_path in DB and config.yaml, returns {}", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "pair-abc",
+      local_path: "/old/path",
+      remote_path: "/Documents",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    writeConfigYaml("pair-abc", "/old/path", "/Documents");
+
+    const response = await handleCommand({
+      type: "update_pair_path",
+      id: "up-1",
+      payload: { pair_id: "pair-abc", new_local_path: "/new/path" },
+    });
+
+    expect(response!.type).toBe("update_pair_path_result");
+    expect(response!.id).toBe("up-1");
+    expect(response!.payload).toEqual({});
+    // Verify DB update.
+    const pairs = db.listPairs();
+    expect(pairs.length).toBe(1);
+    expect(pairs[0]!.local_path).toBe("/new/path");
+    // Verify config.yaml update.
+    const cfg = readConfigYaml();
+    expect(cfg.pairs[0]!.local_path).toBe("/new/path");
+  });
+
+  it("stateDb undefined → engine_not_ready", async () => {
+    _setStateDbForTests(undefined);
+    const response = await handleCommand({
+      type: "update_pair_path",
+      id: "up-2",
+      payload: { pair_id: "pair-abc", new_local_path: "/new/path" },
+    });
+    expect(response!.payload).toEqual({ error: "engine_not_ready" });
+  });
+
+  it("missing pair_id → invalid_payload", async () => {
+    const response = await handleCommand({
+      type: "update_pair_path",
+      id: "up-3",
+      payload: { new_local_path: "/new/path" },
+    });
+    expect(response!.payload).toEqual({ error: "invalid_payload" });
+  });
+
+  it("non-existent pair_id → pair_not_found", async () => {
+    const response = await handleCommand({
+      type: "update_pair_path",
+      id: "up-4",
+      payload: { pair_id: "ghost-id", new_local_path: "/new/path" },
+    });
+    expect(response!.payload).toEqual({ error: "pair_not_found" });
+  });
+
+  it("FileWatcher restarted and startSyncAll called after success", async () => {
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+    db.insertPair({
+      pair_id: "pair-xyz",
+      local_path: "/old/path",
+      remote_path: "/Docs",
+      remote_id: "",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    writeConfigYaml("pair-xyz", "/old/path", "/Docs");
+
+    const mockClient = {} as unknown as DriveClient;
+    _setDriveClientForTests(mockClient);
+    const fwStops: string[] = [];
+    const mockFw = {
+      stop: () => { fwStops.push("stopped"); },
+      initialize: async () => {},
+    } as unknown as FileWatcher;
+    _setFileWatcherForTests(mockFw);
+
+    const syncAllCalls: string[] = [];
+    const mockEngine = {
+      startSyncAll: async () => { syncAllCalls.push("called"); },
+      drainQueue: async () => {},
+      setDriveClient: () => {},
+    } as unknown as SyncEngine;
+    _setSyncEngineForTests(mockEngine);
+
+    await handleCommand({
+      type: "update_pair_path",
+      id: "up-5",
+      payload: { pair_id: "pair-xyz", new_local_path: "/new/path" },
+    });
+
+    expect(fwStops.length).toBe(1);
+    expect(syncAllCalls.length).toBe(1);
   });
 });
 

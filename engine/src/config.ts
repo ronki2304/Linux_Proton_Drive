@@ -77,3 +77,18 @@ export function removeFromConfigYaml(pairId: string): void {
   writeFileSync(tmpPath, yaml.dump(existing), "utf8");
   renameSync(tmpPath, configPath);
 }
+
+export function updatePairPathInConfigYaml(
+  pair_id: string,
+  new_local_path: string,
+): void {
+  const configPath = getConfigPath();
+  mkdirSync(dirname(configPath), { recursive: true });
+  const existing = readConfigYaml();
+  existing.pairs = existing.pairs.map((p) =>
+    p.pair_id === pair_id ? { ...p, local_path: new_local_path } : p,
+  );
+  const tmpPath = configPath + ".tmp";
+  writeFileSync(tmpPath, yaml.dump(existing), "utf8");
+  renameSync(tmpPath, configPath);
+}

@@ -39,6 +39,7 @@ class PairDetailPanel(Adw.Bin):
         "setup-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "view-conflict-log": (GObject.SignalFlags.RUN_FIRST, None, ()),  # Story 4-6
         "remove-pair-requested": (GObject.SignalFlags.RUN_FIRST, None, (str,)),
+        "update-path-requested": (GObject.SignalFlags.RUN_FIRST, None, (str,)),  # Story 6-4: emits pair_id
     }
 
     detail_stack: Gtk.Stack = Gtk.Template.Child()
@@ -57,6 +58,10 @@ class PairDetailPanel(Adw.Bin):
     conflict_log_slot: Gtk.Box = Gtk.Template.Child()
     conflict_log_back_btn: Gtk.Button = Gtk.Template.Child()
     remove_pair_button: Gtk.Button = Gtk.Template.Child()
+    # Story 6-4:
+    folder_missing_status: Adw.StatusPage = Gtk.Template.Child()
+    folder_missing_update_btn: Gtk.Button = Gtk.Template.Child()
+    folder_missing_remove_btn: Gtk.Button = Gtk.Template.Child()
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
@@ -72,6 +77,12 @@ class PairDetailPanel(Adw.Bin):
         )
         self.conflict_log_back_btn.connect("clicked", self._on_conflict_log_back)
         self.remove_pair_button.connect("clicked", self._on_remove_pair_clicked)
+        self.folder_missing_update_btn.connect(
+            "clicked", self._on_folder_missing_update_clicked
+        )
+        self.folder_missing_remove_btn.connect(
+            "clicked", self._on_folder_missing_remove_clicked
+        )
 
     def _on_conflict_banner_dismissed(self, _banner: Adw.Banner) -> None:
         """Hide the conflict banner when user clicks Dismiss."""
@@ -167,6 +178,26 @@ class PairDetailPanel(Adw.Bin):
         self.error_banner.set_revealed(False)   # Story 6-0d
         self.view_conflict_log_btn.set_visible(False)
         self.detail_stack.set_visible_child_name("detail")
+
+    def _on_folder_missing_update_clicked(self, _button: Gtk.Button) -> None:
+        if self._current_pair_id is not None:
+            self.emit("update-path-requested", self._current_pair_id)
+
+    def _on_folder_missing_remove_clicked(self, _button: Gtk.Button) -> None:
+        if self._current_pair_id is not None:
+            self.emit("remove-pair-requested", self._current_pair_id)
+
+    def show_folder_missing(self, pair_id: str, local_path: str) -> None:
+        if self._current_pair_id != pair_id:
+            return
+        self._cancel_sync_timer()
+        self._hide_progress_card()
+        self.folder_missing_status.set_description(
+            f'Local folder not found at "{local_path}". Was it moved?'
+        )
+        self.conflict_banner.set_revealed(False)
+        self.error_banner.set_revealed(False)
+        self.detail_stack.set_visible_child_name("folder-missing")
 
     def on_sync_progress(self, payload: dict) -> None:
         """Handle a sync_progress event — only updates if pair_id matches."""

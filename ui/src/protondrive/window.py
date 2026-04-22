@@ -4,7 +4,7 @@ import os
 import re
 from typing import Any
 
-from gi.repository import Adw, Gio, Gtk
+from gi.repository import Adw, Gio, GLib, Gtk
 
 from protondrive.auth_window import AuthWindow
 from protondrive.errors import AuthError
@@ -81,6 +81,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._conflict_log_entries: list[dict] = []
         self._row_activated_connected: bool = False
         self._pending_remove_pair_id: str | None = None
+        self._folder_missing_pair_ids: set[str] = set()  # Story 6-4
+        self._pending_update_pair_id: str | None = None  # Story 6-4
         self.add_pair_button.connect("clicked", self._on_add_pair_clicked)
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
         self.pair_detail_panel.connect(
@@ -88,6 +90,9 @@ class MainWindow(Adw.ApplicationWindow):
         )
         self.pair_detail_panel.connect(
             "remove-pair-requested", self._on_remove_pair_requested
+        )
+        self.pair_detail_panel.connect(
+            "update-path-requested", self._on_update_path_requested
         )
 
     def _on_close_request(self, window: Gtk.Window) -> bool:
@@ -189,6 +194,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._error_pending_cycle = set()
         self._error_messages = {}  # Story 6-0d
         self._pending_remove_pair_id = None
+        self._folder_missing_pair_ids = set()  # Story 6-4
+        self._pending_update_pair_id = None    # Story 6-4
         self.hide_engine_crashed_banner()
         self._row_activated_connected = False
         self.add_pair_button.set_sensitive(False)
@@ -289,6 +296,35 @@ class MainWindow(Adw.ApplicationWindow):
         app = self.get_application()
         if app is not None and hasattr(app, "_on_remove_pair_confirmed"):
             app._on_remove_pair_confirmed(pair_id)
+
+    def _on_update_path_requested(self, _panel: object, pair_id: str) -> None:
+        self._pending_update_pair_id = pair_id
+        dialog = Gtk.FileDialog()
+        dialog.select_folder(
+            parent=self,
+            cancellable=None,
+            callback=self._on_new_path_chosen,
+        )
+
+    def _on_new_path_chosen(
+        self, dialog: Gtk.FileDialog, result: Gio.AsyncResult
+    ) -> None:
+        pair_id = self._pending_update_pair_id
+        self._pending_update_pair_id = None
+        if pair_id is None:
+            return
+        try:
+            gio_file = dialog.select_folder_finish(result)
+        except GLib.Error:
+            return  # user cancelled — silently ignore
+        if gio_file is None:
+            return
+        new_path = gio_file.get_path()
+        if not new_path:
+            return
+        app = self.get_application()
+        if app is not None and hasattr(app, "_on_update_pair_path"):
+            app._on_update_pair_path(pair_id, new_path)
 
     def _on_setup_requested(self, widget: object) -> None:
         """Handle setup-requested signal from PairDetailPanel."""
@@ -481,10 +517,14 @@ class MainWindow(Adw.ApplicationWindow):
         # Immediately restore banner if this pair has active conflicts.
         conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
-        if pair_id in self._error_pair_ids:                             # Story 6-0d
-            self.pair_detail_panel.set_error_state(                    # Story 6-0d
-                pair_id, True, self._error_messages.get(pair_id, "")  # Story 6-0d
-            )                                                          # Story 6-0d
+        if pair_id in self._folder_missing_pair_ids:      # Story 6-4 — before error check
+            pair_data = self._pairs_data.get(pair_id, {})
+            local_path = pair_data.get("local_path", pair_id)
+            self.pair_detail_panel.show_folder_missing(pair_id, local_path)
+        elif pair_id in self._error_pair_ids:              # Story 6-0d — only when not folder-missing
+            self.pair_detail_panel.set_error_state(
+                pair_id, True, self._error_messages.get(pair_id, "")
+            )
         self.nav_split_view.set_show_content(True)
 
     def select_pair(self, pair_id: str) -> None:
@@ -501,16 +541,21 @@ class MainWindow(Adw.ApplicationWindow):
         self.pair_detail_panel.show_pair(pair_data)
         conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
-        if pair_id in self._error_pair_ids:                             # Story 6-0d
-            self.pair_detail_panel.set_error_state(                    # Story 6-0d
-                pair_id, True, self._error_messages.get(pair_id, "")  # Story 6-0d
-            )                                                          # Story 6-0d
+        if pair_id in self._folder_missing_pair_ids:      # Story 6-4
+            pair_data = self._pairs_data.get(pair_id, {})
+            local_path = pair_data.get("local_path", pair_id)
+            self.pair_detail_panel.show_folder_missing(pair_id, local_path)
+        elif pair_id in self._error_pair_ids:
+            self.pair_detail_panel.set_error_state(
+                pair_id, True, self._error_messages.get(pair_id, "")
+            )
         self.nav_split_view.set_show_content(True)
 
     def on_pair_removed(self, pair_id: str) -> None:
         self._error_pair_ids.discard(pair_id)
         self._error_pending_cycle.discard(pair_id)
         self._error_messages.pop(pair_id, None)
+        self._folder_missing_pair_ids.discard(pair_id)  # Story 6-4
         self._conflict_copies_by_pair.pop(pair_id, None)
         self._sync_pair_rows.pop(pair_id, None)
         self._pairs_data.pop(pair_id, None)
@@ -613,6 +658,18 @@ class MainWindow(Adw.ApplicationWindow):
         self.pair_detail_panel.set_error_state(pair_id, True, message)  # Story 6-0d
         self._update_footer_error_state()
 
+    def on_pair_folder_missing(self, pair_id: str, local_path: str) -> None:
+        """Handle engine local_folder_missing event (Story 6-4 AC1, AC5)."""
+        row = self._sync_pair_rows.get(pair_id)
+        if row is None:
+            return
+        row.set_state("folder_missing")
+        self._folder_missing_pair_ids.add(pair_id)
+        self._error_pair_ids.add(pair_id)
+        self._error_messages[pair_id] = "Folder missing"
+        self.pair_detail_panel.show_folder_missing(pair_id, local_path)
+        self._update_footer_error_state()
+
     def on_rate_limited(self, payload: dict[str, Any]) -> None:
         """Handle engine's `rate_limited` push event (Story 3-4 AC4)."""
         resume_in = (payload.get("resume_in_seconds") or 0)
@@ -667,7 +724,12 @@ class MainWindow(Adw.ApplicationWindow):
             if pair_id in self._error_pair_ids:
                 # Cycle-based error clearing: if no new error arrived this cycle for this pair,
                 # clear error state. If error arrived again this cycle, keep it and reset the flag.
-                if pair_id in self._error_pending_cycle:
+                # Exception: folder-missing state is only clearable via update_path or remove_pair,
+                # not by sync_complete (Story 6-4: delete_remote items can succeed while folder is
+                # missing, which would otherwise incorrectly clear the folder-missing indicator).
+                if pair_id in self._folder_missing_pair_ids:
+                    pass  # folder-missing — keep error state; clearable only via update_path/remove
+                elif pair_id in self._error_pending_cycle:
                     self._error_pending_cycle.discard(pair_id)  # reset for next cycle; keep error
                 else:
                     self._error_pair_ids.discard(pair_id)  # clean cycle — clear error

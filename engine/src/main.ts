@@ -128,7 +128,7 @@ import { createDriveClient } from "./sdk.js";
 import type { DriveClient } from "./sdk.js";
 import { StateDb } from "./state-db.js";
 import type { SyncPair } from "./state-db.js";
-import { writeConfigYaml, removeFromConfigYaml } from "./config.js";
+import { writeConfigYaml, removeFromConfigYaml, updatePairPathInConfigYaml } from "./config.js";
 import { SyncEngine } from "./sync-engine.js";
 import { FileWatcher } from "./watcher.js";
 import { NetworkMonitor } from "./network-monitor.js";
@@ -703,6 +703,79 @@ export async function handleCommand(
 
     return {
       type: "remove_pair_result",
+      id: command.id,
+      payload: {},
+    };
+  }
+
+  if (command.type === "update_pair_path") {
+    if (!stateDb) {
+      return {
+        type: "update_pair_path_result",
+        id: command.id,
+        payload: { error: "engine_not_ready" },
+      };
+    }
+
+    const pairId = command.payload?.["pair_id"] as string | undefined;
+    const newLocalPath = command.payload?.["new_local_path"] as string | undefined;
+    if (!pairId || !newLocalPath) {
+      return {
+        type: "update_pair_path_result",
+        id: command.id,
+        payload: { error: "invalid_payload" },
+      };
+    }
+
+    const exists = stateDb.listPairs().some((p) => p.pair_id === pairId);
+    if (!exists) {
+      return {
+        type: "update_pair_path_result",
+        id: command.id,
+        payload: { error: "pair_not_found" },
+      };
+    }
+
+    try {
+      stateDb.updatePairPath(pairId, newLocalPath);
+    } catch {
+      return {
+        type: "update_pair_path_result",
+        id: command.id,
+        payload: { error: "db_write_failed" },
+      };
+    }
+
+    try {
+      updatePairPathInConfigYaml(pairId, newLocalPath);
+    } catch {
+      return {
+        type: "update_pair_path_result",
+        id: command.id,
+        payload: { error: "config_write_failed" },
+      };
+    }
+
+    // Restart FileWatcher so it watches the new path instead of the old one.
+    if (driveClient) {
+      fileWatcher?.stop();
+      fileWatcher = new FileWatcher(
+        stateDb.listPairs(),
+        async (_pId) => {
+          void syncEngine?.drainQueue();
+        },
+        (e) => server.emitEvent(e),
+        undefined,
+        undefined,
+        () => networkMonitor?.isCurrentlyOnline ?? true,
+        (e) => stateDb!.enqueue(e),
+      );
+      void fileWatcher.initialize();
+      void syncEngine?.startSyncAll();
+    }
+
+    return {
+      type: "update_pair_path_result",
       id: command.id,
       payload: {},
     };

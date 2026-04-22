@@ -1,6 +1,6 @@
 # Story 6.4: Local Folder Missing Detection & Recovery
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -32,8 +32,8 @@ The rest of 6-4 is fully independent.
 
 ## Tasks / Subtasks
 
-- [ ] Task 1 — Engine: `isLocalFolderMissing` helper + detection in `reconcileAndEnqueue` (AC: 1, 6)
-  - [ ] 1.1 — In `engine/src/sync-engine.ts`, add the following helper alongside the existing `isDiskFull`, `isPermissionDenied`, `isFileLocked` helpers (after `isFileLocked`, before `// ── Internal types`):
+- [x] Task 1 — Engine: `isLocalFolderMissing` helper + detection in `reconcileAndEnqueue` (AC: 1, 6)
+  - [x] 1.1 — In `engine/src/sync-engine.ts`, add the following helper alongside the existing `isDiskFull`, `isPermissionDenied`, `isFileLocked` helpers (after `isFileLocked`, before `// ── Internal types`):
     ```typescript
     function isLocalFolderMissing(err: unknown): boolean {
       return (
@@ -43,7 +43,7 @@ The rest of 6-4 is fully independent.
       );
     }
     ```
-  - [ ] 1.2 — In `reconcileAndEnqueue`'s per-pair catch block (lines ~205-222), insert the `LOCAL_FOLDER_MISSING` check **after** the `isFetchFailure` guard and **before** the generic `sync_cycle_error` emit:
+  - [x] 1.2 — In `reconcileAndEnqueue`'s per-pair catch block (lines ~205-222), insert the `LOCAL_FOLDER_MISSING` check **after** the `isFetchFailure` guard and **before** the generic `sync_cycle_error` emit:
     ```typescript
     if (isLocalFolderMissing(err)) {
       process.stderr.write(
@@ -56,11 +56,11 @@ The rest of 6-4 is fully independent.
       continue; // non-fatal — skip this pair, continue with others
     }
     ```
-  - [ ] 1.3 — Why `continue` not `return true`: `isLocalFolderMissing` must NOT break out of the pair loop — other pairs are unaffected and must keep syncing. Only auth and network failures return early. The existing `DISK_FULL` handling (`break`) is an intentional exception (no space = all pairs blocked). Missing folder = pair-specific.
-  - [ ] 1.4 — Why ENOENT only: `walkLocalTree` throws the root `readdir` error only when `isRoot = true`. Sub-directory ENOENT errors are swallowed inline. The only uncaught ENOENT that reaches `reconcileAndEnqueue`'s catch is the root directory being absent. Other ENOENT errors (e.g., `stat` on a file deleted between readdir and stat) are handled safely inside `walkLocalTree`.
+  - [x] 1.3 — Why `continue` not `return true`: `isLocalFolderMissing` must NOT break out of the pair loop — other pairs are unaffected and must keep syncing. Only auth and network failures return early. The existing `DISK_FULL` handling (`break`) is an intentional exception (no space = all pairs blocked). Missing folder = pair-specific.
+  - [x] 1.4 — Why ENOENT only: `walkLocalTree` throws the root `readdir` error only when `isRoot = true`. Sub-directory ENOENT errors are swallowed inline. The only uncaught ENOENT that reaches `reconcileAndEnqueue`'s catch is the root directory being absent. Other ENOENT errors (e.g., `stat` on a file deleted between readdir and stat) are handled safely inside `walkLocalTree`.
 
-- [ ] Task 2 — Engine: `updatePairPath` in `state-db.ts` (AC: 3)
-  - [ ] 2.1 — In `engine/src/state-db.ts`, add `updatePairPath` method to the `StateDb` class immediately after `deletePair`:
+- [x] Task 2 — Engine: `updatePairPath` in `state-db.ts` (AC: 3)
+  - [x] 2.1 — In `engine/src/state-db.ts`, add `updatePairPath` method to the `StateDb` class immediately after `deletePair`:
     ```typescript
     updatePairPath(pair_id: string, new_local_path: string): void {
       this.db
@@ -68,11 +68,11 @@ The rest of 6-4 is fully independent.
         .run(new_local_path, pair_id);
     }
     ```
-  - [ ] 2.2 — No migration needed — this is a plain UPDATE on the existing `sync_pair` table. No new columns.
-  - [ ] 2.3 — Do NOT clear `sync_state` on path update. If the user moves the folder (same files, same mtime), the reconciler compares the existing `sync_state` against the new path — no unnecessary re-upload. If the user picks a completely different folder, the reconciler detects new/modified files and enqueues them normally. Either way, clearing `sync_state` would force a full re-sync on every path update.
+  - [x] 2.2 — No migration needed — this is a plain UPDATE on the existing `sync_pair` table. No new columns.
+  - [x] 2.3 — Do NOT clear `sync_state` on path update. If the user moves the folder (same files, same mtime), the reconciler compares the existing `sync_state` against the new path — no unnecessary re-upload. If the user picks a completely different folder, the reconciler detects new/modified files and enqueues them normally. Either way, clearing `sync_state` would force a full re-sync on every path update.
 
-- [ ] Task 3 — Engine: `updatePairPathInConfigYaml` in `config.ts` (AC: 3)
-  - [ ] 3.1 — In `engine/src/config.ts`, add the following export immediately after `removeFromConfigYaml` (from Story 6-3) or after `writeConfigYaml` if 6-3 is not yet merged:
+- [x] Task 3 — Engine: `updatePairPathInConfigYaml` in `config.ts` (AC: 3)
+  - [x] 3.1 — In `engine/src/config.ts`, add the following export immediately after `removeFromConfigYaml` (from Story 6-3) or after `writeConfigYaml` if 6-3 is not yet merged:
     ```typescript
     export function updatePairPathInConfigYaml(
       pair_id: string,
@@ -88,11 +88,11 @@ The rest of 6-4 is fully independent.
       renameSync(tmpPath, configPath);
     }
     ```
-  - [ ] 3.2 — Uses `map` (not indexed access) to avoid `noUncheckedIndexedAccess` TS error. If `pair_id` is not found, the map is a no-op — safe on any input.
-  - [ ] 3.3 — Same atomic write pattern as `writeConfigYaml` and `removeFromConfigYaml`: write-to-tmp then `rename()`. No new imports needed.
+  - [x] 3.2 — Uses `map` (not indexed access) to avoid `noUncheckedIndexedAccess` TS error. If `pair_id` is not found, the map is a no-op — safe on any input.
+  - [x] 3.3 — Same atomic write pattern as `writeConfigYaml` and `removeFromConfigYaml`: write-to-tmp then `rename()`. No new imports needed.
 
-- [ ] Task 4 — Engine: `update_pair_path` IPC handler in `main.ts` (AC: 3)
-  - [ ] 4.1 — In `engine/src/main.ts`, add `updatePairPathInConfigYaml` to the existing import from `"./config.js"`.
+- [x] Task 4 — Engine: `update_pair_path` IPC handler in `main.ts` (AC: 3)
+  - [x] 4.1 — In `engine/src/main.ts`, add `updatePairPathInConfigYaml` to the existing import from `"./config.js"`.
     **Story 6-3 is not yet merged** — `removeFromConfigYaml` does not exist in `config.ts`. Use:
     ```typescript
     import { writeConfigYaml, updatePairPathInConfigYaml } from "./config.js";
@@ -101,7 +101,7 @@ The rest of 6-4 is fully independent.
     ```typescript
     import { writeConfigYaml, removeFromConfigYaml, updatePairPathInConfigYaml } from "./config.js";
     ```
-  - [ ] 4.2 — Add the `update_pair_path` handler block immediately after the `remove_pair` block (or after `add_pair` if 6-3 not merged), before the `get_status` block:
+  - [x] 4.2 — Add the `update_pair_path` handler block immediately after the `remove_pair` block (or after `add_pair` if 6-3 not merged), before the `get_status` block:
     ```typescript
     if (command.type === "update_pair_path") {
       if (!stateDb) {
@@ -176,11 +176,11 @@ The rest of 6-4 is fully independent.
       };
     }
     ```
-  - [ ] 4.3 — FileWatcher restart pattern is identical to `add_pair` and `remove_pair`. `stateDb.listPairs()` now returns the updated `local_path` because `updatePairPath` ran first.
-  - [ ] 4.4 — `syncEngine?.startSyncAll()` triggers a fresh reconcile at the new path. If the new path has the same files as before (folder moved), the reconciler finds everything in sync and does minimal work. If the new path has new files, they get uploaded.
+  - [x] 4.3 — FileWatcher restart pattern is identical to `add_pair` and `remove_pair`. `stateDb.listPairs()` now returns the updated `local_path` because `updatePairPath` ran first.
+  - [x] 4.4 — `syncEngine?.startSyncAll()` triggers a fresh reconcile at the new path. If the new path has the same files as before (folder moved), the reconciler finds everything in sync and does minimal work. If the new path has new files, they get uploaded.
 
-- [ ] Task 5 — Blueprint: add "folder-missing" StackPage to `pair-detail-panel.blp` (AC: 2, 5)
-  - [ ] 5.1 — In `ui/data/ui/pair-detail-panel.blp`, add the following new `Gtk.StackPage` block inside `detail_stack` immediately **before** the `"conflict-log"` StackPage (i.e., after the `"detail"` StackPage closing `};`):
+- [x] Task 5 — Blueprint: add "folder-missing" StackPage to `pair-detail-panel.blp` (AC: 2, 5)
+  - [x] 5.1 — In `ui/data/ui/pair-detail-panel.blp`, add the following new `Gtk.StackPage` block inside `detail_stack` immediately **before** the `"conflict-log"` StackPage (i.e., after the `"detail"` StackPage closing `};`):
     ```
     Gtk.StackPage {
       name: "folder-missing";
@@ -207,12 +207,12 @@ The rest of 6-4 is fully independent.
       };
     }
     ```
-  - [ ] 5.2 — `folder_missing_status` is the `AdwStatusPage` widget ID; its `description` is set dynamically at runtime by `show_folder_missing()`. Leave it empty string in Blueprint.
-  - [ ] 5.3 — `folder_missing_update_btn` and `folder_missing_remove_btn` are the Python Template.Child IDs. Blueprint kebab IDs (`folder-missing-update-btn`) would auto-convert, but using snake_case directly avoids ambiguity — match the style of `remove_pair_button` from Story 6-3.
-  - [ ] 5.4 — No new Blueprint file, no new Meson target, no new GResource entry — this is an addition to an existing `.blp` file only.
+  - [x] 5.2 — `folder_missing_status` is the `AdwStatusPage` widget ID; its `description` is set dynamically at runtime by `show_folder_missing()`. Leave it empty string in Blueprint.
+  - [x] 5.3 — `folder_missing_update_btn` and `folder_missing_remove_btn` are the Python Template.Child IDs. Blueprint kebab IDs (`folder-missing-update-btn`) would auto-convert, but using snake_case directly avoids ambiguity — match the style of `remove_pair_button` from Story 6-3.
+  - [x] 5.4 — No new Blueprint file, no new Meson target, no new GResource entry — this is an addition to an existing `.blp` file only.
 
-- [ ] Task 6 — Python: `SyncPairRow` — add "folder_missing" state (AC: 5)
-  - [ ] 6.1 — In `ui/src/protondrive/widgets/sync_pair_row.py`, in `set_state()`, add an `elif state == "folder_missing":` branch immediately after `elif state == "error":` (before the final `else:` branch):
+- [x] Task 6 — Python: `SyncPairRow` — add "folder_missing" state (AC: 5)
+  - [x] 6.1 — In `ui/src/protondrive/widgets/sync_pair_row.py`, in `set_state()`, add an `elif state == "folder_missing":` branch immediately after `elif state == "error":` (before the final `else:` branch):
     ```python
     elif state == "folder_missing":
         self.status_label.set_text("Folder missing")
@@ -226,23 +226,23 @@ The rest of 6-4 is fully independent.
         )
         return  # early return: skip generic _set_accessible_label
     ```
-  - [ ] 6.2 — In `_draw_dot()`, add `elif self._state == "folder_missing":` immediately after `elif self._state == "error":`, using the same red colour:
+  - [x] 6.2 — In `_draw_dot()`, add `elif self._state == "folder_missing":` immediately after `elif self._state == "error":`, using the same red colour:
     ```python
     elif self._state == "folder_missing":
         cr.set_source_rgb(0.87, 0.19, 0.19)  # red — same as error
     ```
-  - [ ] 6.3 — The distinction from "Sync error" is via the text label "Folder missing" (vs "Sync error"), satisfying the "dedicated error indicator (distinct from sync errors)" AC. Same red dot is intentional — both represent a pair that has stopped syncing.
-  - [ ] 6.4 — `self._state` must also be set by `set_state("folder_missing")`. Looking at the method: `self._state = state` runs at the top for all branches EXCEPT for early-return branches. Since "folder_missing" early-returns, add `self._state = state` at the top of the branch body OR confirm the existing `self._state = state` line is above the if/elif chain (it is, at line 59). ✅ No extra assignment needed.
+  - [x] 6.3 — The distinction from "Sync error" is via the text label "Folder missing" (vs "Sync error"), satisfying the "dedicated error indicator (distinct from sync errors)" AC. Same red dot is intentional — both represent a pair that has stopped syncing.
+  - [x] 6.4 — `self._state` must also be set by `set_state("folder_missing")`. Looking at the method: `self._state = state` runs at the top for all branches EXCEPT for early-return branches. Since "folder_missing" early-returns, add `self._state = state` at the top of the branch body OR confirm the existing `self._state = state` line is above the if/elif chain (it is, at line 59). ✅ No extra assignment needed.
 
-- [ ] Task 7 — Python: `PairDetailPanel` — add widget children and `show_folder_missing` (AC: 2, 3, 4)
-  - [ ] 7.1 — In `ui/src/protondrive/widgets/pair_detail_panel.py`, add the following `Gtk.Template.Child()` declarations alongside the existing ones (after `conflict_log_back_btn`):
+- [x] Task 7 — Python: `PairDetailPanel` — add widget children and `show_folder_missing` (AC: 2, 3, 4)
+  - [x] 7.1 — In `ui/src/protondrive/widgets/pair_detail_panel.py`, add the following `Gtk.Template.Child()` declarations alongside the existing ones (after `conflict_log_back_btn`):
     ```python
     # Story 6-4:
     folder_missing_status: Adw.StatusPage = Gtk.Template.Child()
     folder_missing_update_btn: Gtk.Button = Gtk.Template.Child()
     folder_missing_remove_btn: Gtk.Button = Gtk.Template.Child()
     ```
-  - [ ] 7.2 — In `__init__`, wire the two new button signals (no lambda):
+  - [x] 7.2 — In `__init__`, wire the two new button signals (no lambda):
     ```python
     self.folder_missing_update_btn.connect(
         "clicked", self._on_folder_missing_update_clicked
@@ -251,7 +251,7 @@ The rest of 6-4 is fully independent.
         "clicked", self._on_folder_missing_remove_clicked
     )
     ```
-  - [ ] 7.3 — Add `"update-path-requested"` to `__gsignals__`:
+  - [x] 7.3 — Add `"update-path-requested"` to `__gsignals__`:
     ```python
     __gsignals__ = {
         "setup-requested": (GObject.SignalFlags.RUN_FIRST, None, ()),
@@ -261,7 +261,7 @@ The rest of 6-4 is fully independent.
     }
     ```
     If Story 6-3 is not yet merged, `"remove-pair-requested"` is new here too. If 6-3 IS merged, it's already present — only add `"update-path-requested"`.
-  - [ ] 7.4 — Add signal handlers:
+  - [x] 7.4 — Add signal handlers:
     ```python
     def _on_folder_missing_update_clicked(self, _button: Gtk.Button) -> None:
         if self._current_pair_id is not None:
@@ -271,7 +271,7 @@ The rest of 6-4 is fully independent.
         if self._current_pair_id is not None:
             self.emit("remove-pair-requested", self._current_pair_id)
     ```
-  - [ ] 7.5 — Add `show_folder_missing` method (place after `show_pair`, before `on_sync_progress`):
+  - [x] 7.5 — Add `show_folder_missing` method (place after `show_pair`, before `on_sync_progress`):
     ```python
     def show_folder_missing(self, pair_id: str, local_path: str) -> None:
         """Show the folder-missing error state for the given pair.
@@ -293,7 +293,7 @@ The rest of 6-4 is fully independent.
         self.error_banner.set_revealed(False)
         self.detail_stack.set_visible_child_name("folder-missing")
     ```
-  - [ ] 7.5a — **Why the guard is here, not in `on_pair_folder_missing`**: consistent with
+  - [x] 7.5a — **Why the guard is here, not in `on_pair_folder_missing`**: consistent with
     `set_error_state` and `set_conflict_state`, both of which guard internally. The caller
     (`on_pair_folder_missing`) can call unconditionally. The one subtlety: `_on_row_activated`
     and `select_pair` call `show_pair()` first — `show_pair` sets `_current_pair_id = pair_id` —
@@ -301,20 +301,20 @@ The rest of 6-4 is fully independent.
     Do NOT set `self._current_pair_id = pair_id` inside `show_folder_missing`; the pair is
     already current (set by `show_pair`) and setting it again here would be redundant but
     would also mask the guard check on the wrong-pair path.
-  - [ ] 7.6 — Type hints on all new methods. `from __future__ import annotations` already present.
-  - [ ] 7.7 — `show_pair()` is unchanged. It already calls `self.detail_stack.set_visible_child_name("detail")` — switching away from "folder-missing" naturally. No extra logic needed.
+  - [x] 7.6 — Type hints on all new methods. `from __future__ import annotations` already present.
+  - [x] 7.7 — `show_pair()` is unchanged. It already calls `self.detail_stack.set_visible_child_name("detail")` — switching away from "folder-missing" naturally. No extra logic needed.
 
-- [ ] Task 8 — Python: `window.py` — event wiring, tracking, row/panel routing (AC: 1, 3, 5, 6)
-  - [ ] 8.1 — Add `GLib` to `window.py` imports:
+- [x] Task 8 — Python: `window.py` — event wiring, tracking, row/panel routing (AC: 1, 3, 5, 6)
+  - [x] 8.1 — Add `GLib` to `window.py` imports:
     ```python
     from gi.repository import Adw, Gio, GLib, Gtk
     ```
-  - [ ] 8.2 — In `MainWindow.__init__`, add `_folder_missing_pair_ids` tracking alongside the existing error tracking (after `self._error_messages`):
+  - [x] 8.2 — In `MainWindow.__init__`, add `_folder_missing_pair_ids` tracking alongside the existing error tracking (after `self._error_messages`):
     ```python
     self._folder_missing_pair_ids: set[str] = set()  # Story 6-4
     self._pending_update_pair_id: str | None = None  # Story 6-4
     ```
-  - [ ] 8.3 — In `MainWindow.__init__`, connect new signals from `pair_detail_panel` (after the `"view-conflict-log"` connection):
+  - [x] 8.3 — In `MainWindow.__init__`, connect new signals from `pair_detail_panel` (after the `"view-conflict-log"` connection):
     ```python
     self.pair_detail_panel.connect(
         "remove-pair-requested", self._on_remove_pair_requested  # may already exist from 6-3
@@ -324,12 +324,12 @@ The rest of 6-4 is fully independent.
     )
     ```
     If 6-3 is merged, the `remove-pair-requested` connection already exists in `__init__` — do NOT add it again; only add `update-path-requested`.
-  - [ ] 8.4 — In `clear_session()`, reset new state (after `self._error_messages = {}`):
+  - [x] 8.4 — In `clear_session()`, reset new state (after `self._error_messages = {}`):
     ```python
     self._folder_missing_pair_ids = set()  # Story 6-4
     self._pending_update_pair_id = None    # Story 6-4
     ```
-  - [ ] 8.5 — Add `on_pair_folder_missing` method to `window.py` (place after `on_pair_error`):
+  - [x] 8.5 — Add `on_pair_folder_missing` method to `window.py` (place after `on_pair_error`):
     ```python
     def on_pair_folder_missing(self, pair_id: str, local_path: str) -> None:
         """Handle engine local_folder_missing event (Story 6-4 AC1, AC5)."""
@@ -345,7 +345,7 @@ The rest of 6-4 is fully independent.
         self.pair_detail_panel.show_folder_missing(pair_id, local_path)
         self._update_footer_error_state()
     ```
-  - [ ] 8.6 — Add `_on_update_path_requested` method to `window.py` (place after `_on_remove_pair_response` or after `_on_remove_pair_requested` if 6-3 is merged; or after `_on_view_conflict_log` if 6-3 is not):
+  - [x] 8.6 — Add `_on_update_path_requested` method to `window.py` (place after `_on_remove_pair_response` or after `_on_remove_pair_requested` if 6-3 is merged; or after `_on_view_conflict_log` if 6-3 is not):
     ```python
     def _on_update_path_requested(self, _panel: object, pair_id: str) -> None:
         self._pending_update_pair_id = pair_id
@@ -376,7 +376,7 @@ The rest of 6-4 is fully independent.
         if app is not None and hasattr(app, "_on_update_pair_path"):
             app._on_update_pair_path(pair_id, new_path)
     ```
-  - [ ] 8.7 — In `_on_row_activated`, add folder-missing detection after the existing error banner restore (after the `_error_pair_ids` check block):
+  - [x] 8.7 — In `_on_row_activated`, add folder-missing detection after the existing error banner restore (after the `_error_pair_ids` check block):
     ```python
     if pair_id in self._folder_missing_pair_ids:
         pair_data = self._pairs_data.get(pair_id, {})
@@ -399,7 +399,7 @@ The rest of 6-4 is fully independent.
         )
     self.nav_split_view.set_show_content(True)
     ```
-  - [ ] 8.8 — Apply the same `folder_missing` priority check to `select_pair` (mirrors `_on_row_activated`). Replace:
+  - [x] 8.8 — Apply the same `folder_missing` priority check to `select_pair` (mirrors `_on_row_activated`). Replace:
     ```python
     if pair_id in self._error_pair_ids:
         self.pair_detail_panel.set_error_state(
@@ -417,18 +417,18 @@ The rest of 6-4 is fully independent.
             pair_id, True, self._error_messages.get(pair_id, "")
         )
     ```
-  - [ ] 8.9 — In `on_pair_removed`, add `_folder_missing_pair_ids` cleanup (after the existing `discard`/`pop` calls):
+  - [x] 8.9 — In `on_pair_removed`, add `_folder_missing_pair_ids` cleanup (after the existing `discard`/`pop` calls):
     ```python
     self._folder_missing_pair_ids.discard(pair_id)  # Story 6-4
     ```
     If 6-3 is not merged, `on_pair_removed` does not exist yet — create it with all the required cleanup including this line.
 
-- [ ] Task 9 — Python: `main.py` — register event, handle IPC (AC: 1, 3)
-  - [ ] 9.1 — In `Application.do_startup`, register the new event handler after `"crash_recovery_complete"`:
+- [x] Task 9 — Python: `main.py` — register event, handle IPC (AC: 1, 3)
+  - [x] 9.1 — In `Application.do_startup`, register the new event handler after `"crash_recovery_complete"`:
     ```python
     self._engine.on_event("local_folder_missing", self._on_local_folder_missing)
     ```
-  - [ ] 9.2 — Add `_on_local_folder_missing` handler (place after `_on_crash_recovery_complete`):
+  - [x] 9.2 — Add `_on_local_folder_missing` handler (place after `_on_crash_recovery_complete`):
     ```python
     def _on_local_folder_missing(self, message: dict[str, Any]) -> None:
         payload = message.get("payload", {})
@@ -439,7 +439,7 @@ The rest of 6-4 is fully independent.
         if pair_id and self._window is not None:
             self._window.on_pair_folder_missing(pair_id, local_path)
     ```
-  - [ ] 9.3 — Add `_on_update_pair_path` (place after `_on_remove_pair_confirmed` from 6-3, or after `_on_wizard_complete` if 6-3 is not merged):
+  - [x] 9.3 — Add `_on_update_pair_path` (place after `_on_remove_pair_confirmed` from 6-3, or after `_on_wizard_complete` if 6-3 is not merged):
     ```python
     def _on_update_pair_path(self, pair_id: str, new_local_path: str) -> None:
         if self._engine is not None:
@@ -448,7 +448,7 @@ The rest of 6-4 is fully independent.
                 lambda payload: self._on_update_pair_path_result(payload, pair_id),
             )
     ```
-  - [ ] 9.4 — Add `_on_update_pair_path_result` immediately after:
+  - [x] 9.4 — Add `_on_update_pair_path_result` immediately after:
     ```python
     def _on_update_pair_path_result(
         self, payload: dict[str, Any], pair_id: str
@@ -469,11 +469,11 @@ The rest of 6-4 is fully independent.
                 {"type": "get_status"}, self._on_get_status_result
             )
     ```
-  - [ ] 9.5 — The `lambda payload: self._on_update_pair_path_result(payload, pair_id)` captures `pair_id`. This is an IPC response callback (not a GTK signal connection) — the lambda rule does NOT apply. Same pattern as `_on_remove_pair_confirmed` (Story 6-3) and `_on_add_pair_complete` (Story 6-1).
-  - [ ] 9.6 — Clearing folder-missing state in `_on_update_pair_path_result` BEFORE sending `get_status` ensures that when `populate_pairs` rebuilds the sidebar rows, they start clean with no error/folder-missing flags.
+  - [x] 9.5 — The `lambda payload: self._on_update_pair_path_result(payload, pair_id)` captures `pair_id`. This is an IPC response callback (not a GTK signal connection) — the lambda rule does NOT apply. Same pattern as `_on_remove_pair_confirmed` (Story 6-3) and `_on_add_pair_complete` (Story 6-1).
+  - [x] 9.6 — Clearing folder-missing state in `_on_update_pair_path_result` BEFORE sending `get_status` ensures that when `populate_pairs` rebuilds the sidebar rows, they start clean with no error/folder-missing flags.
 
-- [ ] Task 10 — Engine tests: `update_pair_path` command (AC: 3)
-  - [ ] 10.1 — In `engine/src/main.test.ts`, add a new `describe("update_pair_path command", ...)` block after the `describe("remove_pair command")` block (or after `describe("add_pair command")` if 6-3 not merged), before `describe("unlock_keys command")`. Use the same `tmpDir`/`XDG_CONFIG_HOME` pattern:
+- [x] Task 10 — Engine tests: `update_pair_path` command (AC: 3)
+  - [x] 10.1 — In `engine/src/main.test.ts`, add a new `describe("update_pair_path command", ...)` block after the `describe("remove_pair command")` block (or after `describe("add_pair command")` if 6-3 not merged), before `describe("unlock_keys command")`. Use the same `tmpDir`/`XDG_CONFIG_HOME` pattern:
 
     ```typescript
     // ---------------------------------------------------------------------------
@@ -602,11 +602,11 @@ The rest of 6-4 is fully independent.
     });
     ```
 
-  - [ ] 10.2 — Add imports needed for test block. `writeConfigYaml` and `readConfigYaml` should already be imported if 6-3 is merged. If not, add:
+  - [x] 10.2 — Add imports needed for test block. `writeConfigYaml` and `readConfigYaml` should already be imported if 6-3 is merged. If not, add:
     ```typescript
     import { writeConfigYaml, readConfigYaml } from "./config.js";
     ```
-  - [ ] 10.3 — `_setSyncEngineForTests` is needed for test up-5. Add to imports from `"./main.js"` if not already present:
+  - [x] 10.3 — `_setSyncEngineForTests` is needed for test up-5. Add to imports from `"./main.js"` if not already present:
     ```typescript
     import {
       handleCommand,
@@ -620,13 +620,13 @@ The rest of 6-4 is fully independent.
       runCrashRecovery,
     } from "./main.js";
     ```
-  - [ ] 10.4 — `SyncEngine` type needed for `as unknown as SyncEngine`. Add to imports if not present:
+  - [x] 10.4 — `SyncEngine` type needed for `as unknown as SyncEngine`. Add to imports if not present:
     ```typescript
     import { SyncEngine } from "./sync-engine.js";
     ```
 
-- [ ] Task 11 — Engine tests: `local_folder_missing` emission in SyncEngine (AC: 1, 6)
-  - [ ] 11.1 — In `engine/src/sync-engine.test.ts`, add a new test within the existing `reconcileAndEnqueue` describe block (or in a new `describe("local folder missing detection")` block):
+- [x] Task 11 — Engine tests: `local_folder_missing` emission in SyncEngine (AC: 1, 6)
+  - [x] 11.1 — In `engine/src/sync-engine.test.ts`, add a new test within the existing `reconcileAndEnqueue` describe block (or in a new `describe("local folder missing detection")` block):
 
     ```typescript
     it("emits local_folder_missing and continues when local_path does not exist", async () => {
@@ -675,17 +675,17 @@ The rest of 6-4 is fully independent.
     });
     ```
 
-  - [ ] 11.2 — The test uses `os.tmpdir()` for the "good-pair" local_path (always exists).
+  - [x] 11.2 — The test uses `os.tmpdir()` for the "good-pair" local_path (always exists).
     `walkLocalTree(os.tmpdir())` will return whatever files happen to be in `/tmp`. The mock
     `walkRemoteTree` returns empty maps, so the reconciler computes "upload" work items for those
     files and enqueues them in the in-memory StateDb. It does NOT attempt actual uploads in
     `reconcileAndEnqueue` — that happens in `drainQueue`, which is not called by this test.
     The test only asserts that `local_folder_missing` is NOT emitted for `good-pair`; any
     `sync_cycle_error` from unexpected conditions during the walk is irrelevant to the assertion.
-  - [ ] 11.3 — Import `os` at the top of the test file if not already present: `import os from "node:os";`
+  - [x] 11.3 — Import `os` at the top of the test file if not already present: `import os from "node:os";`
 
-- [ ] Task 12 — UI tests (AC: 1, 2, 3, 5)
-  - [ ] 12.1 — In `ui/tests/test_sync_pair_row.py` (or wherever SyncPairRow tests live), add tests for the new "folder_missing" state:
+- [x] Task 12 — UI tests (AC: 1, 2, 3, 5)
+  - [x] 12.1 — In `ui/tests/test_sync_pair_row.py` (or wherever SyncPairRow tests live), add tests for the new "folder_missing" state:
     ```python
     class TestFolderMissingState:
         def test_set_state_folder_missing_sets_label(self):
@@ -702,13 +702,13 @@ The rest of 6-4 is fully independent.
             assert not row.status_dot.has_css_class("sync-dot-offline")
             assert not row.status_dot.has_css_class("sync-dot-conflict")
     ```
-  - [ ] 12.2 — In `ui/tests/test_pair_detail_panel.py`, add to `_make_panel()` fixture:
+  - [x] 12.2 — In `ui/tests/test_pair_detail_panel.py`, add to `_make_panel()` fixture:
     ```python
     panel.folder_missing_status = MagicMock()
     panel.folder_missing_update_btn = MagicMock()
     panel.folder_missing_remove_btn = MagicMock()
     ```
-  - [ ] 12.3 — Add test class in `test_pair_detail_panel.py`:
+  - [x] 12.3 — Add test class in `test_pair_detail_panel.py`:
     ```python
     class TestShowFolderMissing:
         def test_show_folder_missing_sets_stack_page(self):
@@ -757,10 +757,10 @@ The rest of 6-4 is fully independent.
             assert emitted[0][1] == ("pair-abc",)
     ```
 
-- [ ] Task 13 — Full test suite validation (AC: all)
-  - [ ] 13.1 — `cd engine && bun test` — all tests green, exit 0 (includes new `update_pair_path` and `local_folder_missing` tests)
-  - [ ] 13.2 — `distrobox-enter -n LinuxProtonDrive -- bash -c "/usr/bin/meson compile -C builddir 2>&1"` — must exit 0 (Blueprint compiles with new "folder-missing" StackPage and new widget IDs)
-  - [ ] 13.3 — `.venv/bin/pytest ui/tests/ -v` from project root — all tests green, exit 0
+- [x] Task 13 — Full test suite validation (AC: all)
+  - [x] 13.1 — `cd engine && bun test` — all tests green, exit 0 (includes new `update_pair_path` and `local_folder_missing` tests)
+  - [x] 13.2 — `distrobox-enter -n LinuxProtonDrive -- bash -c "/usr/bin/meson compile -C builddir 2>&1"` — must exit 0 (Blueprint compiles with new "folder-missing" StackPage and new widget IDs)
+  - [x] 13.3 — `.venv/bin/pytest ui/tests/ -v` from project root — all tests green, exit 0
 
 ## Dev Notes
 
@@ -900,12 +900,19 @@ No new files. No Blueprint build registration changes.
 - [Source: _bmad-output/project-context.md#blueprint-rule] — widget structure in .blp only; no widget tree construction in Python
 - [Source: _bmad-output/project-context.md#meson-invocation] — use `distrobox-enter` for meson (never bare `meson`)
 
+## Code Review Findings (2026-04-22)
+
+- [x] [Review][Patch] Missing `mkdirSync` in `updatePairPathInConfigYaml` [engine/src/config.ts:81] — inconsistent with `writeConfigYaml` and `removeFromConfigYaml`; could throw ENOENT if config dir was deleted. Fixed: added `mkdirSync(dirname(configPath), { recursive: true })`.
+- [x] [Review][Defer] DB write succeeds / config.yaml write fails → state inconsistency [engine/src/main.ts] — deferred, pre-existing architectural pattern across all commands
+- [x] [Review][Defer] `update_pair_path` missing nesting/overlap validation [engine/src/main.ts] — deferred, scope-expanding; `add_pair` calls `validateNewPair`, `update_pair_path` does not
+- [x] [Review][Defer] `local_folder_missing` fires every sync cycle with no debounce [engine/src/sync-engine.ts] — deferred, pre-existing design; UI handlers are idempotent
+
 ## Party-Mode Validation Record
 
 **Validated:** 2026-04-22  
 **Agents:** Winston (Architect), Amelia (Dev), Quinn (QA), Bob (SM)
 
-### Findings
+### Findings (Round 1 — Dev Session)
 
 - [x] **[C1 — CRITICAL] `show_folder_missing` missing pair_id guard** — Without a guard, `on_pair_folder_missing` would switch the detail panel even when a different pair was selected, violating UX isolation. Fixed in Task 7.5: added `if self._current_pair_id != pair_id: return` at the top of `show_folder_missing`, consistent with the `set_error_state` / `set_conflict_state` pattern. Task 7.5a added a rationale note explaining why the guard is inside the method (not in the caller) and why `_current_pair_id` is NOT re-set inside this method.
 
@@ -917,9 +924,18 @@ No new files. No Blueprint build registration changes.
 
 - [x] **[E4 — ENHANCEMENT] Test note 11.2 inaccurate about `os.tmpdir()`** — Note claimed "reconciler finds nothing to upload/download" but `os.tmpdir()` typically has files; the reconciler enqueues them as uploads (no crash, but not "nothing to do"). Fixed in Task 11.2 note: clarified that files are enqueued (not uploaded) in `reconcileAndEnqueue`, and that the test assertion is unaffected by this.
 
-### Rationale for Deferred Items
+### Findings (Round 2 — Post-CR Party-Mode, 2026-04-22)
 
-No scope-expanding items identified. All findings were in-scope fixes to the story spec itself.
+- [x] **[CR-P1 — PATCH] Missing `mkdirSync` in `updatePairPathInConfigYaml`** — `removeFromConfigYaml` and `writeConfigYaml` both call `mkdirSync(dirname(configPath), { recursive: true })` before writing; `updatePairPathInConfigYaml` did not. If the config directory is deleted between pair creation and path update, `writeFileSync` would throw ENOENT. Fixed: added `mkdirSync(dirname(configPath), { recursive: true })` to `updatePairPathInConfigYaml` in `engine/src/config.ts`. 322/322 engine tests pass.
+
+- [x] **[PM-C1 — CRITICAL] `on_sync_complete` clears folder-missing state when `delete_remote` succeeds** — Story 6-4 routes ENOENT through `local_folder_missing` (bypassing `on_pair_error`), so `_error_pending_cycle` is never set for folder-missing pairs. If pre-queued `delete_remote` items succeed while the local folder is missing, `drainQueue` adds the pair to `pairsWithSuccess` and emits `sync_complete`. `on_sync_complete`'s cycle-based error clearing then incorrectly discards the pair from `_error_pair_ids` and sets the row to "synced". Before 6-4, ENOENT went through `sync_cycle_error` → `on_pair_error` → `_error_pending_cycle` was set → error was preserved. Fixed: added `_folder_missing_pair_ids` guard in `on_sync_complete` — folder-missing pairs are never cleared by `sync_complete`; only `_on_update_pair_path_result` and `on_pair_removed` can clear them. `ui/src/protondrive/window.py`. 648/648 Python tests pass.
+
+### Deferred from Round 2
+
+- [x] **[CR-D1 — DEFER] `update_pair_path` skips nesting/overlap validation** — `add_pair` calls `validateNewPair`; `update_pair_path` does not. Scope-expanding. Logged to deferred-work.md.
+- [x] **[CR-D2 — DEFER] DB write succeeds / config.yaml write fails → state inconsistency** — Pre-existing architectural pattern across all commands. Logged to deferred-work.md.
+- [x] **[CR-D3 — DEFER] `local_folder_missing` fires every sync cycle with no debounce** — Design decision; UI handlers are idempotent. Logged to deferred-work.md.
+- [x] **[PM-D1 — DEFER] `on_offline` overrides folder-missing row state with "offline"** — Pre-existing pattern for all error states; self-heals when next sync cycle re-emits `local_folder_missing`. Consistent with DISK_FULL / PERMISSION_DENIED row behavior during offline periods.
 
 ---
 
@@ -931,6 +947,30 @@ claude-sonnet-4-6
 
 ### Debug Log References
 
+None — all tests passed on final runs without requiring debug log analysis.
+
 ### Completion Notes List
 
+1. `isLocalFolderMissing` uses ENOENT check; only root-directory ENOENT reaches the catch (sub-dir ENOENTs are swallowed inside `walkLocalTree`). Used `continue` (not `break`) for per-pair isolation.
+2. `updatePairPath` uses `.prepare(...).run(...)` pattern (consistent with all other `StateDb` methods). No `sync_state` clear — correct to preserve it so moved folders don't force a full re-upload.
+3. `updatePairPathInConfigYaml` uses `map` (not index) to avoid `noUncheckedIndexedAccess` TS errors; atomic write-tmp-then-rename pattern.
+4. `update_pair_path` IPC handler: Story 6-3 was already merged, so `removeFromConfigYaml` import already existed and `update_pair_path` handler was placed after `remove_pair`.
+5. `local_folder_missing` emission test: `mock.module("node:fs/promises", ...)` leaks across describe blocks — fixed by explicitly setting the ENOENT-throwing mock in `beforeEach` and using `mkdtempSync`+`rmSync` for the missing path. Final suite: 322/322 engine tests pass.
+6. Blueprint compile succeeded on first attempt with new "folder-missing" StackPage and all new widget IDs.
+7. All 648 Python UI tests pass including new `TestFolderMissingState` and `TestShowFolderMissing` classes.
+
 ### File List
+
+- `engine/src/sync-engine.ts`
+- `engine/src/state-db.ts`
+- `engine/src/config.ts`
+- `engine/src/main.ts`
+- `engine/src/main.test.ts`
+- `engine/src/sync-engine.test.ts`
+- `ui/data/ui/pair-detail-panel.blp`
+- `ui/src/protondrive/widgets/sync_pair_row.py`
+- `ui/src/protondrive/widgets/pair_detail_panel.py`
+- `ui/src/protondrive/window.py`
+- `ui/src/protondrive/main.py`
+- `ui/tests/test_pair_detail_panel.py`
+- `ui/tests/test_sync_pair_row.py`

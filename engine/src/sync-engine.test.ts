@@ -8,7 +8,7 @@
  */
 
 import { describe, it, mock, beforeEach, afterEach, expect } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, statSync, chmodSync, readFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync, statSync, chmodSync, readFileSync, existsSync, symlinkSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
@@ -3691,5 +3691,86 @@ describe("SyncEngine — PERMISSION_DENIED Sites 1,2,4,5 (Story 6-0e)", () => {
     );
     expect(errorEvent).toBeTruthy();
     expect((errorEvent!.payload as Record<string, unknown>).pair_id).toBe(PAIR_ID);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// local_folder_missing detection in reconcileAndEnqueue (Story 6.4, AC1, AC6)
+// ---------------------------------------------------------------------------
+describe("local folder missing detection", () => {
+  // The DISK_FULL/PERMISSION_DENIED tests above use mock.module("node:fs/promises")
+  // which leaks into subsequent tests (mock.restore() only undoes mock() not mock.module()).
+  // We re-mock the module here with a readdir that throws ENOENT for the missing path
+  // and delegates to the real implementation for all other paths.
+  let missingPath: string;
+  let goodPath: string;
+
+  beforeEach(() => {
+    missingPath = mkdtempSync(join(tmpdir(), "sync-engine-missing-"));
+    rmSync(missingPath, { recursive: true, force: true });
+    goodPath = mkdtempSync(join(tmpdir(), "sync-engine-good-"));
+  });
+
+  afterEach(() => {
+    mock.restore();
+    rmSync(goodPath, { recursive: true, force: true });
+  });
+
+  it("emits local_folder_missing and continues when local_path does not exist", async () => {
+    const emitted: IpcPushEvent[] = [];
+    const enoent = Object.assign(new Error("ENOENT: no such file or directory"), { code: "ENOENT" }) as NodeJS.ErrnoException;
+
+    // Mock readdir to throw ENOENT for missingPath, return [] for others.
+    mock.module("node:fs/promises", () => ({
+      readdir: mock(async (dirPath: string, _opts?: unknown) => {
+        if (dirPath === missingPath) throw enoent;
+        return [];
+      }),
+      stat: mock(async () => ({ mtime: new Date(), size: 0 })),
+      rename: mock(async () => {}),
+      unlink: mock(async () => {}),
+      mkdir: mock(async () => {}),
+      copyFile: mock(async () => {}),
+    }));
+
+    const localDb = new StateDb(":memory:");
+    localDb.insertPair({
+      pair_id: "missing-pair",
+      local_path: missingPath,
+      remote_path: "/Docs",
+      remote_id: "root-id",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+    localDb.insertPair({
+      pair_id: "good-pair",
+      local_path: goodPath,
+      remote_path: "/Docs",
+      remote_id: "root-id",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+
+    const mockClient = {
+      listRemoteFolders: async () => [],
+      listRemoteFiles: async () => [],
+    } as unknown as DriveClient;
+
+    const localEngine = new SyncEngine(localDb, (e) => emitted.push(e));
+    localEngine.setDriveClient(mockClient);
+    await localEngine.reconcileAndEnqueue();
+
+    const missingEvent = emitted.find(
+      (e) => e.type === "local_folder_missing" &&
+             (e.payload as Record<string, string>)["pair_id"] === "missing-pair"
+    );
+    expect(missingEvent).toBeDefined();
+    expect((missingEvent!.payload as Record<string, string>)["local_path"]).toBe(missingPath);
+    // Verify loop continued: no folder_missing for good-pair.
+    const badEvent = emitted.find(
+      (e) => e.type === "local_folder_missing" &&
+             (e.payload as Record<string, string>)["pair_id"] === "good-pair"
+    );
+    expect(badEvent).toBeUndefined();
   });
 });

@@ -48,6 +48,14 @@ function isFileLocked(err: unknown): boolean {
   return msg.includes("EBUSY") || msg.includes("ETXTBSY");
 }
 
+function isLocalFolderMissing(err: unknown): boolean {
+  return (
+    err != null &&
+    typeof err === "object" &&
+    (err as NodeJS.ErrnoException).code === "ENOENT"
+  );
+}
+
 // ── Internal types ───────────────────────────────────────────────────────────
 
 interface LocalFile {
@@ -213,6 +221,16 @@ export class SyncEngine {
           process.stderr.write(`[ENGINE] reconcile aborted — network failure detected, forcing connectivity check\n`);
           this.onNetworkFailure();
           return true;
+        }
+        if (isLocalFolderMissing(err)) {
+          process.stderr.write(
+            `[ENGINE] local_folder_missing pair=${pairObj.pair_id.slice(-8)} path=${pairObj.local_path}\n`
+          );
+          this.emitEvent({
+            type: "local_folder_missing",
+            payload: { pair_id: pairObj.pair_id, local_path: pairObj.local_path },
+          });
+          continue; // non-fatal — skip this pair, continue with others
         }
         process.stderr.write(`[ENGINE] sync_cycle_error pair=${pairObj.pair_id.slice(-8)}: ${msg}\n`);
         this.emitEvent({

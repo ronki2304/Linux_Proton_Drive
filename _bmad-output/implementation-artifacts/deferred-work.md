@@ -24,6 +24,15 @@ _Items scoped to planned epics (Epic 5, Epic 6) or future stories have been remo
 
 ---
 
+## Deferred from: code review of 6-4-local-folder-missing-detection-and-recovery (2026-04-22)
+
+- **[6-4 D1]** `update_pair_path` skips nesting/overlap validation — `add_pair` calls `validateNewPair()` which guards against nested/overlapping sync folders; `update_pair_path` does not. A user could update a pair to a path that overlaps with another pair, creating two FileWatcher instances watching the same tree. Scope-expanding for Story 6-4; belongs in a future hardening story. `engine/src/main.ts`
+- **[6-4 D2]** DB write succeeds / config.yaml write fails → state inconsistency — all three mutating commands (`add_pair`, `remove_pair`, `update_pair_path`) write DB first, config.yaml second with no rollback. If config.yaml write fails, the two stores diverge. Pre-existing architectural pattern; requires a transactional write strategy or DB-as-canonical-truth approach. `engine/src/main.ts`, `engine/src/config.ts`
+- **[6-4 D3]** `local_folder_missing` fires every sync cycle with no debounce — the engine emits this event on every `reconcileAndEnqueue` while the folder remains missing. The UI guards are idempotent, but repeated emissions waste IPC bandwidth. Consider engine-side deduplication (suppress if already emitted since last successful reconcile for this pair). `engine/src/sync-engine.ts`
+- **[6-4 D4]** `on_offline` overrides folder-missing row state with "offline" — all rows go to "offline" on network drop, including folder-missing ones. `on_online` skips these rows (in `_error_pair_ids`), leaving them "offline" until the next sync cycle re-emits `local_folder_missing`. Pre-existing pattern for all error states (DISK_FULL, PERMISSION_DENIED, etc.). Self-healing; low severity. `ui/src/protondrive/window.py`
+
+---
+
 ## Deferred from: code review of 5-5-actionable-error-disk-full (2026-04-19)
 
 - **[5-5 D2]** Multi-pair error: `on_pair_error` overwrites footer with last errored pair name — second DISK_FULL event for a different pair silently replaces the first. Story 5-9 priority ordering. `ui/src/protondrive/window.py`

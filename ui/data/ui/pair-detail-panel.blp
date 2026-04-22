@@ -126,6 +126,31 @@ template $ProtonDrivePairDetailPanel: Adw.Bin {
     }
 
     Gtk.StackPage {
+      name: "folder-missing";
+      child: Adw.StatusPage folder_missing_status {
+        icon-name: "dialog-warning-symbolic";
+        title: _("Local Folder Not Found");
+        description: "";
+
+        child: Gtk.Box {
+          orientation: horizontal;
+          halign: center;
+          spacing: 8;
+
+          Gtk.Button folder_missing_update_btn {
+            label: _("Update path");
+            styles ["suggested-action"]
+          }
+
+          Gtk.Button folder_missing_remove_btn {
+            label: _("Remove pair");
+            styles ["destructive-action"]
+          }
+        };
+      };
+    }
+
+    Gtk.StackPage {
       name: "conflict-log";
       child: Gtk.Box {
         orientation: vertical;

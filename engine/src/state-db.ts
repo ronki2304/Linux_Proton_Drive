@@ -201,6 +201,12 @@ export class StateDb {
       .run(pairId);
   }
 
+  updatePairPath(pair_id: string, new_local_path: string): void {
+    this.db
+      .prepare("UPDATE sync_pair SET local_path = ? WHERE pair_id = ?")
+      .run(new_local_path, pair_id);
+  }
+
   // ── sync_state CRUD ──────────────────────────────────────────────────────
 
   getSyncState(pairId: string, relativePath: string): SyncState | undefined {

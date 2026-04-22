@@ -33,6 +33,9 @@ def _make_panel() -> PairDetailPanel:
     panel.conflict_log_slot = MagicMock()
     panel.conflict_log_back_btn = MagicMock()
     panel.remove_pair_button = MagicMock()
+    panel.folder_missing_status = MagicMock()
+    panel.folder_missing_update_btn = MagicMock()
+    panel.folder_missing_remove_btn = MagicMock()
     panel._conflict_log = None
     return panel
 
@@ -501,3 +504,51 @@ class TestRemovePairButton:
         panel.emit = lambda signal, *args: emitted.append((signal, args))
         panel._on_remove_pair_clicked(MagicMock())
         assert len(emitted) == 0
+
+
+# ---------------------------------------------------------------------------
+# show_folder_missing (Story 6-4)
+# ---------------------------------------------------------------------------
+
+class TestShowFolderMissing:
+    def test_show_folder_missing_sets_stack_page(self):
+        panel = _make_panel()
+        panel._current_pair_id = "pair-abc"
+        panel.show_folder_missing("pair-abc", "/home/user/Docs")
+        panel.detail_stack.set_visible_child_name.assert_called_with("folder-missing")
+
+    def test_show_folder_missing_sets_description_with_path(self):
+        panel = _make_panel()
+        panel._current_pair_id = "pair-abc"
+        panel.show_folder_missing("pair-abc", "/home/user/Docs")
+        panel.folder_missing_status.set_description.assert_called_once()
+        call_arg = panel.folder_missing_status.set_description.call_args[0][0]
+        assert "/home/user/Docs" in call_arg
+
+    def test_show_folder_missing_noop_when_different_pair_selected(self):
+        panel = _make_panel()
+        panel._current_pair_id = "pair-other"
+        panel.show_folder_missing("pair-abc", "/home/user/Docs")
+        panel.detail_stack.set_visible_child_name.assert_not_called()
+        panel.folder_missing_status.set_description.assert_not_called()
+
+    def test_update_clicked_emits_update_path_requested(self):
+        panel = _make_panel()
+        panel._current_pair_id = "pair-abc"
+        emitted = []
+        panel.emit = lambda signal, *args: emitted.append((signal, args))
+        panel._on_folder_missing_update_clicked(MagicMock())
+        assert len(emitted) == 1
+        assert emitted[0][0] == "update-path-requested"
+        assert emitted[0][1] == ("pair-abc",)
+
+    def test_remove_clicked_emits_remove_pair_requested(self):
+        panel = _make_panel()
+        panel._current_pair_id = "pair-abc"
+        emitted = []
+        panel.emit = lambda signal, *args: emitted.append((signal, args))
+        panel._on_folder_missing_remove_clicked(MagicMock())
+        assert len(emitted) == 1
+        assert emitted[0][0] == "remove-pair-requested"
+        assert emitted[0][1] == ("pair-abc",)
+

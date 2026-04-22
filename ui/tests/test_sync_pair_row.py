@@ -137,6 +137,33 @@ class TestSyncPairRowOfflineState:
         calls = [call.args[0] for call in row.status_dot.remove_css_class.call_args_list]
         assert "sync-dot-offline" in calls
 
+
+class TestFolderMissingState:
+    def test_set_state_folder_missing_sets_label(self):
+        row = _make_row()
+        row.set_state("folder_missing")
+        row.status_label.set_text.assert_called_with("Folder missing")
+
+    def test_set_state_folder_missing_sets_internal_state(self):
+        row = _make_row()
+        row.set_state("folder_missing")
+        assert row._state == "folder_missing"
+
+    def test_set_state_folder_missing_removes_other_css(self):
+        row = _make_row()
+        row.set_state("syncing")
+        row.set_state("folder_missing")
+        calls = [c.args[0] for c in row.status_dot.remove_css_class.call_args_list]
+        assert "sync-dot-syncing" in calls
+        assert "sync-dot-offline" in calls
+        assert "sync-dot-conflict" in calls
+
+    def test_set_state_folder_missing_accessible_label(self):
+        row = _make_row(pair_name="Photos")
+        row.set_state("folder_missing")
+        _, values = row._accessible_label_args
+        assert "folder missing" in values[0].lower()
+
     def test_offline_accessible_label(self):
         row = _make_row(pair_name="Photos")
         row.set_state("offline")

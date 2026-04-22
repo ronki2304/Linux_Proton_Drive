@@ -97,6 +97,7 @@ class Application(Adw.Application):
         self._engine.on_event("rate_limited", self._on_rate_limited)
         self._engine.on_event("conflict_detected", self._on_conflict_detected)
         self._engine.on_event("crash_recovery_complete", self._on_crash_recovery_complete)
+        self._engine.on_event("local_folder_missing", self._on_local_folder_missing)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -224,6 +225,15 @@ class Application(Adw.Application):
     def _on_crash_recovery_complete(self, payload: dict[str, Any]) -> None:
         """Cache crash recovery flag — toast shown after main window is visible (Story 5-4 AC4)."""
         self._pending_crash_recovery = True
+
+    def _on_local_folder_missing(self, message: dict[str, Any]) -> None:
+        payload = message.get("payload", {})
+        if not isinstance(payload, dict):
+            return
+        pair_id = payload.get("pair_id", "")
+        local_path = payload.get("local_path", "")
+        if pair_id and self._window is not None:
+            self._window.on_pair_folder_missing(pair_id, local_path)
 
     def _on_conflict_detected(self, message: dict[str, Any]) -> None:
         payload = message.get("payload", {})
@@ -439,6 +449,32 @@ class Application(Adw.Application):
             return
         if self._window is not None:
             self._window.on_pair_removed(pair_id)
+        if self._engine is not None:
+            self._engine.send_command_with_response(
+                {"type": "get_status"}, self._on_get_status_result
+            )
+
+    def _on_update_pair_path(self, pair_id: str, new_local_path: str) -> None:
+        if self._engine is not None:
+            self._engine.send_command_with_response(
+                {"type": "update_pair_path", "payload": {"pair_id": pair_id, "new_local_path": new_local_path}},
+                lambda payload: self._on_update_pair_path_result(payload, pair_id),
+            )
+
+    def _on_update_pair_path_result(
+        self, payload: dict[str, Any], pair_id: str
+    ) -> None:
+        if payload.get("error"):
+            if self._window is not None:
+                toast = Adw.Toast.new("Failed to update folder path")
+                toast.set_timeout(3)
+                self._window.toast_overlay.add_toast(toast)
+            return
+        # Clear folder-missing state before refreshing sidebar rows.
+        if self._window is not None:
+            self._window._folder_missing_pair_ids.discard(pair_id)
+            self._window._error_pair_ids.discard(pair_id)
+            self._window._error_messages.pop(pair_id, None)
         if self._engine is not None:
             self._engine.send_command_with_response(
                 {"type": "get_status"}, self._on_get_status_result

@@ -92,6 +92,17 @@ class SyncPairRow(Gtk.ListBoxRow):
                 [f"{self._pair_name} \u2014 error"],
             )
             return  # early return: skip generic _set_accessible_label
+        elif state == "folder_missing":
+            self.status_label.set_text("Folder missing")
+            self.status_dot.remove_css_class("sync-dot-syncing")
+            self.status_dot.remove_css_class("sync-dot-offline")
+            self.status_dot.remove_css_class("sync-dot-conflict")
+            self.status_dot.queue_draw()
+            self.update_property(
+                [Gtk.AccessibleProperty.LABEL],
+                [f"{self._pair_name} — folder missing"],
+            )
+            return  # early return: skip generic _set_accessible_label
         else:
             self.status_label.set_text("")
             self.status_dot.remove_css_class("sync-dot-syncing")
@@ -110,6 +121,8 @@ class SyncPairRow(Gtk.ListBoxRow):
             cr.set_source_rgb(0.95, 0.62, 0.14)  # amber — matches StatusFooterBar conflict colour
         elif self._state == "error":
             cr.set_source_rgb(0.87, 0.19, 0.19)  # red
+        elif self._state == "folder_missing":
+            cr.set_source_rgb(0.87, 0.19, 0.19)  # red — same as error
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2
