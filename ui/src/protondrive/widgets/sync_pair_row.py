@@ -25,14 +25,14 @@ class SyncPairRow(Gtk.ListBoxRow):
         super().__init__(**kwargs)
         self._pair_id = pair_id
         self._pair_name = pair_name
-        self._state = "synced"
+        self._state = "pending"
 
         self.pair_name_label.set_text(pair_name)
         self.status_label.set_text("")
 
         self.status_dot.set_draw_func(self._draw_dot)
 
-        self._set_accessible_label("synced")
+        self._set_accessible_label("pending")
 
     @property
     def pair_id(self) -> str:
@@ -123,6 +123,8 @@ class SyncPairRow(Gtk.ListBoxRow):
             cr.set_source_rgb(0.87, 0.19, 0.19)  # red
         elif self._state == "folder_missing":
             cr.set_source_rgb(0.87, 0.19, 0.19)  # red — same as error
+        elif self._state == "pending":
+            cr.set_source_rgb(0.60, 0.60, 0.60)  # grey — waiting for first sync event
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2

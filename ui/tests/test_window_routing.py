@@ -28,13 +28,14 @@ def _make_window() -> MainWindow:
     win._error_pair_ids = set()
     win._error_pending_cycle = set()
     win._error_messages = {}
+    win._folder_missing_pair_ids = set()
     win._row_activated_connected = False
     win._pending_remove_pair_id = None
     win._settings = MagicMock()
     return win
 
 
-def _make_row(state: str = "synced", pair_name: str = "Documents") -> MagicMock:
+def _make_row(state: str = "pending", pair_name: str = "Documents") -> MagicMock:
     row = MagicMock()
     row.state = state
     row.pair_name = pair_name
@@ -160,6 +161,29 @@ class TestOnWatcherStatus:
         win.on_watcher_status("unknown")
         win.status_footer_bar.set_initialising.assert_not_called()
         win.status_footer_bar.update_all_synced.assert_not_called()
+
+    def test_ready_with_pending_row_transitions_row_to_synced(self):
+        win = _make_window()
+        row = _make_row(state="pending")
+        win._sync_pair_rows["p1"] = row
+        win.on_watcher_status("ready")
+        row.set_state.assert_called_with("synced")
+
+    def test_ready_with_pending_rows_calls_update_all_synced(self):
+        win = _make_window()
+        row = _make_row(state="pending")
+        win._sync_pair_rows["p1"] = row
+        win.on_watcher_status("ready")
+        win.status_footer_bar.update_all_synced.assert_called_once()
+
+    def test_ready_does_not_touch_non_pending_rows(self):
+        win = _make_window()
+        row = _make_row(state="syncing")
+        win._sync_pair_rows["p1"] = row
+        win.on_watcher_status("ready")
+        # set_state should NOT have been called with "synced" by the pending loop
+        for c in row.set_state.call_args_list:
+            assert c.args[0] != "synced", "non-pending row should not be transitioned"
 
 
 # ---------------------------------------------------------------------------
@@ -881,6 +905,29 @@ class TestErrorStatePersistence:
         assert last_call_args is not None
         assert "2 pairs" in last_call_args[0][0]
 
+    def test_footer_reverts_to_single_pair_name_when_one_error_clears(self):
+        """When one of two errors clears, footer reverts to single remaining pair's name."""
+        win = _make_window()
+        row1 = _make_row(pair_name="Docs")
+        row2 = _make_row(pair_name="Photos")
+        row1.state = "error"
+        row2.state = "error"
+        win._sync_pair_rows["p1"] = row1
+        win._sync_pair_rows["p2"] = row2
+        # Both pairs error
+        win.on_pair_error("p1", "Sync error EIO")
+        win.on_pair_error("p2", "Sync error EIO")
+        # Clear p1 error: 1st on_sync_complete discards pending flag but keeps error
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-23T00:00:00.000Z"})
+        assert "p1" in win._error_pair_ids  # still in error after first cycle
+        # 2nd on_sync_complete: p1 NOT in _error_pending_cycle → error cleared
+        win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-23T00:00:01.000Z"})
+        assert "p1" not in win._error_pair_ids
+        # Footer should now show "Photos" (p2 pair_name), not "2 pairs"
+        last_call_args = win.status_footer_bar.set_error.call_args
+        assert last_call_args is not None
+        assert last_call_args[0][0] == "Photos"
+
 
 # ---------------------------------------------------------------------------
 # Story 6-0c — error_pending_cycle clearance on offline / queue replay
@@ -946,6 +993,41 @@ class TestErrorPendingCycleClearance:
 
         win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:00.000Z"})
         assert "p1" not in win._error_pair_ids  # cleared after ONE cycle
+
+
+# ---------------------------------------------------------------------------
+# Story 7-0b — on_offline preserves folder-missing row state
+# ---------------------------------------------------------------------------
+
+
+class TestOnOfflineWithFolderMissing:
+    def test_on_offline_does_not_override_folder_missing_row(self):
+        win = _make_window()
+        row = _make_row()
+        row.set_state = MagicMock()
+        win._sync_pair_rows["p1"] = row
+        win._folder_missing_pair_ids.add("p1")
+        win._error_pair_ids.add("p1")
+        win.on_offline()
+        calls = [str(c) for c in row.set_state.call_args_list]
+        assert not any("offline" in c for c in calls)
+
+    def test_on_offline_still_sets_normal_rows_to_offline(self):
+        win = _make_window()
+        row_missing = _make_row(pair_name="Missing")
+        row_missing.set_state = MagicMock()
+        row_normal = _make_row(pair_name="Normal")
+        row_normal.set_state = MagicMock()
+        win._sync_pair_rows["p1"] = row_missing
+        win._sync_pair_rows["p2"] = row_normal
+        win._folder_missing_pair_ids.add("p1")
+        win.on_offline()
+        # p1 (folder-missing) should NOT be called with "offline"
+        calls_p1 = [str(c) for c in row_missing.set_state.call_args_list]
+        assert not any("offline" in c for c in calls_p1)
+        # p2 (normal) should be called with "offline"
+        row_normal.set_state.assert_called_once()
+        assert row_normal.set_state.call_args[0][0] == "offline"
 
 
 # ---------------------------------------------------------------------------

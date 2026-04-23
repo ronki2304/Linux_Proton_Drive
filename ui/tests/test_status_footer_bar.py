@@ -14,7 +14,7 @@ from protondrive.widgets.status_footer_bar import StatusFooterBar
 def _make_bar() -> StatusFooterBar:
     """Construct a StatusFooterBar without invoking GTK __init__."""
     bar = object.__new__(StatusFooterBar)
-    bar._dot_state = "synced"
+    bar._dot_state = "pending"
     bar._rate_limit_remaining = 0
     bar._rate_limit_source_id = None
 
@@ -378,3 +378,22 @@ class TestStatusFooterBarSetError:
         cr = MagicMock()
         bar._on_dot_draw(None, cr, 8, 8)
         cr.set_source_rgb.assert_called_once_with(0.87, 0.19, 0.19)
+
+
+class TestStatusFooterBarPendingState:
+    def test_initial_dot_state_is_pending(self):
+        bar = _make_bar()
+        assert bar._dot_state == "pending"
+
+    def test_pending_draws_grey_dot(self):
+        bar = _make_bar()
+        bar._dot_state = "pending"
+        mock_cr = MagicMock()
+        bar._on_dot_draw(None, mock_cr, 8, 8)
+        mock_cr.set_source_rgb.assert_called_once_with(0.60, 0.60, 0.60)
+
+    def test_update_all_synced_exits_pending(self):
+        bar = _make_bar()
+        assert bar._dot_state == "pending"
+        bar.update_all_synced()
+        assert bar._dot_state == "synced"

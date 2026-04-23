@@ -83,9 +83,7 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ## Open — UI State & Multi-Pair
 
-- **[5-5 D2]** Multi-pair error: `on_pair_error` overwrites footer with last errored pair name — second error event for a different pair silently replaces the first. **Scheduled: Story 7-0b.** `ui/src/protondrive/window.py`
 - **[6-4 D2]** DB write succeeds / config.yaml write fails → state inconsistency — all three mutating commands (`add_pair`, `remove_pair`, `update_pair_path`) write DB first, config.yaml second with no rollback. Pre-existing architectural pattern; requires a transactional write strategy or DB-as-canonical-truth approach. `engine/src/main.ts`, `engine/src/config.ts`
-- **[6-4 D4]** `on_offline` overrides folder-missing row state with "offline" — `on_online` skips these rows, leaving them "offline" until the next sync cycle re-emits `local_folder_missing`. Self-healing; low severity. **Scheduled: Story 7-0b.** `ui/src/protondrive/window.py`
 - **[6-0d CR W1]** `_error_pair_ids` and `_error_messages` not reset in `populate_pairs` — stale error IDs could collide with new pair IDs after re-login. Pre-existing structural gap; `clear_session()` normally prevents this. `ui/src/protondrive/window.py:391-403`
 - **[6-0d CR W2]** Stale banner title persists on hide — `error_banner.set_title()` not called in the `set_error_state(False)` branch; invisible but potentially surfaced by screen readers. Harmless in current code paths. `ui/src/protondrive/widgets/pair_detail_panel.py`
 - **[6-0d CR W3]** Early `on_pair_error` message silently dropped before `populate_pairs` — the `row is None` guard returns before `_error_messages[pair_id]` is set. Pre-existing behavior consistent with all other event-drop logic. `ui/src/protondrive/window.py:540-543`
@@ -132,8 +130,6 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 
 ## Open — Test Coverage Gaps
 
-- **[5-5 D6]** No multi-entry test for `queue_replay_failed` suppression. **Scheduled: Story 7-0b.** `engine/src/sync-engine.test.ts`
-- **[5-3 CR W5]** `tmpDir` collision risk via `Date.now()` in test setup — `Math.random()` suffix reduces but does not eliminate risk. **Scheduled: Story 7-0b.** `engine/src/sync-engine.test.ts`
 - **[5-3 CR W6]** `afterEach` cleanup ordering: if `db.close()` throws, `rmSync`/`mock.restore()` are skipped. Pre-existing pattern. `engine/src/sync-engine.test.ts`
 - **[6-0e CR D1]** Site 3 DISK_FULL test doesn't assert `downloadFile` NOT called. `engine/src/sync-engine.test.ts`
 - **[6-0e CR D2]** `mock.module` accumulates in Bun's registry across tests — `mock.restore()` does not unregister `mock.module` registrations. Bun limitation. `engine/src/sync-engine.test.ts`
@@ -142,6 +138,26 @@ Live with intermittent renderer crashes during auth-flow testing on the aarch64 
 - **[6-0e CR D5]** No multi-pair DISK_FULL loop-abort test — single-pair tests cannot verify `diskFull=true` skips subsequent pairs. `engine/src/sync-engine.ts`
 - **[6-0e CR D6]** No `mkdir` ENOSPC test in `downloadOne`. `engine/src/sync-engine.ts`
 - **[6-0e CR D7]** No `attempt_count` dead-lettering drain test — no test exercises the dead-letter path after `MAX_DRAIN_ATTEMPTS`. `engine/src/sync-engine.ts`
+
+---
+
+---
+
+## Open — Story 7.2 AppStream / Metainfo Enhancements
+
+These were surfaced during the party-mode validation of Story 7.2 (2026-04-23). All are improvements beyond the story's current ACs; none block Flathub submission.
+
+- **[7-2 D1] Full OARS 1.1 field expansion** — The story includes 7 explicit OARS content-attribute fields (the most important social-* and money-* fields). The GNOME OARS generator emits a complete list (~20+ fields). Expanding to the full list would match what `flatpak-external-data-checker` generates and is more future-proof. However it requires running the [OARS generator](https://hughsie.github.io/oars/generate.html) against the app's content. Defer to a pre-Flathub-review cleanup pass. `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml`
+- **[7-2 D2] `<keywords>` element in metainfo** — AppStream supports `<keywords><keyword>sync</keyword>...</keywords>` for search ranking in GNOME Software / KDE Discover. Flathub recommends it but does not require it. Low effort (~3 lines). Defer to a polish pass before Flathub submission. `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml`
+- **[7-2 D3] `<url type="vcs-browser">` in metainfo** — AppStream 1.0 supports a VCS browser URL (`https://github.com/ronki2304/ProtonDrive-LinuxClient`) which appears in GNOME Software's "Development" links. Not required by Flathub. One line. Defer to polish pass. `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml`
+
+---
+
+## Deferred from: code review of 7-0a/7-0b (2026-04-23)
+
+- **[7-0 CR D1]** No integration test for pending rows through full `populate_pairs → on_offline → on_online` cycle — the three new tests cover individual state transitions but not the full sequence under a real window lifecycle. Scope-expanding beyond 7-0 ACs. `ui/tests/test_window_routing.py`
+- **[7-0 CR D2]** Pending rows created after `on_watcher_status("ready")` fires have no transition path — watcher fires once at startup before any pairs exist in normal flow, but edge case (pair added post-ready, before next watcher cycle) leaves row visually grey. Pre-existing architectural constraint; not actionable without per-row ready tracking. `ui/src/protondrive/window.py:841-843`
+- **[7-0 CR D3]** Accessibility label `"pending"` persists via AT-SPI2 until first `set_state()` call — `_set_accessible_label("pending")` is accurate for the ~<1s pending window, but screen readers reading the label during startup see a state string that has no accessible description. Pre-existing AT-SPI2 gap. `ui/src/protondrive/widgets/sync_pair_row.py:33`
 
 ---
 

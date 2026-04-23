@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-23  # Epic 6 retrospective complete
+last_updated: 2026-04-23  # Stories 7-0a/7-0b done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -131,10 +131,11 @@ development_status:
   epic-6-retrospective: done
 
   # Epic 7: Packaging & Distribution
-  epic-7: backlog
-  7-0-pre-epic-7-debt-cleanup: backlog
-  7-1-flatpak-manifest-and-permission-justifications: backlog
-  7-2-appstream-metainfo-and-desktop-file: backlog
-  7-3-ci-cd-pipelines: backlog
-  7-4-end-to-end-mvp-validation-and-manual-test-protocol: backlog
+  epic-7: in-progress
+  7-0a-startup-indicator-state: done
+  7-0b-targeted-debt-cleanup: done
+  7-1-flatpak-manifest-and-permission-justifications: ready-for-dev
+  7-2-appstream-metainfo-and-desktop-file: ready-for-dev
+  7-3-ci-cd-pipelines: ready-for-dev
+  7-4-end-to-end-mvp-validation-and-manual-test-protocol: ready-for-dev
   epic-7-retrospective: optional

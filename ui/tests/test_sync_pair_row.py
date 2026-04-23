@@ -17,7 +17,7 @@ def _make_row(pair_id: str = "p1", pair_name: str = "Documents") -> SyncPairRow:
     row = object.__new__(SyncPairRow)
     row._pair_id = pair_id
     row._pair_name = pair_name
-    row._state = "synced"
+    row._state = "pending"
 
     row.status_dot = MagicMock()
     row.pair_name_label = MagicMock()
@@ -40,9 +40,9 @@ class TestSyncPairRowInit:
         row = _make_row(pair_name="Music")
         assert row._pair_name == "Music"
 
-    def test_initial_state_is_synced(self):
+    def test_initial_state_is_pending(self):
         row = _make_row()
-        assert row._state == "synced"
+        assert row._state == "pending"
 
 
 class TestSyncPairRowSetState:
@@ -302,11 +302,29 @@ class TestSyncPairRowProperty:
         row = _make_row(pair_id="xyz")
         assert row.pair_id == "xyz"
 
-    def test_state_property_synced(self):
+    def test_state_property_pending(self):
         row = _make_row()
-        assert row.state == "synced"
+        assert row.state == "pending"
 
     def test_state_property_syncing(self):
         row = _make_row()
         row.set_state("syncing")
         assert row.state == "syncing"
+
+
+class TestSyncPairRowPendingState:
+    def test_pending_draws_grey_dot(self):
+        row = _make_row()  # factory default is "pending"
+        mock_cr = MagicMock()
+        row._draw_dot(None, mock_cr, 8, 8)
+        mock_cr.set_source_rgb.assert_called_once_with(0.60, 0.60, 0.60)
+
+    def test_pending_transitions_to_syncing(self):
+        row = _make_row()
+        row.set_state("syncing")
+        assert row._state == "syncing"
+
+    def test_pending_transitions_to_synced(self):
+        row = _make_row()
+        row.set_state("synced")
+        assert row._state == "synced"

@@ -611,6 +611,8 @@ class MainWindow(Adw.ApplicationWindow):
         """Shift all pair rows and footer bar to offline state."""
         self._error_pending_cycle.clear()  # offline ends any in-progress sync cycle
         for pair_id, row in self._sync_pair_rows.items():
+            if pair_id in self._folder_missing_pair_ids:
+                continue  # preserve folder-missing state — on_online already skips _error_pair_ids
             last_synced_text = self._pairs_data.get(pair_id, {}).get("last_synced_text")
             row.set_state("offline", last_synced_text=last_synced_text)
         self.status_footer_bar.set_offline()
@@ -836,6 +838,9 @@ class MainWindow(Adw.ApplicationWindow):
                 return
             if self._error_pair_ids:  # Story 5-9: error > synced
                 return
+            for row in self._sync_pair_rows.values():
+                if row.state == "pending":
+                    row.set_state("synced")
             any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
             any_offline = any(r.state == "offline" for r in self._sync_pair_rows.values())
             if not any_syncing and not any_offline:

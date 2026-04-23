@@ -22,11 +22,11 @@ class StatusFooterBar(Gtk.Box):
 
     def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
-        self._dot_state = "synced"
+        self._dot_state = "pending"
         self._rate_limit_remaining: int = 0
         self._rate_limit_source_id: int | None = None
         self.footer_dot.set_draw_func(self._on_dot_draw)
-        self.footer_label.set_text("All synced")
+        self.footer_label.set_text("Starting up…")
         gesture = Gtk.GestureClick.new()
         gesture.connect("pressed", self._on_clicked)
         self.add_controller(gesture)
@@ -194,6 +194,8 @@ class StatusFooterBar(Gtk.Box):
             cr.set_source_rgb(0.11, 0.63, 0.63)  # teal — same as "syncing" (not an error)
         elif self._dot_state == "error":
             cr.set_source_rgb(0.87, 0.19, 0.19)  # red
+        elif self._dot_state == "pending":
+            cr.set_source_rgb(0.60, 0.60, 0.60)  # grey — waiting for first sync event
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2

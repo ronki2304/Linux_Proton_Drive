@@ -82,8 +82,7 @@ describe("SyncEngine — delta detection (AC1)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     setupPair();
   });
 
@@ -478,8 +477,7 @@ describe("SyncEngine — remote_id resolution (AC6)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
   });
 
   afterEach(() => {
@@ -590,8 +588,7 @@ describe("SyncEngine — 401 auth expiry detection", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     db.insertPair({
       pair_id: PAIR_ID,
       local_path: tmpDir,
@@ -671,14 +668,36 @@ describe("SyncEngine — 401 auth expiry detection", () => {
     const errorEvents = emittedEvents.filter((e) => e.type === "error");
     expect(errorEvents.length).toBe(0);
   });
+
+  // [5-5 D6]: 401 with two queue entries — tokenExpired called once, both entries remain
+  it("401 during drain with two queue entries — tokenExpired once, both entries remain", async () => {
+    db.enqueue({ pair_id: PAIR_ID, relative_path: "a.txt", change_type: "created", queued_at: new Date().toISOString() });
+    db.enqueue({ pair_id: PAIR_ID, relative_path: "b.txt", change_type: "modified", queued_at: new Date().toISOString() });
+
+    mockClient = makeMockClient({
+      listRemoteFiles: mock(async () => { throw new AuthExpiredError("401"); }),
+    });
+
+    let tokenExpiredCount = 0;
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e), undefined, () => {}, () => { tokenExpiredCount++; });
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    expect(tokenExpiredCount).toBe(1);
+    expect(db.queueSize(PAIR_ID)).toBe(2); // neither entry consumed
+    const completeEvent = emittedEvents.find((e) => e.type === "queue_replay_complete");
+    expect(completeEvent).toBeTruthy();
+    const errorEvents = emittedEvents.filter((e) => e.type === "error");
+    expect(errorEvents.length).toBe(0); // AuthExpired is not routed to SDK_ERROR
+  });
 });
 
 describe("SyncEngine — post-reauth queue drain (Story 5-3)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     setupPair(); // uses REMOTE_ID ("remote-folder-uid") as remote_id
   });
 
@@ -1001,8 +1020,7 @@ describe("SyncEngine — sync_progress and sync_complete events (AC7)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     setupPair();
   });
 
@@ -1092,8 +1110,7 @@ describe("SyncEngine — state persistence ordering (AC3)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     setupPair();
   });
 
@@ -1146,8 +1163,7 @@ describe("SyncEngine — cold-start (AC5)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
   });
 
   afterEach(() => {
@@ -1208,8 +1224,7 @@ describe("SyncEngine — concurrency cap (AC4)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     setupPair();
   });
 
@@ -1261,8 +1276,7 @@ describe("SyncEngine — atomic download writes (AC2)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     setupPair();
   });
 
@@ -1311,11 +1325,7 @@ describe("SyncEngine — drainQueue", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `replay-queue-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "replay-queue-test-"));
     setupPair();
   });
 
@@ -2138,8 +2148,7 @@ describe("SyncEngine — deletion propagation (Story 4-0b)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     setupPair();
   });
 
@@ -2293,8 +2302,7 @@ describe("SyncEngine — conflict detection (Story 4-1)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `sync-engine-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-test-"));
     setupPair();
   });
 
@@ -2535,11 +2543,7 @@ describe("SyncEngine — DISK_FULL detection (Story 5-5)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `disk-full-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "disk-full-test-"));
     setupPair();
   });
 
@@ -2623,11 +2627,7 @@ describe("SyncEngine — dirty-session flag lifecycle (Story 5-4)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `dirty-flag-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "dirty-flag-test-"));
     setupPair();
   });
 
@@ -2690,11 +2690,7 @@ describe("SyncEngine — PERMISSION_DENIED detection (Story 5-6)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `perm-denied-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "perm-denied-test-"));
     setupPair();
   });
 
@@ -2903,11 +2899,7 @@ describe("SyncEngine — FILE_LOCKED detection (Story 5-8)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `file-locked-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "file-locked-test-"));
     setupPair();
   });
 
@@ -3151,11 +3143,7 @@ describe("SyncEngine — SDK_ERROR (Story 5-9)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `sdk-error-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "sdk-error-test-"));
     setupPair();
   });
 
@@ -3312,11 +3300,7 @@ describe("SyncEngine — dead-letter (6-0a AC1)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `dead-letter-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "dead-letter-test-"));
     setupPair();
   });
 
@@ -3370,11 +3354,7 @@ describe("SyncEngine — walkRemoteTree depth cap (6-0a AC3)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `walk-remote-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "walk-remote-test-"));
     setupPair();
     mockClient = makeMockClient();
     engine = new SyncEngine(db, (e) => emittedEvents.push(e));
@@ -3404,11 +3384,7 @@ describe("SyncEngine — conflictCopyPath cap (6-0a AC5)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `conflict-cap-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "conflict-cap-test-"));
     setupPair();
   });
 
@@ -3462,11 +3438,7 @@ describe("SyncEngine — error routing (Story 6-0b)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `error-routing-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "error-routing-test-"));
     setupPair();
   });
 
@@ -3571,11 +3543,7 @@ describe("SyncEngine — walkLocalTree safety (6-0a AC2)", () => {
   beforeEach(() => {
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(
-      tmpdir(),
-      `walk-local-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    );
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "walk-local-test-"));
     setupPair();
     mockClient = makeMockClient();
     engine = new SyncEngine(db, (e) => emittedEvents.push(e));
@@ -3637,8 +3605,7 @@ describe("SyncEngine — DISK_FULL in reconcilePair (Story 6-0e)", () => {
     mock.restore(); // clear any module mock leaks from previous describe blocks
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `disk-full-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "disk-full-test-"));
     setupPair();
   });
 
@@ -3818,8 +3785,7 @@ describe("SyncEngine — PERMISSION_DENIED Sites 1,2,4,5 (Story 6-0e)", () => {
     mock.restore(); // clear any module mock leaks from previous describe blocks
     db = new StateDb(":memory:");
     emittedEvents = [];
-    tmpDir = join(tmpdir(), `perm-denied-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-    mkdirSync(tmpDir, { recursive: true });
+    tmpDir = mkdtempSync(join(tmpdir(), "perm-denied-test-"));
     setupPair();
   });
 
