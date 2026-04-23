@@ -79,6 +79,9 @@ GNOME proxy settings (`org.gnome.system.proxy` GSettings) are not automatically
 read by the engine in v1. Use the `http_proxy`/`https_proxy` env var mechanism
 described above.
 
+**Note:** DNS hostname resolution uses DNS-over-HTTPS (`1.1.1.1`) and does not
+traverse the proxy. Only the subsequent API connections go through the proxy.
+
 ## Intentionally Not Requested
 
 The following permissions were **deliberately omitted** to minimise sandbox scope:
@@ -87,6 +90,7 @@ The following permissions were **deliberately omitted** to minimise sandbox scop
   Secrets service, which would expose all applications' secrets. The Flatpak Secret
   portal (`org.freedesktop.portal.Secret`) provides equivalent credential storage
   without cross-app secret access. See [Credential Storage](#credential-storage-secret-portal) above.
-- **`--filesystem=/run/systemd/resolve:ro`** — Not required. Standard `--share=network`
-  provides full DNS resolution. This unusual permission has no documented rationale
-  and would likely flag in Flathub review.
+- **`--filesystem=/run/systemd/resolve:ro`** — Not required. The sync engine resolves
+  hostnames via DNS-over-HTTPS (`1.1.1.1`) within the sandbox, so direct access to
+  `systemd-resolved` through this path is unnecessary. The permission also lacks any
+  documented rationale and would likely flag in Flathub review.

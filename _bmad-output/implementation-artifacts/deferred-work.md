@@ -177,6 +177,11 @@ These were surfaced during the party-mode validation of Story 7.2 (2026-04-23). 
 - **[7-1 CR D3]** Inotify watcher exhaustion (`ENOSPC`) sets `inotifyExhausted` but does not reinitialise when descriptors become available again — broken detection until engine restart. Pre-existing. `engine/src/watcher.ts`
 - **[7-1 CR D4]** `CredentialManager` not re-probed after startup — if Secret portal D-Bus service crashes mid-session, all subsequent credential operations fail without recovery. Pre-existing. `ui/src/protondrive/credential_store.py`
 - **[7-1 CR D5]** `_get_stored_token()` returns `None` for both "token not found" and backend errors — conflates transient keyring failure with no-token state; user sent to pre-auth screen on transient error. Pre-existing. `ui/src/protondrive/main.py`
+- **[7-1 CR D6]** DoH HTTPS startup smoke test writes errors to `stderr` but does not abort — engine continues with broken connectivity and later fails with confusing "Network unavailable" errors rather than failing fast at init. Pre-existing. `engine/src/main.ts`
+- **[7-1 CR D7]** Portal FUSE + inotify interaction when user symlinks a portal-mounted directory into the sync root — inotify watches the real path while the app may track the portal FUSE path, creating stale sync state. Pre-existing architectural constraint.
+- **[7-1 CR D8]** ALPN hard-coded to `http/1.1` in DoH TLS connector — blocks http/2 negotiation; any server requiring http/2-only connections will fail. Pre-existing. `engine/src/main.ts`
+- **[7-1 CR D9]** Debug auth token written to `/tmp/proton-debug-token.txt` with mode `0o600` in production build — appears to be an unremoveddev debugging artifact; token persists across sessions on non-tmpwatch systems. Pre-existing. `engine/src/main.ts:362`
+- **[7-1 CR D10]** Proxy env vars not re-read post-launch — DoH undici dispatcher is constructed once at startup; proxy settings injected by Flatpak 1.3.1+ or changed in the environment after process start are never picked up. Pre-existing. `engine/src/main.ts`
 
 ---
 

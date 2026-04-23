@@ -221,6 +221,20 @@ claude-sonnet-4-6 (via party-mode multi-agent review: Bob SM, Winston Architect,
 - 1 enhancement applied: rewrote aspirational "We have reviewed this decision with Flathub maintainers" to honest forward-looking language (see Review Findings above).
 - No new deferrals. No scope-expanding items surfaced. Story remains `done`.
 
+### Third CR Pass (2026-04-23) — Blind Hunter + Edge Case Hunter + Acceptance Auditor
+
+- [x] [Review][Patch] `PERMISSIONS.md` "Intentionally Not Requested" DoH justification misleading — claimed `--share=network` provides DNS, but engine uses DoH because sandbox DNS has limitations; updated to: "resolves hostnames via DNS-over-HTTPS (`1.1.1.1`) within the sandbox" [flatpak/PERMISSIONS.md] — applied
+- [x] [Review][Defer] DoH HTTPS startup smoke test logs errors to stderr but continues — engine may start with broken connectivity and emit confusing "Network unavailable" errors later [engine/src/main.ts] — deferred, pre-existing [7-1 CR D6]
+- [x] [Review][Defer] Portal FUSE + inotify race when user symlinks portal-mounted dirs into sync root — portal path tracked via FUSE mount while inotify watches real path; potential stale state [flatpak architecture] — deferred, pre-existing [7-1 CR D7]
+- [x] [Review][Defer] ALPN hard-coded to `http/1.1` in DoH TLS connector — blocks http/2 negotiation; servers requiring http/2 will fail [engine/src/main.ts] — deferred, pre-existing [7-1 CR D8]
+- [x] [Review][Defer] Debug auth token written to `/tmp/proton-debug-token.txt` in production build — `process.stderr.write` at line 362 indicates this was not removed before ship [engine/src/main.ts:362] — deferred, pre-existing [7-1 CR D9]
+- [x] [Review][Defer] Proxy env vars not re-read if injected by Flatpak 1.3.1+ after process start — DoH dispatcher already constructed at init time; proxy changes post-launch ignored [engine/src/main.ts] — deferred, pre-existing [7-1 CR D10]
+- ~15 findings dismissed: BH supply-chain false positives (sha256 is Flatpak standard), ECH overlaps with existing D1–D5, AA-1 (GNOME GSettings proxy — Dev Notes explicitly authorize http_proxy-only for v1). All 7 ACs remain PASS.
+
+### Third Party-Mode Pass (2026-04-23) — Winston / Quinn / Bob
+
+- [x] [party-mode 2026-04-23][Patch] Proxy Support section lacked DoH DNS carve-out — after DoH disclosure added to "Intentionally Not Requested", the Proxy section still implied all traffic respects http_proxy; added: "DNS hostname resolution uses DoH (1.1.1.1) and does not traverse the proxy; only subsequent API connections go through the proxy." [flatpak/PERMISSIONS.md] — applied; all 7 ACs remain PASS; story remains `done`
+
 ### File List
 
 - `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
