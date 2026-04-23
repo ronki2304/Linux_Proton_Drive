@@ -120,6 +120,16 @@ Log file is capped at 5 MB and rotates to `engine.log.1`. Tokens are never writt
 
 ---
 
+## Troubleshooting
+
+### Some folders show "Sync error" after a Proton password change
+
+If you changed your Proton account password in the past, some folders may have their encryption keys sealed with the old key. The Linux client cannot decrypt them with your current credentials, so those folders show "Sync error" while others continue syncing normally.
+
+**Fix:** Open [drive.proton.me](https://drive.proton.me) in your browser and navigate into the affected folder. Proton's web client automatically re-wraps the folder's key with your current account key. On the next sync cycle the error clears automatically — no restart needed.
+
+---
+
 ## License
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)

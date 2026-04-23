@@ -280,6 +280,17 @@ This story is purely file-content work: XML/INI/Markdown. No Python, TypeScript,
 
 ---
 
+## Party-Mode Validation Record — Pass 2
+
+**Validated:** 2026-04-23 by Bob 🏃 (SM), Winston 🏗️ (Architect), Amelia 💻 (Dev), Quinn 🧪 (QA)
+
+### Findings
+
+- [x] **[D5] DEFERRED — Flatpak post-install missing `appstreamcli validate`** — `protondrive-ui` module only runs `glib-compile-schemas` post-install; metainfo regressions in local Flatpak builds go undetected. No impact on Flathub CI (which validates externally). Natural 7-3 CI/CD story item. See `[7-2 D5]` in `deferred-work.md`. `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml:40-41`
+- [x] **All ACs verified live:** appstreamcli exit 0 confirmed; sprint-status `done`; all 5 ACs pass. Zero new patch items.
+
+---
+
 ## Dev Agent Record
 
 ### Agent Model Used
@@ -314,7 +325,7 @@ claude-sonnet-4-6 (Amelia Dev, bmad-dev-story workflow, 2026-04-23)
 
 ---
 
-## Code Review Findings
+## Code Review Findings — Pass 1
 
 **Reviewed:** 2026-04-23 — 3 layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor)
 **Result:** 0 decision-needed, 0 patch, 4 defer, 8 dismissed
@@ -336,3 +347,26 @@ claude-sonnet-4-6 (Amelia Dev, bmad-dev-story workflow, 2026-04-23)
 - Desktop file missing `StartupWMClass`/`DBusActivatable` — not required; pre-existing; out of scope
 - No `metadata_version` declaration — not a real AppStream requirement; false positive
 - AC4 URL reachability warnings — acceptable per spec; dev record confirms exit 0 with `--no-net`; warnings expected for private/nonexistent repo
+
+---
+
+## Code Review Findings — Pass 2
+
+**Reviewed:** 2026-04-23 — 3 layers (Blind Hunter, Edge Case Hunter, Acceptance Auditor)
+**Result:** 0 decision-needed, 0 patch, 1 new defer, 7 dismissed
+
+### Deferred
+
+- [x] [Review][Defer] `<categories>` element absent from metainfo — desktop file has `Categories=Network;FileTransfer;` but metainfo omits the corresponding `<categories>` block; AppStream/Flathub recommend it for GNOME Software search ranking. Optional element, not required by AC1; deferred to pre-Flathub polish pass. `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml` — deferred, optional element, see `[7-2 D4]` in deferred-work.md
+
+### Dismissed (7)
+
+- Git remote URL mismatch — pre-existing, already tracked as `[7-2 CR D4]` in Pass 1
+- Missing screenshot / broken image — intentional Option B; already tracked
+- TODO comment in production metainfo — intentional Option B; already tracked
+- Flathub badge showing "not found" — explicitly acceptable per Dev Notes; expected until Flathub submission
+- Em-dash characters in XML description — false positive; UTF-8 XML fully supports literal em-dashes; only `&amp;`, `&lt;`, `&gt;`, `&apos;`, `&quot;` require escaping
+- Release date `2026-04-23` suspicious — correct per story spec ("use the actual implementation date")
+- Duplicate MIT license badge (top + License section) — intentional dual placement per Task 4.1 (top) + Task 4.2 (near License section); common GitHub README pattern
+- xml:lang absent from metainfo — AppStream spec defaults to English when absent; standard for monolingual files
+- AC4 URL warnings causing exit code 3 — Acceptance Auditor ran without `--no-net`; Dev Record confirms `appstreamcli validate --no-net` exits 0; network warnings are expected and acceptable per AC4
