@@ -166,6 +166,7 @@ python_widget_sources = [
   'src/protondrive/widgets/key_unlock_dialog.py',
   'src/protondrive/widgets/conflict_log.py',
   'src/protondrive/widgets/reauth_dialog.py',
+  'src/protondrive/widgets/add_pair_dialog.py',
 ]
 
 install_data(

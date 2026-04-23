@@ -199,6 +199,13 @@ class PairDetailPanel(Adw.Bin):
         self.error_banner.set_revealed(False)
         self.detail_stack.set_visible_child_name("folder-missing")
 
+    def update_file_stats(self, pair_id: str, file_count_text: str, total_size_text: str) -> None:
+        """Update file count and total size rows if this pair is currently displayed."""
+        if self._current_pair_id != pair_id:
+            return
+        self.file_count_row.set_subtitle(file_count_text)
+        self.total_size_row.set_subtitle(total_size_text)
+
     def on_sync_progress(self, payload: dict) -> None:
         """Handle a sync_progress event — only updates if pair_id matches."""
         if not self._current_pair_id or payload.get("pair_id") != self._current_pair_id:

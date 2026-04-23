@@ -61,7 +61,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._sync_pair_rows: dict[str, SyncPairRow] = {}
         self._pairs_data: dict[str, dict] = {}
         # Set by `on_queue_replay_complete` — non-zero means the footer is
-        # showing "N files need conflict resolution" and must not be reset
+        # showing "N conflict copies need attention" and must not be reset
         # to "All synced" by on_sync_complete / on_watcher_status / on_online.
         # Cleared only by a subsequent clean replay (Story 3-3, AC7).
         self._conflict_pending_count: int = 0
@@ -84,6 +84,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._folder_missing_pair_ids: set[str] = set()  # Story 6-4
         self._pending_update_pair_id: str | None = None  # Story 6-4
         self.add_pair_button.connect("clicked", self._on_add_pair_clicked)
+        self.status_footer_bar.connect("conflict-clicked", self._on_footer_conflict_clicked)
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
         self.pair_detail_panel.connect(
             "view-conflict-log", self._on_view_conflict_log
@@ -215,6 +216,40 @@ class MainWindow(Adw.ApplicationWindow):
         local_path = data.get("local_path", "")
         return os.path.basename(local_path.rstrip("/")) or pair_id
 
+    def _scan_existing_conflict_copies(self) -> None:
+        """Populate conflict log from .conflict-* files already on disk.
+
+        Called after pairs are loaded so the Conflict Log shows pre-existing
+        copies from previous sessions, not just ones detected live this session.
+        """
+        _conflict_re = re.compile(r'\.conflict-(\d{4}-\d{2}-\d{2})-\d+(-[a-z0-9]+)?$')
+        for pair_id, data in self._pairs_data.items():
+            local_path = data.get("local_path", "")
+            if not local_path or not os.path.isdir(local_path):
+                continue
+            pair_name = self._get_pair_name(pair_id)
+            for dirpath, _dirs, filenames in os.walk(local_path):
+                for fname in filenames:
+                    m = _conflict_re.search(fname)
+                    if not m:
+                        continue
+                    conflict_copy_path = os.path.join(dirpath, fname)
+                    # Derive the original file path by stripping the conflict suffix.
+                    original_path = conflict_copy_path[:conflict_copy_path.index(".conflict-")]
+                    date_str = m.group(1)
+                    copies = self._conflict_copies_by_pair.setdefault(pair_id, [])
+                    if conflict_copy_path not in copies:
+                        copies.append(conflict_copy_path)
+                    if not any(e["conflict_copy_path"] == conflict_copy_path for e in self._conflict_log_entries):
+                        self._conflict_log_entries.append({
+                            "pair_id": pair_id,
+                            "pair_name": pair_name,
+                            "local_path": original_path,
+                            "conflict_copy_path": conflict_copy_path,
+                            "date": date_str,
+                            "resolved": False,
+                        })
+
     def on_conflict_detected(self, payload: dict[str, Any]) -> None:
         """Handle engine's conflict_detected push event (Story 4-4 AC1–3)."""
         pair_id = payload.get("pair_id", "")
@@ -260,6 +295,16 @@ class MainWindow(Adw.ApplicationWindow):
         # Mirrors the same hierarchy enforced in on_sync_complete / on_online.
         if not self._error_pair_ids:
             self.status_footer_bar.set_conflicts(self._total_active_conflicts())
+
+    def _on_footer_conflict_clicked(self, _bar: object) -> None:
+        """Navigate to the first conflicted pair and open its conflict log."""
+        pair_id = next(
+            (pid for pid in self._conflict_copies_by_pair if self._conflict_copies_by_pair[pid]),
+            next(iter(self._sync_pair_rows), None),
+        )
+        if pair_id:
+            self.select_pair(pair_id)
+            self.pair_detail_panel.show_conflict_log_page(self._conflict_log_entries)
 
     def _on_view_conflict_log(self, _panel: object) -> None:
         """Handle view-conflict-log signal — populate and show conflict log page."""
@@ -499,6 +544,8 @@ class MainWindow(Adw.ApplicationWindow):
             if last_synced_at:
                 d["last_synced_text"] = _fmt_relative_time(last_synced_at)
             self._pairs_data[p.get("pair_id", "")] = d
+
+        self._scan_existing_conflict_copies()
 
         if not pairs:
             self.pair_detail_panel.show_no_pairs()
@@ -754,6 +801,14 @@ class MainWindow(Adw.ApplicationWindow):
             self._pairs_data[pair_id]["last_synced_text"] = _fmt_relative_time(
                 payload.get("timestamp", "")
             )
+            file_count = payload.get("file_count", None)
+            total_bytes = payload.get("total_bytes", 0)
+            if isinstance(file_count, int):
+                count_text = f"{file_count} files"
+                size_text = _fmt_bytes(total_bytes)
+                self._pairs_data[pair_id]["file_count_text"] = count_text
+                self._pairs_data[pair_id]["total_size_text"] = size_text
+                self.pair_detail_panel.update_file_stats(pair_id, count_text, size_text)
 
         # Footer update — Error > Conflict > _conflict_pending > all-synced (Story 5-9 AC3).
         if self._error_pair_ids:
@@ -817,6 +872,16 @@ class MainWindow(Adw.ApplicationWindow):
         )
         if not success and self._auth_window is not None:
             self._auth_window.show_credential_error()
+
+    def mark_last_auth_token_rejected(self) -> None:
+        """Tell auth browser not to retry the token the engine just rejected.
+
+        Called when token_expired fires while the auth browser is already active.
+        Preserves all cookies (including 'remember this device' 2FA state) while
+        preventing the visitor-session token from being endlessly re-sent.
+        """
+        if self._auth_window is not None:
+            self._auth_window.mark_last_token_rejected()
 
     def close_auth_browser(self) -> None:
         """Tear down the auth browser WebView without changing the window content.

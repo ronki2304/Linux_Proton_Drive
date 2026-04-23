@@ -97,6 +97,14 @@ type WorkItem =
       remoteNodeId: string;
       remoteMtime: string;
       remoteSize: number;
+    }
+  | {
+      /** Both sides exist, no sync state, and mtime+size match — record as already synced. */
+      kind: "bootstrap_match";
+      relativePath: string;
+      remoteNodeId: string;
+      remoteMtime: string;
+      localMtime: string;
     };
 
 // ── Safety constants ─────────────────────────────────────────────────────────
@@ -111,6 +119,8 @@ export class SyncEngine {
   // Re-entrancy guard. True while a drainQueue() call is in flight; bounced
   // concurrent calls return zero counts immediately. See AC4 (Story 2-12).
   private isDraining = false;
+  // Populated by reconcilePair; read by both sync_complete emitters.
+  private _pairStats = new Map<string, { fileCount: number; totalBytes: number }>();
 
   constructor(
     private readonly stateDb: StateDb,
@@ -297,16 +307,22 @@ export class SyncEngine {
       await mkdir(localDir, { recursive: true });
     }
 
+    // Capture totals for sync_complete payload (both reconcile and drain emitters read this).
+    let totalBytes = 0;
+    for (const f of localFiles.values()) totalBytes += f.size;
+    this._pairStats.set(pair.pair_id, { fileCount: localFiles.size, totalBytes });
+
     const workItems = await this.computeWorkList(pair, localFiles, remoteFiles, remoteFolders, syncStates);
     process.stderr.write(`[ENGINE] reconcilePair: ${workItems.length} item(s) (localFiles=${localFiles.size} remoteFiles=${remoteFiles.size})\n`);
 
-    const deleteLocalItems  = workItems.filter((w): w is WorkItem & { kind: "delete_local" }  => w.kind === "delete_local");
-    const trashRemoteItems  = workItems.filter((w): w is WorkItem & { kind: "trash_remote" }  => w.kind === "trash_remote");
-    const clearStateItems   = workItems.filter((w): w is WorkItem & { kind: "clear_state" }   => w.kind === "clear_state");
-    const downloadItems     = workItems.filter((w): w is WorkItem & { kind: "download" }      => w.kind === "download");
-    const uploadItems       = workItems.filter((w): w is WorkItem & { kind: "upload" }        => w.kind === "upload");
-    const conflictItems          = workItems.filter((w): w is WorkItem & { kind: "conflict" }           => w.kind === "conflict");
+    const deleteLocalItems       = workItems.filter((w): w is WorkItem & { kind: "delete_local" }     => w.kind === "delete_local");
+    const trashRemoteItems       = workItems.filter((w): w is WorkItem & { kind: "trash_remote" }     => w.kind === "trash_remote");
+    const clearStateItems        = workItems.filter((w): w is WorkItem & { kind: "clear_state" }      => w.kind === "clear_state");
+    const downloadItems          = workItems.filter((w): w is WorkItem & { kind: "download" }         => w.kind === "download");
+    const uploadItems            = workItems.filter((w): w is WorkItem & { kind: "upload" }           => w.kind === "upload");
+    const conflictItems          = workItems.filter((w): w is WorkItem & { kind: "conflict" }          => w.kind === "conflict");
     const newFileCollisionItems  = workItems.filter((w): w is WorkItem & { kind: "new_file_collision" } => w.kind === "new_file_collision");
+    const bootstrapMatchItems    = workItems.filter((w): w is WorkItem & { kind: "bootstrap_match" }   => w.kind === "bootstrap_match");
 
     const bytesTotal = [...downloadItems, ...uploadItems].reduce((a, w) => a + w.size, 0);
 
@@ -315,9 +331,31 @@ export class SyncEngine {
       this.stateDb.deleteSyncState(pair.pair_id, item.relativePath);
     }
 
+    // Execute bootstrap_match items: hash local file and record sync state — no transfer needed.
+    for (const item of bootstrapMatchItems) {
+      const localFilePath = join(pair.local_path, item.relativePath);
+      const hash = await this.hashLocalFile(localFilePath);
+      this.stateDb.upsertSyncState({
+        pair_id: pair.pair_id,
+        relative_path: item.relativePath,
+        local_mtime: item.localMtime,
+        remote_mtime: item.remoteMtime,
+        content_hash: hash ?? "",
+      });
+    }
+
     let diskFull = false; // set on ENOSPC; causes early return after each loop
 
-    // ── Execute conflict items (copy local version → conflict copy, download remote version) ──
+    // ── Execute conflict items (local wins: download remote → conflict copy, keep local) ──
+    //
+    // Rationale: the user's local work is never silently overwritten. The remote
+    // version is saved alongside as file.conflict-YYYY-MM-DD-... for reference, and
+    // the local file is immediately queued for upload so it wins on the remote too.
+    // The user resolves by keeping the conflict copy (deletes local, renames conflict)
+    // or doing nothing (local wins automatically once the upload completes).
+    const conflictAlreadyQueued = new Set(
+      this.stateDb.listQueue(pair.pair_id).map((e) => e.relative_path),
+    );
     for (const item of conflictItems) {
       const localFilePath = join(pair.local_path, item.relativePath);
       const d = new Date();
@@ -331,36 +369,66 @@ export class SyncEngine {
       } catch {
         // Path does not exist — safe to use.
       }
-      const tmpPath = `${conflictCopyPath}.protondrive-tmp-${Date.now()}`;
+      const conflictRelPath = relative(pair.local_path, conflictCopyPath);
+
+      // Download remote version to conflict copy path (for user reference only).
       try {
-        await copyFile(localFilePath, tmpPath);
-        await rename(tmpPath, conflictCopyPath);
+        const downloadItem: WorkItem & { kind: "download" } = {
+          kind: "download",
+          relativePath: conflictRelPath,
+          nodeUid: item.remoteNodeId,
+          size: item.remoteSize,
+          remoteMtime: item.remoteMtime,
+        };
+        await this.downloadOne(pair, downloadItem, client);
       } catch (err) {
-        try { await unlink(tmpPath); } catch { /* already gone */ }
+        if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
-        debugLog(`sync-engine: conflict copy creation failed for ${item.relativePath}: ${msg}`);
+        debugLog(`sync-engine: conflict remote-download failed for ${item.relativePath}: ${msg}`);
         if (isDiskFull(err)) {
           this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
           diskFull = true; break;
         }
         if (isPermissionDenied(err)) {
-          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
+          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${pair.local_path}`, pair_id: pair.pair_id } });
           continue;
         }
-        if (isFileLocked(err)) {
-          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
-          continue;
-        }
-        const errCode = (err as NodeJS.ErrnoException)?.code;
-        const message = errCode
-          ? `Sync error ${errCode} — try again or check ProtonDrive status`
-          : "Sync error — try again or check ProtonDrive status";
+        // Remote version lost — emit so the user knows the conflict copy wasn't saved.
         this.emitEvent({
           type: "error",
-          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
+          payload: {
+            code: "SDK_ERROR",
+            message: "Sync error — conflict copy could not be saved, try again or check ProtonDrive status",
+            pair_id: pair.pair_id,
+          },
         });
         continue;
       }
+
+      // Update sync state: local_mtime stays as-is (local file unchanged),
+      // remote_mtime records the remote version we just saw.
+      const localFile = localFiles.get(item.relativePath);
+      const localMtime = localFile?.mtime ?? new Date().toISOString();
+      const localHash = await this.hashLocalFile(localFilePath);
+      this.stateDb.upsertSyncState({
+        pair_id: pair.pair_id,
+        relative_path: item.relativePath,
+        local_mtime: localMtime,
+        remote_mtime: item.remoteMtime,
+        content_hash: localHash,
+      });
+
+      // Enqueue local file for upload so the local version wins on remote.
+      if (!conflictAlreadyQueued.has(item.relativePath)) {
+        this.stateDb.enqueue({
+          pair_id: pair.pair_id,
+          relative_path: item.relativePath,
+          change_type: "modified",
+          queued_at: new Date().toISOString(),
+        });
+        conflictAlreadyQueued.add(item.relativePath);
+      }
+
       this.emitEvent({
         type: "conflict_detected",
         payload: {
@@ -369,92 +437,55 @@ export class SyncEngine {
           conflict_copy_path: conflictCopyPath,
         },
       });
-      try {
-        const downloadItem: WorkItem & { kind: "download" } = {
-          kind: "download",
-          relativePath: item.relativePath,
-          nodeUid: item.remoteNodeId,
-          size: item.remoteSize,
-          remoteMtime: item.remoteMtime,
-        };
-        await this.downloadOne(pair, downloadItem, client);
-        const destPath = join(pair.local_path, item.relativePath);
-        const s = await stat(destPath);
-        const hash = await this.hashLocalFile(destPath);
-        this.stateDb.upsertSyncState({
-          pair_id: pair.pair_id,
-          relative_path: item.relativePath,
-          local_mtime: s.mtime.toISOString(),
-          remote_mtime: item.remoteMtime,
-          content_hash: hash,
-        });
-      } catch (err) {
-        if (isAuthExpired(err)) {
-          // Auth expired mid-conflict-resolution. Undo the orphaned conflict copy —
-          // the original file is unchanged; next reconcile after re-auth creates one
-          // correct copy instead of two.
-          try { await unlink(conflictCopyPath); } catch { /* best-effort */ }
-          throw err;
-        }
-        const msg = err instanceof Error ? err.message : String(err);
-        debugLog(`sync-engine: conflict download failed for ${item.relativePath}: ${msg}`);
-        if (isDiskFull(err)) {
-          this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
-          diskFull = true; break;
-        }
-        if (isPermissionDenied(err)) {
-          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
-          continue;
-        }
-        if (isFileLocked(err)) {
-          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
-          continue;
-        }
-        const errCode = (err as NodeJS.ErrnoException)?.code;
-        const message = errCode
-          ? `Sync error ${errCode} — try again or check ProtonDrive status`
-          : "Sync error — try again or check ProtonDrive status";
-        this.emitEvent({
-          type: "error",
-          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
-        });
-      }
     }
     if (diskFull) return;
 
-    // ── Execute new_file_collision items (rename local → conflict copy, download remote) ──
+    // ── Execute new_file_collision items (local wins: download remote → conflict copy, keep local) ──
+    // Same "local wins" principle as conflictItems above — local file is preserved,
+    // remote is saved as a conflict copy for review.
     for (const item of newFileCollisionItems) {
       const localFilePath = join(pair.local_path, item.relativePath);
       const d = new Date();
       const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
       const conflictCopyPath = `${localFilePath}.conflict-${date}-${Date.now()}`;
+      const conflictRelPath = relative(pair.local_path, conflictCopyPath);
+
+      // Download remote version to conflict copy path.
       try {
-        await rename(localFilePath, conflictCopyPath);
+        const downloadItem: WorkItem & { kind: "download" } = {
+          kind: "download",
+          relativePath: conflictRelPath,
+          nodeUid: item.remoteNodeId,
+          size: item.remoteSize,
+          remoteMtime: item.remoteMtime,
+        };
+        await this.downloadOne(pair, downloadItem, client);
       } catch (err) {
+        if (isAuthExpired(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
-        debugLog(`sync-engine: collision rename failed for ${item.relativePath}: ${msg}`);
+        debugLog(`sync-engine: collision remote-download failed for ${item.relativePath}: ${msg}`);
         if (isDiskFull(err)) {
           this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
           diskFull = true; break;
         }
         if (isPermissionDenied(err)) {
-          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
+          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${pair.local_path}`, pair_id: pair.pair_id } });
           continue;
         }
-        if (isFileLocked(err)) {
-          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
-          continue;
-        }
-        const errCode = (err as NodeJS.ErrnoException)?.code;
-        const message = errCode
-          ? `Sync error ${errCode} — try again or check ProtonDrive status`
-          : "Sync error — try again or check ProtonDrive status";
-        this.emitEvent({
-          type: "error",
-          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
-        });
         continue;
       }
+
+      // Enqueue local file for upload (new file, no existing sync state).
+      if (!conflictAlreadyQueued.has(item.relativePath)) {
+        this.stateDb.enqueue({
+          pair_id: pair.pair_id,
+          relative_path: item.relativePath,
+          change_type: "created",
+          queued_at: new Date().toISOString(),
+        });
+        conflictAlreadyQueued.add(item.relativePath);
+      }
+
       this.emitEvent({
         type: "conflict_detected",
         payload: {
@@ -463,50 +494,6 @@ export class SyncEngine {
           conflict_copy_path: conflictCopyPath,
         },
       });
-      try {
-        const downloadItem: WorkItem & { kind: "download" } = {
-          kind: "download",
-          relativePath: item.relativePath,
-          nodeUid: item.remoteNodeId,
-          size: item.remoteSize,
-          remoteMtime: item.remoteMtime,
-        };
-        await this.downloadOne(pair, downloadItem, client);
-        const destPath = join(pair.local_path, item.relativePath);
-        const s = await stat(destPath);
-        const hash = await this.hashLocalFile(destPath);
-        this.stateDb.upsertSyncState({
-          pair_id: pair.pair_id,
-          relative_path: item.relativePath,
-          local_mtime: s.mtime.toISOString(),
-          remote_mtime: item.remoteMtime,
-          content_hash: hash,
-        });
-      } catch (err) {
-        if (isAuthExpired(err)) throw err;
-        const msg = err instanceof Error ? err.message : String(err);
-        debugLog(`sync-engine: collision download failed for ${item.relativePath}: ${msg}`);
-        if (isDiskFull(err)) {
-          this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
-          diskFull = true; break;
-        }
-        if (isPermissionDenied(err)) {
-          this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${join(pair.local_path, item.relativePath)}`, pair_id: pair.pair_id } });
-          continue;
-        }
-        if (isFileLocked(err)) {
-          this.emitEvent({ type: "error", payload: { code: "FILE_LOCKED", message: `${basename(join(pair.local_path, item.relativePath))} is in use — sync will retry when it's released`, pair_id: pair.pair_id } });
-          continue;
-        }
-        const errCode = (err as NodeJS.ErrnoException)?.code;
-        const message = errCode
-          ? `Sync error ${errCode} — try again or check ProtonDrive status`
-          : "Sync error — try again or check ProtonDrive status";
-        this.emitEvent({
-          type: "error",
-          payload: { code: "SDK_ERROR", message, pair_id: pair.pair_id },
-        });
-      }
     }
     if (diskFull) return;
 
@@ -627,6 +614,23 @@ export class SyncEngine {
     for (const item of uploadItems) {
       if (!existingQueued.has(item.relativePath)) {
         const isModification = syncStates.has(item.relativePath);
+        // Bootstrap upload: no sync state but remote exists (local newer case from bootstrap logic).
+        // Pre-seed a sync state so drainQueue's decision table sees (defined, defined) → "upload"
+        // instead of (undefined, defined) → "conflict".
+        if (!isModification && item.existingNodeUid) {
+          // Seed a sync state so drainQueue sees (defined, defined) → "upload"
+          // instead of (undefined, defined) → "conflict".
+          // remote_mtime matches the current remote so remoteUnchanged=true passes.
+          // drain's commitUpload will overwrite with final post-upload values.
+          const remoteFile = remoteFiles.get(item.relativePath);
+          this.stateDb.upsertSyncState({
+            pair_id: pair.pair_id,
+            relative_path: item.relativePath,
+            local_mtime: item.localMtime,
+            remote_mtime: remoteFile?.remote_mtime ?? item.localMtime,
+            content_hash: null,
+          });
+        }
         this.stateDb.enqueue({
           pair_id: pair.pair_id,
           relative_path: item.relativePath,
@@ -643,9 +647,15 @@ export class SyncEngine {
     const completedAt = new Date().toISOString();
     this.stateDb.updateLastSynced(pair.pair_id, completedAt);
     if (uploadItems.length === 0) {
+      const stats = this._pairStats.get(pair.pair_id);
       this.emitEvent({
         type: "sync_complete",
-        payload: { pair_id: pair.pair_id, timestamp: completedAt },
+        payload: {
+          pair_id: pair.pair_id,
+          timestamp: completedAt,
+          file_count: stats?.fileCount ?? 0,
+          total_bytes: stats?.totalBytes ?? 0,
+        },
       });
     }
   }
@@ -809,9 +819,15 @@ export class SyncEngine {
       for (const pair_id of pairsWithSuccess) {
         const timestamp = new Date().toISOString();
         this.stateDb.updateLastSynced(pair_id, timestamp);
+        const stats = this._pairStats.get(pair_id);
         this.emitEvent({
           type: "sync_complete",
-          payload: { pair_id, timestamp },
+          payload: {
+            pair_id,
+            timestamp,
+            file_count: stats?.fileCount ?? 0,
+            total_bytes: stats?.totalBytes ?? 0,
+          },
         });
       }
       if (dirtied) this.stateDb.setDirtySession(false);
@@ -824,13 +840,7 @@ export class SyncEngine {
   /**
    * Per-entry replay dispatch. Returns `"synced" | "conflict" | "failed"`.
    *
-   * The decision matrix (from Task 2.6, sole source of truth):
-   *
-   * | state      | remote     | created/modified            | deleted                  |
-   * | undefined  | undefined  | upload (new file)           | dequeue (both agree)     |
-   * | undefined  | defined    | conflict (collision)        | conflict (never knew)    |
-   * | defined    | undefined  | conflict (remote deleted)   | dequeue (both gone)      |
-   * | defined    | defined    | mtime match → upload/trash; mismatch → conflict         |
+   * Decision table: see _bmad-output/implementation-artifacts/6-5-drain-decision-table-correctness.md
    */
   private async processQueueEntry(
     pair: SyncPair,
@@ -840,30 +850,52 @@ export class SyncEngine {
     client: DriveClient,
   ): Promise<"synced" | "conflict" | "failed" | "disk_full"> {
     try {
+      // Conflict copies and their temp staging files are local-only artifacts —
+      // drop stale queue entries for them silently.
+      if (
+        /\.conflict-\d{4}-\d{2}-\d{2}-\d+(-[a-z0-9]+)?$/.test(entry.relative_path) ||
+        /\.protondrive-tmp-\d+$/.test(entry.relative_path)
+      ) {
+        this.stateDb.dequeue(entry.id);
+        return "synced";
+      }
+
       const state = this.stateDb.getSyncState(pair.pair_id, entry.relative_path);
       const remote = remoteFiles.get(entry.relative_path);
       const isDelete = entry.change_type === "deleted";
 
       // Resolve the outcome from the decision table.
-      let outcome: "upload" | "trashNode" | "dequeue" | "conflict";
+      // Full table: _bmad-output/implementation-artifacts/6-5-drain-decision-table-correctness.md
+      let outcome: "upload" | "trashNode" | "dequeue" | "conflict" | "inline_download";
       if (state === undefined && remote === undefined) {
         outcome = isDelete ? "dequeue" : "upload";
       } else if (state === undefined && remote !== undefined) {
-        // Either a new-local/existing-remote collision OR a delete of a file
-        // we never knew — both are conflicts.
-        outcome = "conflict";
+        if (isDelete) {
+          // Local delete of a file we never tracked — remote is unrelated, leave it alone.
+          outcome = "dequeue";
+        } else {
+          try {
+            const localStat = await stat(join(pair.local_path, entry.relative_path));
+            // Local newer-or-equal → upload (bootstrap local wins); strictly older → remote wins, download.
+            outcome = new Date(localStat.mtime).getTime() >= new Date(remote.remote_mtime).getTime() ? "upload" : "inline_download";
+          } catch {
+            // Local file gone before drain ran — remote is the only truth, download it.
+            outcome = "inline_download";
+          }
+        }
       } else if (state !== undefined && remote === undefined) {
-        // Remote was deleted by another device. If this was a local delete,
-        // we're idempotently in sync. If it was a create/modify, treat as
-        // conflict — do NOT silently resurrect the file.
-        outcome = isDelete ? "dequeue" : "conflict";
+        // Remote gone. For deletes: both sides agree — dequeue. For uploads: local change
+        // wins, recreate the file on remote.
+        outcome = isDelete ? "dequeue" : "upload";
       } else {
         // Both defined — compare stored vs current remote_mtime.
         const remoteUnchanged = state!.remote_mtime === remote!.remote_mtime;
         if (remoteUnchanged) {
           outcome = isDelete ? "trashNode" : "upload";
         } else {
-          outcome = "conflict";
+          // Remote changed since last sync. For uploads: genuine conflict (both sides changed).
+          // For deletes: remote has a newer version the user hasn't seen — download it.
+          outcome = isDelete ? "inline_download" : "conflict";
         }
       }
 
@@ -904,6 +936,16 @@ export class SyncEngine {
           } catch (err) {
             const code = (err as NodeJS.ErrnoException)?.code;
             if (code === "ENOENT") {
+              if (state === undefined && remote === undefined) {
+                // File was created then deleted before the engine drained the
+                // queue — both sides are empty, so there is nothing to conflict.
+                // Silently dequeue rather than surfacing a false conflict count.
+                debugLog(
+                  `sync-engine: replay upload ${entry.relative_path} — created-then-deleted (ENOENT, no state/remote), dequeuing silently`,
+                );
+                this.stateDb.commitDequeue(pair.pair_id, entry.relative_path, entry.id, false);
+                return "synced";
+              }
               debugLog(
                 `sync-engine: replay upload ${entry.relative_path} — local file missing (ENOENT), routing to conflict`,
               );
@@ -1019,8 +1061,70 @@ export class SyncEngine {
           );
           return "synced";
         }
+        case "inline_download": {
+          // remote is guaranteed defined for every inline_download cell.
+          const dlItem: WorkItem & { kind: "download" } = {
+            kind: "download",
+            relativePath: entry.relative_path,
+            nodeUid: remote!.id,
+            size: remote!.size,
+            remoteMtime: remote!.remote_mtime,
+          };
+          await this.downloadOne(pair, dlItem, client);
+          const dlPath = join(pair.local_path, entry.relative_path);
+          const dlStat = await stat(dlPath);
+          const dlHash = await this.hashLocalFile(dlPath);
+          this.stateDb.commitUpload(
+            {
+              pair_id: pair.pair_id,
+              relative_path: entry.relative_path,
+              local_mtime: dlStat.mtime.toISOString(),
+              remote_mtime: remote!.remote_mtime,
+              content_hash: dlHash,
+            },
+            entry.id,
+          );
+          return "synced";
+        }
         case "conflict": {
-          // No DB mutation — entry stays in queue for Epic 4 resolution.
+          // Preserve the local version as a conflict copy, then dequeue so
+          // the entry is not replayed on every sync cycle. For delete-type
+          // conflicts the local file is already gone — just dequeue silently.
+          if (!isDelete) {
+            const localFilePath = join(pair.local_path, entry.relative_path);
+            const d = new Date();
+            const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+            let conflictCopyPath = `${localFilePath}.conflict-${date}-${Date.now()}`;
+            try {
+              await stat(conflictCopyPath);
+              conflictCopyPath = `${localFilePath}.conflict-${date}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            } catch { /* path does not exist — safe to use */ }
+            const tmpPath = `${conflictCopyPath}.protondrive-tmp-${Date.now()}`;
+            try {
+              await copyFile(localFilePath, tmpPath);
+              await rename(tmpPath, conflictCopyPath);
+              this.emitEvent({
+                type: "conflict_detected",
+                payload: {
+                  pair_id: pair.pair_id,
+                  local_path: localFilePath,
+                  conflict_copy_path: conflictCopyPath,
+                },
+              });
+            } catch (err) {
+              try { await unlink(tmpPath); } catch { /* already gone */ }
+              const msg = err instanceof Error ? err.message : String(err);
+              debugLog(`sync-engine: conflict copy creation failed for ${entry.relative_path}: ${msg}`);
+              if (isDiskFull(err)) {
+                this.emitEvent({ type: "error", payload: { code: "DISK_FULL", message: `Free up space on ${pair.local_path} to continue syncing`, pair_id: pair.pair_id } });
+              } else if (isPermissionDenied(err)) {
+                this.emitEvent({ type: "error", payload: { code: "PERMISSION_DENIED", message: `Check folder permissions for ${localFilePath}`, pair_id: pair.pair_id } });
+              }
+              // Copy failed — leave the entry in queue so it retries on the next cycle.
+              return "conflict";
+            }
+          }
+          this.stateDb.dequeue(entry.id);
           return "conflict";
         }
         default: {
@@ -1137,6 +1241,8 @@ export class SyncEngine {
           if (relDir) dirSet.add(relDir);
           await walkDir(fullPath, false);
         } else if (entry.isFile()) {
+          // Skip conflict copies — they are local-only artifacts and must never be synced.
+          if (/\.conflict-\d{4}-\d{2}-\d{2}-\d+(-[a-z0-9]+)?$/.test(entry.name)) continue;
           const relPath = relative(localPath, fullPath);
           try {
             const s = await stat(fullPath);
@@ -1208,14 +1314,55 @@ export class SyncEngine {
       if (remote) {
         // File exists both locally and remotely
         if (!state) {
-          // New-file collision: local and remote both exist with no prior sync record (Story 4-2)
-          workItems.push({
-            kind: "new_file_collision",
-            relativePath: relPath,
-            remoteNodeId: remote.id,
-            remoteMtime: remote.remote_mtime,
-            remoteSize: remote.size,
-          });
+          // No prior sync record — bootstrap case (pair re-added or first sync on pre-existing files).
+          // Compare mtime (second precision) and size to determine action rather than blindly colliding.
+          const localMtimeSec  = local.mtime.slice(0, 19);
+          const remoteMtimeSec = remote.remote_mtime.slice(0, 19);
+          if (localMtimeSec === remoteMtimeSec && local.size === remote.size) {
+            // Looks identical — record as already synced (bootstrap_match executor hashes to confirm).
+            workItems.push({
+              kind: "bootstrap_match",
+              relativePath: relPath,
+              remoteNodeId: remote.id,
+              remoteMtime: remote.remote_mtime,
+              localMtime: local.mtime,
+            });
+          } else if (remote.remote_mtime > local.mtime) {
+            // Remote is newer — download to update local copy.
+            workItems.push({
+              kind: "download",
+              relativePath: relPath,
+              nodeUid: remote.id,
+              size: remote.size,
+              remoteMtime: remote.remote_mtime,
+            });
+          } else if (local.mtime > remote.remote_mtime) {
+            // Local is newer — upload new revision.
+            const parentDir = dirname(relPath);
+            const remoteFolderId =
+              parentDir === "." ? pair.remote_id : remoteFolders.get(parentDir);
+            if (!remoteFolderId) {
+              debugLog(`sync-engine: skipping bootstrap upload ${relPath} — remote parent dir not found`);
+              continue;
+            }
+            workItems.push({
+              kind: "upload",
+              relativePath: relPath,
+              remoteFolderId,
+              existingNodeUid: remote.id,
+              size: local.size,
+              localMtime: local.mtime,
+            });
+          } else {
+            // Same mtime-second but different size — genuine collision.
+            workItems.push({
+              kind: "new_file_collision",
+              relativePath: relPath,
+              remoteNodeId: remote.id,
+              remoteMtime: remote.remote_mtime,
+              remoteSize: remote.size,
+            });
+          }
           continue;
         }
         const localChanged = local.mtime !== state.local_mtime;

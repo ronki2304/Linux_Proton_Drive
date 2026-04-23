@@ -2,7 +2,7 @@ using Gtk 4.0;
 using Adw 1;
 
 template $ProtonDriveKeyUnlockDialog: Adw.Dialog {
-  title: _("Unlock Sync");
+  title: _("One more step");
   content-width: 420;
 
   child: Adw.ToolbarView {
@@ -18,7 +18,7 @@ template $ProtonDriveKeyUnlockDialog: Adw.Dialog {
       margin-end: 24;
 
       Gtk.Label {
-        label: _("Enter your Proton password to decrypt your sync keys.\n\nIf you use two-password mode, enter your mailbox password (not your login password).");
+        label: _("ProtonDrive encrypts your files end-to-end. To start syncing, your private keys need to be unlocked with your Proton account password.\n\nThis is a one-time step — the app stores it securely so you won't be asked again.\n\nIf you use two-password mode, enter your mailbox password.");
         wrap: true;
         max-width-chars: 40;
         xalign: 0;

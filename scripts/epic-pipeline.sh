@@ -9,9 +9,10 @@
 # they never halt to ask which fixes to apply.
 #
 # Usage:
-#   ./scripts/epic-pipeline.sh phase1 6-1 6-2 6-3 6-4
-#   ./scripts/epic-pipeline.sh phase2 6-1 6-2 6-3 6-4
-#   ./scripts/epic-pipeline.sh all    6-1 6-2 6-3 6-4   # phase1 + checkpoint + phase2
+#   ./scripts/epic-pipeline.sh phase1   6-1 6-2 6-3 6-4
+#   ./scripts/epic-pipeline.sh phase2   6-1 6-2 6-3 6-4
+#   ./scripts/epic-pipeline.sh summary  6-1 6-2 6-3 6-4  # status table + commit lines + CR insights
+#   ./scripts/epic-pipeline.sh all      6-1 6-2 6-3 6-4  # phase1 + phase2 + summary
 #
 # Stories are identified by their ID (e.g. "6-1"), matching sprint-status.yaml keys.
 
@@ -95,6 +96,60 @@ phase1() {
   done
 }
 
+summary() {
+  local stories=("$@")
+  local phases=(sm create validate dev ds cr commit)
+  local all_done=true
+
+  printf "\n%-12s" "STORY"
+  for p in "${phases[@]}"; do printf "%-10s" "$p"; done
+  echo ""
+  printf "%-12s" "─────────"
+  for p in "${phases[@]}"; do printf "%-10s" "─────────"; done
+  echo ""
+
+  for story in "${stories[@]}"; do
+    printf "%-12s" "$story"
+    for phase in "${phases[@]}"; do
+      local f="$LOG_DIR/${story}-${phase}.log"
+      if [ -f "$f" ] && [ -s "$f" ]; then
+        printf "%-10s" "✅"
+      else
+        printf "%-10s" "❌"
+        all_done=false
+      fi
+    done
+    echo ""
+  done
+  echo ""
+
+  echo "=== COMMIT LINES ==="
+  for story in "${stories[@]}"; do
+    local f="$LOG_DIR/${story}-commit.log"
+    if [ -f "$f" ] && [ -s "$f" ]; then
+      echo "  [$story] $(cat "$f" | tr -d '\n')"
+    else
+      echo "  [$story] no commit log"
+    fi
+  done
+
+  echo ""
+  echo "=== KEY INSIGHTS ==="
+  for story in "${stories[@]}"; do
+    local cr="$LOG_DIR/${story}-cr.log"
+    if [ -f "$cr" ] && [ -s "$cr" ]; then
+      echo "  [$story CR] $(tail -3 "$cr" | grep -v '^$' | head -1)"
+    fi
+  done
+  echo ""
+
+  if $all_done; then
+    log "All phases complete for stories: ${stories[*]}"
+  else
+    log "WARNING: some phases are missing — check logs in $LOG_DIR"
+  fi
+}
+
 phase2() {
   local stories=("$@")
   log "=== PHASE 2: implementation (dev review → DS → CR → commit) ==="
@@ -150,12 +205,14 @@ fi
 case "$MODE" in
   phase1) phase1 "${STORIES[@]}" ;;
   phase2) phase2 "${STORIES[@]}" ;;
+  summary) summary "${STORIES[@]}" ;;
   all)
     phase1 "${STORIES[@]}"
     phase2 "${STORIES[@]}"
+    summary "${STORIES[@]}"
     ;;
   *)
-    echo "Unknown mode: $MODE. Use phase1, phase2, or all."
+    echo "Unknown mode: $MODE. Use phase1, phase2, all, or summary."
     exit 1
     ;;
 esac

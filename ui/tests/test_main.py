@@ -308,11 +308,29 @@ class TestTokenExpiredCallsWarning:
         app._on_token_expired({"queued_changes": 2})  # must not raise
         app.show_reauth_dialog.assert_not_called()
 
-    def test_shows_banner_even_when_auth_browser_active(self) -> None:
+    def test_suppresses_dialog_when_auth_browser_active(self) -> None:
+        # If the auth browser is already open, token_expired must not stack
+        # another dialog or banner — the user is already mid-login.
         app = _make_app()
         app._window.is_auth_browser_active.return_value = True
         app._on_token_expired({"queued_changes": 1})
-        app._window.show_token_expired_warning.assert_called_once_with(1)
+        app._window.show_token_expired_warning.assert_not_called()
+        app.show_reauth_dialog.assert_not_called()
+
+    def test_marks_token_rejected_when_auth_browser_active(self) -> None:
+        # Every token_expired while auth browser is active marks the token rejected.
+        app = _make_app()
+        app._window.is_auth_browser_active.return_value = True
+        app._on_token_expired({"queued_changes": 1})
+        app._window.mark_last_auth_token_rejected.assert_called_once()
+
+    def test_marks_token_rejected_on_subsequent_events(self) -> None:
+        # Each subsequent token_expired while auth browser is active also marks rejected.
+        app = _make_app()
+        app._window.is_auth_browser_active.return_value = True
+        app._on_token_expired({"queued_changes": 1})
+        app._on_token_expired({"queued_changes": 1})
+        assert app._window.mark_last_auth_token_rejected.call_count == 2
 
 
 # ---------------------------------------------------------------------------

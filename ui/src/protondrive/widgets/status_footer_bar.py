@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from gi.repository import GLib, Gtk
+from gi.repository import GLib, GObject, Gtk
 
 
 @Gtk.Template(resource_path="/io/github/ronki2304/ProtonDriveLinuxClient/ui/status-footer-bar.ui")
@@ -12,6 +12,10 @@ class StatusFooterBar(Gtk.Box):
     """Footer bar showing global sync status across all pairs."""
 
     __gtype_name__ = "ProtonDriveStatusFooterBar"
+
+    __gsignals__ = {
+        "conflict-clicked": (GObject.SignalFlags.RUN_FIRST, None, ()),
+    }
 
     footer_dot: Gtk.DrawingArea = Gtk.Template.Child()
     footer_label: Gtk.Label = Gtk.Template.Child()
@@ -23,6 +27,13 @@ class StatusFooterBar(Gtk.Box):
         self._rate_limit_source_id: int | None = None
         self.footer_dot.set_draw_func(self._on_dot_draw)
         self.footer_label.set_text("All synced")
+        gesture = Gtk.GestureClick.new()
+        gesture.connect("pressed", self._on_clicked)
+        self.add_controller(gesture)
+
+    def _on_clicked(self, _gesture: Gtk.GestureClick, _n: int, _x: float, _y: float) -> None:
+        if self._dot_state == "conflict":
+            self.emit("conflict-clicked")
 
     def set_syncing(self, pair_name: str, files_done: int, files_total: int) -> None:
         """Show active sync state for a pair."""

@@ -449,6 +449,141 @@ describe("DriveClient.uploadFile", () => {
   });
 });
 
+describe("DriveClient.uploadFileRevision", () => {
+  function makeRevisionSdk(
+    overrides: {
+      uploadFromStreamErr?: Error;
+      deleteRevisionFn?: ReturnType<typeof mock>;
+    } = {},
+  ) {
+    const fakeController = {
+      pause: () => {},
+      resume: () => {},
+      completion: overrides.uploadFromStreamErr
+        ? mock(async () => {
+            throw overrides.uploadFromStreamErr;
+          })
+        : mock(async () => ({ nodeUid: "node-rev", nodeRevisionUid: "rev-uid" })),
+    };
+    const fakeUploader = {
+      uploadFromStream: mock(async (_s: unknown, _t: unknown) => fakeController),
+      uploadFromFile: mock(() => {}),
+    };
+    return makeFakeSdk({
+      getFileRevisionUploader: mock(async (_n: unknown, _m: unknown) => fakeUploader),
+      deleteRevision: overrides.deleteRevisionFn ?? mock(async () => {}),
+    });
+  }
+
+  it("delegates to getFileRevisionUploader → uploadFromStream → completion and returns snake_case", async () => {
+    const sdk = makeRevisionSdk();
+    const client = new DriveClient(sdk);
+    const stream = new ReadableStream<Uint8Array>();
+    const result = await client.uploadFileRevision("node-uid~rev", {
+      stream,
+      sizeBytes: 512,
+      modificationTime: new Date("2026-01-01T00:00:00Z"),
+      mediaType: "text/plain",
+    });
+    expect(result).toEqual({ node_uid: "node-rev", revision_uid: "rev-uid" });
+  });
+
+  it("maps a failing upload to NetworkError and cancels the stream", async () => {
+    const sdkErr = sdkErrorFactoriesForTests.connection("dropped");
+    const sdk = makeRevisionSdk({ uploadFromStreamErr: sdkErr });
+    const client = new DriveClient(sdk);
+    const stream = new ReadableStream<Uint8Array>();
+    let cancelled = false;
+    const orig = stream.cancel.bind(stream);
+    stream.cancel = async (r?: unknown) => { cancelled = true; return orig(r); };
+    await expect(
+      client.uploadFileRevision("node-uid~rev", {
+        stream, sizeBytes: 1, modificationTime: new Date(), mediaType: "text/plain",
+      }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(cancelled).toBe(true);
+  });
+
+  it("on 2511 with ConflictDraftRevisionID: deletes draft and retries — succeeds on second attempt", async () => {
+    const staleErr = sdkErrorFactoriesForTests.apiCodeError(2511, { ConflictDraftRevisionID: "draft-rev-id" });
+    const deleteFn = mock(async () => {});
+    let callCount = 0;
+    const fakeController = {
+      pause: () => {},
+      resume: () => {},
+      completion: mock(async () => ({ nodeUid: "node-rev", nodeRevisionUid: "rev-uid-2" })),
+    };
+    const fakeUploader = {
+      uploadFromStream: mock(async (_s: unknown, _t: unknown) => {
+        callCount++;
+        if (callCount === 1) throw staleErr;
+        return fakeController;
+      }),
+      uploadFromFile: mock(() => {}),
+    };
+    const sdk = makeFakeSdk({
+      getFileRevisionUploader: mock(async (_n: unknown, _m: unknown) => fakeUploader),
+      deleteRevision: deleteFn,
+    });
+    const client = new DriveClient(sdk);
+    const stream = new ReadableStream<Uint8Array>();
+    const result = await client.uploadFileRevision("vol~node", {
+      stream, sizeBytes: 1, modificationTime: new Date(), mediaType: "text/plain",
+    });
+    expect(result).toEqual({ node_uid: "node-rev", revision_uid: "rev-uid-2" });
+    expect(deleteFn.mock.calls.length).toBe(1);
+    expect(deleteFn.mock.calls[0]![0]).toBe("vol~node~draft-rev-id");
+    expect(callCount).toBe(2);
+  });
+
+  it("on 2511 without ConflictDraftRevisionID: skips delete, cancels stream, throws NetworkError", async () => {
+    const staleErr = sdkErrorFactoriesForTests.apiCodeError(2511, {});
+    const deleteFn = mock(async () => {});
+    const sdk = makeRevisionSdk({ uploadFromStreamErr: staleErr, deleteRevisionFn: deleteFn });
+    const client = new DriveClient(sdk);
+    const stream = new ReadableStream<Uint8Array>();
+    let cancelled = false;
+    const orig = stream.cancel.bind(stream);
+    stream.cancel = async (r?: unknown) => { cancelled = true; return orig(r); };
+    await expect(
+      client.uploadFileRevision("vol~node", {
+        stream, sizeBytes: 1, modificationTime: new Date(), mediaType: "text/plain",
+      }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(deleteFn.mock.calls.length).toBe(0);
+    expect(cancelled).toBe(true);
+  });
+
+  it("on 2511 with ConflictDraftRevisionID but deleteRevision fails: cancels stream, throws NetworkError", async () => {
+    let callCount = 0;
+    const staleErr = sdkErrorFactoriesForTests.apiCodeError(2511, { ConflictDraftRevisionID: "draft-rev-id" });
+    const deleteFn = mock(async () => { throw new Error("delete failed"); });
+    const fakeUploader = {
+      uploadFromStream: mock(async (_s: unknown, _t: unknown) => {
+        callCount++;
+        throw staleErr;
+      }),
+      uploadFromFile: mock(() => {}),
+    };
+    const sdk = makeFakeSdk({
+      getFileRevisionUploader: mock(async (_n: unknown, _m: unknown) => fakeUploader),
+      deleteRevision: deleteFn,
+    });
+    const client = new DriveClient(sdk);
+    const stream = new ReadableStream<Uint8Array>();
+    let cancelled = false;
+    const orig = stream.cancel.bind(stream);
+    stream.cancel = async (r?: unknown) => { cancelled = true; return orig(r); };
+    await expect(
+      client.uploadFileRevision("vol~node", {
+        stream, sizeBytes: 1, modificationTime: new Date(), mediaType: "text/plain",
+      }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(callCount).toBe(1); // only tried once — delete failed so no retry
+    expect(cancelled).toBe(true);
+  });
+});
+
 describe("DriveClient.downloadFile", () => {
   it("delegates to getFileDownloader → downloadToStream → completion", async () => {
     const completionFn = mock(async () => undefined);

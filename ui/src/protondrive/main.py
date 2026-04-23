@@ -509,6 +509,12 @@ class Application(Adw.Application):
         self._last_token_expired_queued_count = queued_changes
 
         if self._window is not None:
+            # If the auth browser is already the active view, the user is mid-login.
+            # Mark the rejected token so the poller never retries it — stacking
+            # another dialog would interrupt the user mid-credential-entry.
+            if self._window.is_auth_browser_active():
+                self._window.mark_last_auth_token_rejected()
+                return
             self._window.show_token_expired_warning(queued_changes)
             self.show_reauth_dialog()
 

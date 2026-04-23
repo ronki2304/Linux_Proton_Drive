@@ -59,6 +59,10 @@ class AuthWindow(Adw.Bin):
         self._last_token_sent: str | None = None
         self._last_send_time: float = 0.0
         self._RESEND_INTERVAL_S: float = 8.0
+        # Tokens that the engine already rejected (401/403) — never retry them.
+        # Cleared when auth_success fires (user completed the login form), because
+        # after 2FA Proton may upgrade the same token's scope server-side.
+        self._rejected_tokens: set[str] = set()
 
     def start_auth(self) -> None:
         """Start the auth flow: bind server socket, then navigate WebView.
@@ -67,6 +71,9 @@ class AuthWindow(Adw.Bin):
         """
         self.cleanup()
         self._completed = False
+        self._last_token_sent = None
+        self._last_send_time = 0.0
+        self._rejected_tokens.clear()
 
         self._auth_server = AuthCallbackServer()
         port = self._auth_server.get_port()
@@ -233,6 +240,9 @@ class AuthWindow(Adw.Bin):
                 pw = data.get("loginPassword", "")
                 if pw:
                     self._captured_login_password = pw
+                    # User completed the login form — clear rejected set so the
+                    # post-login (or 2FA-scope-upgraded) token can be sent.
+                    self._rejected_tokens.clear()
                     print(f"[AUTH] captured login password from browser (len={len(pw)})", file=sys.stderr)
             elif msg_type == "auth_key_salt":
                 # KeySalt from POST /auth response — single global salt (legacy accounts)
@@ -388,6 +398,8 @@ class AuthWindow(Adw.Bin):
         """
         if self._completed:
             return
+        if token in self._rejected_tokens:
+            return  # engine already rejected this token; skip until auth_success clears the set
         now = time.monotonic()
         if (token == self._last_token_sent and
                 now - self._last_send_time < self._RESEND_INTERVAL_S):
@@ -396,6 +408,22 @@ class AuthWindow(Adw.Bin):
         self._last_send_time = now
         print(f"[AUTH] token candidate (len={len(token)}) — sending to engine", file=sys.stderr)
         self.emit("auth-completed", token)
+
+    def mark_last_token_rejected(self) -> None:
+        """Record the last-sent token as permanently rejected by the engine.
+
+        Called when token_expired fires while the auth browser is active.
+        The visitor-session cookie that Proton's login page always creates has
+        insufficient scope and must never be retried — but we must NOT clear
+        cookies (that would erase the user's "remember this device" 2FA state).
+
+        The rejected set is cleared in _on_capture_message when auth_success
+        fires, so that 2FA scope upgrades (same token, broader scope after 2FA)
+        are still caught by the resend timer.
+        """
+        if self._last_token_sent is not None:
+            self._rejected_tokens.add(self._last_token_sent)
+            print("[AUTH] token rejected by engine — won't retry", file=sys.stderr)
 
     def mark_auth_complete(self) -> None:
         """Tear down the WebView and stop polling.

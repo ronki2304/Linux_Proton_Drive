@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-22  # 6-4 review complete
+last_updated: 2026-04-23  # Epic 6 retrospective complete
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -127,7 +127,8 @@ development_status:
   6-2-nesting-and-overlap-validation: done
   6-3-remove-sync-pair-with-confirmation: done
   6-4-local-folder-missing-detection-and-recovery: done
-  epic-6-retrospective: optional
+  6-5-drain-decision-table-correctness: done
+  epic-6-retrospective: done
 
   # Epic 7: Packaging & Distribution
   epic-7: backlog

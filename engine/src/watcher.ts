@@ -1,18 +1,21 @@
 import { readdir } from "node:fs/promises";
 import { watch, existsSync } from "node:fs";
 import type { FSWatcher, WatchListener } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, basename, dirname } from "node:path";
 import type { IpcPushEvent } from "./ipc.js";
 import type { SyncPair, ChangeQueueEntry, ChangeType } from "./state-db.js";
 import { debugLog } from "./debug-log.js";
 
 export type WatchFn = (path: string, listener: WatchListener<string>) => FSWatcher;
+export type ReaddirFn = (path: string, opts: { withFileTypes: true; recursive: true }) => Promise<import("node:fs").Dirent[]>;
 
 export class FileWatcher {
   private readonly watchers = new Map<string, FSWatcher>(); // dir → watcher
   private readonly debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private stopped = false;
   private inotifyExhausted = false;
+
+  private readonly missingPairs = new Set<string>(); // pair_ids already reported missing
 
   constructor(
     private readonly pairs: SyncPair[],
@@ -22,6 +25,7 @@ export class FileWatcher {
     private readonly debounceMs: number = 1000,
     private readonly isOnline: () => boolean = () => true,
     private readonly enqueueChange: (entry: Omit<ChangeQueueEntry, "id">) => void = () => {},
+    private readonly readdirFn: ReaddirFn = readdir as ReaddirFn,
   ) {}
 
   async initialize(): Promise<void> {
@@ -39,7 +43,7 @@ export class FileWatcher {
 
   private async setupPairWatches(pair: SyncPair): Promise<void> {
     const dirs: string[] = [pair.local_path];
-    const entries = await readdir(pair.local_path, { withFileTypes: true, recursive: true });
+    const entries = await this.readdirFn(pair.local_path, { withFileTypes: true, recursive: true });
     for (const entry of entries) {
       if (entry.isDirectory()) {
         dirs.push(join(entry.parentPath, entry.name));
@@ -83,9 +87,64 @@ export class FileWatcher {
         }
       }
     }
+
+    // Watch the parent directory to detect if the pair root itself is renamed
+    // or deleted. inotify fires on the parent for IN_MOVE_FROM/IN_DELETE, not on
+    // the watched inode, so subdirectory watches above never see it.
+    // Skip if the pair root has no meaningful parent (e.g. "/" where dirname===self
+    // and basename==="") — watching root would be both useless and noisy.
+    const parentDir = dirname(pair.local_path);
+    const pairRootName = basename(pair.local_path);
+    if (!this.stopped && !this.inotifyExhausted && parentDir !== pair.local_path && pairRootName !== "") {
+      try {
+        const parentWatcher = this.watchFn(parentDir, (evt, filename) => {
+          if (!filename || filename !== pairRootName) return;
+          if (!existsSync(pair.local_path)) {
+            if (!this.missingPairs.has(pair.pair_id)) {
+              this.missingPairs.add(pair.pair_id);
+              debugLog(`watcher: local_folder_missing (parent watch) pair=${pair.pair_id.slice(-8)} path=${pair.local_path}`);
+              this.emitEvent({
+                type: "local_folder_missing",
+                payload: { pair_id: pair.pair_id, local_path: pair.local_path },
+              });
+            }
+          } else if (this.missingPairs.has(pair.pair_id)) {
+            // Folder restored — clear flag and trigger a resync.
+            this.missingPairs.delete(pair.pair_id);
+            debugLog(`watcher: pair root restored pair=${pair.pair_id.slice(-8)}, scheduling sync`);
+            if (this.isOnline()) this.scheduleSync(pair.pair_id);
+          }
+        });
+        // Key by pair_id so multiple pairs with the same parent don't clobber each other.
+        this.watchers.set(`parent:${pair.pair_id}`, parentWatcher);
+        parentWatcher.on("error", (e) =>
+          debugLog(`watcher: FSWatcher error on parent ${parentDir}: ${(e as Error).message}`),
+        );
+      } catch (err) {
+        // Non-fatal: reconcile will still catch folder-missing on the next cycle.
+        debugLog(`watcher: fs.watch failed for parent ${parentDir}: ${(err as Error).message}`);
+      }
+    }
   }
 
   private queueFileChange(pair: SyncPair, dir: string, evt: string, filename: string): void {
+    // inotify watches inodes, not paths — if the pair root was renamed or
+    // deleted the watch keeps firing. Detect this here for immediate feedback
+    // rather than waiting for the next reconcile cycle.
+    if (!existsSync(pair.local_path)) {
+      if (!this.missingPairs.has(pair.pair_id)) {
+        this.missingPairs.add(pair.pair_id);
+        debugLog(`watcher: local_folder_missing detected for pair=${pair.pair_id.slice(-8)} path=${pair.local_path}`);
+        this.emitEvent({
+          type: "local_folder_missing",
+          payload: { pair_id: pair.pair_id, local_path: pair.local_path },
+        });
+      }
+      return;
+    }
+    // Folder restored — clear missing flag so future events are processed again.
+    this.missingPairs.delete(pair.pair_id);
+
     const fullPath = join(dir, filename);
     const relPath = relative(pair.local_path, fullPath);
     const changeType: ChangeType =

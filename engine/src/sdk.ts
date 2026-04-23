@@ -242,6 +242,11 @@ export const sdkErrorFactoriesForTests = {
   protonDrive: (msg = "generic sdk") => new ProtonDriveError(msg),
   server401: (msg = "session expired") =>
     Object.assign(new ServerError(msg), { statusCode: 401 }),
+  // Simulates APICodeError (internal SDK class, not publicly exported) which
+  // extends ServerError and carries a numeric `code` and `debug` detail bag.
+  // Used to test the 2511 stale-draft-revision recovery path.
+  apiCodeError: (code: number, debug: Record<string, unknown> = {}) =>
+    Object.assign(new ServerError("API error"), { code, debug }),
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -449,33 +454,59 @@ export class DriveClient {
    * Used when a file already exists remotely and has been modified locally.
    * Delegates to `getFileRevisionUploader` instead of `getFileUploader` so
    * the SDK creates a new revision on the existing node rather than a new node.
+   *
+   * On 2511 (INCOMPATIBLE_STATE — a previous interrupted upload left a dangling
+   * draft revision), we delete the stale draft and retry once. The 2511 error
+   * fires during draft creation, before any bytes are read from the stream, so
+   * the stream position is still at the start and reuse is safe.
    */
   async uploadFileRevision(
     nodeUid: string,
     body: UploadBody,
   ): Promise<{ node_uid: string; revision_uid: string }> {
-    try {
-      const metadata: UploadMetadata = {
-        mediaType: body.mediaType,
-        expectedSize: body.sizeBytes,
-        modificationTime: body.modificationTime,
-      };
-      const uploader = await this.sdk.getFileRevisionUploader(nodeUid, metadata);
-      const controller = await uploader.uploadFromStream(body.stream, []);
-      const result = await controller.completion();
-      return {
-        node_uid: result.nodeUid,
-        revision_uid: result.nodeRevisionUid,
-      };
-    } catch (err) {
+    const metadata: UploadMetadata = {
+      mediaType: body.mediaType,
+      expectedSize: body.sizeBytes,
+      modificationTime: body.modificationTime,
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        await body.stream.cancel(err);
-      } catch {
-        /* secondary error: stream already closed/locked — ignore */
+        const uploader = await this.sdk.getFileRevisionUploader(nodeUid, metadata);
+        const controller = await uploader.uploadFromStream(body.stream, []);
+        const result = await controller.completion();
+        return {
+          node_uid: result.nodeUid,
+          revision_uid: result.nodeRevisionUid,
+        };
+      } catch (err) {
+        // 2511 = INCOMPATIBLE_STATE: stale draft revision from a previous interrupted
+        // upload is blocking us. The draft creation fails before any stream bytes are
+        // read, so the stream is still at position 0 — safe to reuse after clearing.
+        const isStale = err instanceof ServerError && "code" in err && (err as { code: number }).code === 2511;
+        if (isStale && attempt === 0) {
+          const draftRevisionId = (err as { debug?: { ConflictDraftRevisionID?: string } }).debug?.ConflictDraftRevisionID;
+          debugLog(`sdk: uploadFileRevision 2511 for ${nodeUid}, ConflictDraftRevisionID=${draftRevisionId ?? "unknown"}`);
+          if (draftRevisionId) {
+            try {
+              await this.sdk.deleteRevision(`${nodeUid}~${draftRevisionId}`);
+              debugLog(`sdk: deleted stale draft revision, retrying upload for ${nodeUid}`);
+              continue; // retry — stream is still unconsumed
+            } catch (deleteErr) {
+              debugLog(`sdk: deleteRevision failed: ${(deleteErr as Error).message}`);
+            }
+          }
+        }
+        try {
+          await body.stream.cancel(err);
+        } catch {
+          /* secondary error: stream already closed/locked — ignore */
+        }
+        mapSdkError(err);
+        throw err;
       }
-      mapSdkError(err);
-      throw err;
     }
+    // Unreachable — loop always returns or throws.
+    throw new SyncError("uploadFileRevision: exhausted attempts");
   }
 
   /**

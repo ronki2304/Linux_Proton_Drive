@@ -434,8 +434,8 @@ describe("FileWatcher — stop() (AC4, AC6)", () => {
 
     await fw.initialize();
 
-    // Should have 3 watchers (tmpDir + sub1 + sub2)
-    expect(mockWatchers.length).toBe(3);
+    // Should have 4 watchers (tmpDir + sub1 + sub2 + parent dir)
+    expect(mockWatchers.length).toBe(4);
 
     // Fire a listener to create a pending debounce timer
     const listener = mockWatch.mock.calls[0]![1] as WatchListener<string>;
@@ -742,6 +742,144 @@ describe("FileWatcher — offline change queue", () => {
     expect(enqueueCalls.length).toBe(1);
     expect(enqueueCalls[0]!.relative_path).toBe("notes.txt");
 
+    fw.stop();
+  });
+});
+
+// ── Parent-directory watch (pair root rename/delete detection) ────────────────
+
+describe("FileWatcher — parent-directory watch for pair root rename", () => {
+  let tmpDir: string;
+  let parentDir: string;
+  let pairRoot: string;
+
+  beforeEach(() => {
+    parentDir = join(tmpdir(), `watcher-parent-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    mkdirSync(parentDir, { recursive: true });
+    pairRoot = join(parentDir, "myfolder");
+    mkdirSync(pairRoot);
+    tmpDir = pairRoot;
+  });
+
+  afterEach(() => {
+    rmSync(parentDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  it("emits local_folder_missing when pair root basename event fires and path is gone", async () => {
+    const emittedEvents: IpcPushEvent[] = [];
+    const listeners = new Map<string, WatchListener<string>>();
+    const mockWatch: WatchFn = mock((watchedPath: string, listener: WatchListener<string>): FSWatcher => {
+      listeners.set(watchedPath, listener);
+      return makeMockWatcher();
+    });
+
+    const pair = makeTestPair(pairRoot);
+    const fw = new FileWatcher([pair], mock(async () => {}), (e) => emittedEvents.push(e), mockWatch);
+    await fw.initialize();
+
+    // Simulate rename: remove the pair root from disk then fire parent watcher event
+    rmSync(pairRoot, { recursive: true, force: true });
+    const parentListener = listeners.get(parentDir);
+    expect(parentListener).toBeDefined();
+    parentListener!("rename", "myfolder");
+
+    const missingEvents = emittedEvents.filter((e) => e.type === "local_folder_missing");
+    expect(missingEvents.length).toBe(1);
+    expect((missingEvents[0]!.payload as Record<string, unknown>)["pair_id"]).toBe("p1");
+    fw.stop();
+  });
+
+  it("does not emit local_folder_missing for unrelated filenames in parent dir", async () => {
+    const emittedEvents: IpcPushEvent[] = [];
+    const listeners = new Map<string, WatchListener<string>>();
+    const mockWatch: WatchFn = mock((watchedPath: string, listener: WatchListener<string>): FSWatcher => {
+      listeners.set(watchedPath, listener);
+      return makeMockWatcher();
+    });
+
+    const pair = makeTestPair(pairRoot);
+    const fw = new FileWatcher([pair], mock(async () => {}), (e) => emittedEvents.push(e), mockWatch);
+    await fw.initialize();
+
+    const parentListener = listeners.get(parentDir);
+    expect(parentListener).toBeDefined();
+    // Fire for a different filename in the same parent
+    parentListener!("rename", "someotherfile.txt");
+
+    expect(emittedEvents.filter((e) => e.type === "local_folder_missing").length).toBe(0);
+    fw.stop();
+  });
+
+  it("does not emit duplicate local_folder_missing for repeated parent events", async () => {
+    const emittedEvents: IpcPushEvent[] = [];
+    const listeners = new Map<string, WatchListener<string>>();
+    const mockWatch: WatchFn = mock((watchedPath: string, listener: WatchListener<string>): FSWatcher => {
+      listeners.set(watchedPath, listener);
+      return makeMockWatcher();
+    });
+
+    const pair = makeTestPair(pairRoot);
+    const fw = new FileWatcher([pair], mock(async () => {}), (e) => emittedEvents.push(e), mockWatch);
+    await fw.initialize();
+
+    rmSync(pairRoot, { recursive: true, force: true });
+    const parentListener = listeners.get(parentDir);
+    parentListener!("rename", "myfolder");
+    parentListener!("rename", "myfolder"); // fired again (common with inotify)
+    parentListener!("rename", "myfolder");
+
+    expect(emittedEvents.filter((e) => e.type === "local_folder_missing").length).toBe(1);
+    fw.stop();
+  });
+
+  it("does not set up parent watch when pair root is filesystem root '/'", async () => {
+    const watchedPaths: string[] = [];
+    const mockWatch: WatchFn = mock((watchedPath: string, _listener: WatchListener<string>): FSWatcher => {
+      watchedPaths.push(watchedPath);
+      return makeMockWatcher();
+    });
+    const mockReaddir = mock(async () => [] as import("node:fs").Dirent[]);
+    const pair: SyncPair = { ...makeTestPair("/"), local_path: "/" };
+    // Pass mockReaddir as 8th constructor arg to avoid scanning the real filesystem.
+    const fw = new FileWatcher(
+      [pair], mock(async () => {}), () => {}, mockWatch, 1000, () => true, () => {}, mockReaddir as never,
+    );
+    await fw.initialize();
+    // dirname("/") === "/" === pair.local_path → parent watch guard skips it.
+    // Only one fs.watch call for "/" itself (the pair root), never a second for parent.
+    expect(watchedPaths.filter((p) => p === "/").length).toBeLessThanOrEqual(1);
+    fw.stop();
+  });
+
+  it("clears missing state and schedules sync when folder is restored", async () => {
+    const emittedEvents: IpcPushEvent[] = [];
+    const listeners = new Map<string, WatchListener<string>>();
+    const mockWatch: WatchFn = mock((watchedPath: string, listener: WatchListener<string>): FSWatcher => {
+      listeners.set(watchedPath, listener);
+      return makeMockWatcher();
+    });
+    const onChanges = mock(async (_: string) => {});
+
+    const pair = makeTestPair(pairRoot);
+    const fw = new FileWatcher([pair], onChanges, (e) => emittedEvents.push(e), mockWatch, 0, () => true);
+    await fw.initialize();
+
+    // Simulate rename away → folder missing
+    rmSync(pairRoot, { recursive: true, force: true });
+    const parentListener = listeners.get(parentDir);
+    parentListener!("rename", "myfolder");
+    expect(emittedEvents.filter((e) => e.type === "local_folder_missing").length).toBe(1);
+
+    // Simulate folder restored
+    mkdirSync(pairRoot);
+    parentListener!("rename", "myfolder");
+
+    // No second local_folder_missing; sync scheduled instead
+    expect(emittedEvents.filter((e) => e.type === "local_folder_missing").length).toBe(1);
+    // onChanges should be scheduled (debounceMs=0 so it fires synchronously via timer)
+    await new Promise((r) => setTimeout(r, 10));
+    expect(onChanges).toHaveBeenCalledWith("p1");
     fw.stop();
   });
 });
