@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build & Release
+  test:
+    name: Test gate
     runs-on: ubuntu-latest
 
     steps:
@@ -23,32 +23,31 @@ jobs:
           bun-version: "1.3.11"
 
       - name: Install dependencies
-        run: bun install
+        working-directory: engine
+        run: bun install --frozen-lockfile
 
-      - name: Run tests (release gate)
+      - name: Run engine tests
+        working-directory: engine
         run: bun test
 
-      - name: Set version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          jq --arg v "$VERSION" '.version = $v' package.json > package.json.tmp
-          mv package.json.tmp package.json
-          echo "Building version: $VERSION"
+  release:
+    name: Build & Release
+    runs-on: ubuntu-latest
+    needs: test
 
-      - name: Build binary
-        run: |
-          mkdir -p dist
-          bun build --compile --target=bun-linux-x64 src/cli.ts --outfile dist/protondrive
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Build AppImage
-        run: |
-          test -f dist/protondrive || { echo "ERROR: dist/protondrive not found — bun build step failed" >&2; exit 1; }
-          bash packaging/appimage/build-appimage.sh
+      - name: Build Flatpak bundle
+        uses: flatpak/flatpak-github-actions/flatpak-builder@401fe28a8384095fc1531b9d320b292f0ee45adb # v6
+        with:
+          bundle: io.github.ronki2304.ProtonDriveLinuxClient.flatpak
+          manifest-path: flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml
+          cache-key: flatpak-builder-${{ github.sha }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2
         with:
-          files: |
-            dist/protondrive
-            dist/protondrive.AppImage
+          files: io.github.ronki2304.ProtonDriveLinuxClient.flatpak
           generate_release_notes: true

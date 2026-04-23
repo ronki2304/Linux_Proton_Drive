@@ -5,8 +5,8 @@ on:
     branches: ["**"]
 
 jobs:
-  test:
-    name: Test
+  engine:
+    name: Engine (type-check + tests)
     runs-on: ubuntu-latest
 
     steps:
@@ -19,10 +19,38 @@ jobs:
           bun-version: "1.3.11"
 
       - name: Install dependencies
-        run: bun install
+        working-directory: engine
+        run: bun install --frozen-lockfile
 
       - name: Type-check
+        working-directory: engine
         run: bunx tsc --noEmit
 
       - name: Run tests
+        working-directory: engine
         run: bun test
+
+  ui-tests:
+    name: UI tests (meson + pytest)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y blueprint-compiler python3-venv python3-pip meson ninja-build
+
+      - name: Set up Python venv
+        run: python3 -m venv ui/.venv && ui/.venv/bin/pip install pytest pyyaml
+
+      - name: Meson setup
+        run: meson setup ui builddir
+
+      - name: Compile blueprints
+        run: meson compile -C builddir
+
+      - name: Run UI tests
+        run: ui/.venv/bin/pytest ui/tests/

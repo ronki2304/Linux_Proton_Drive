@@ -1,6 +1,6 @@
 # Story 7.3: CI/CD Pipelines
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -19,44 +19,44 @@ so that every PR is tested and releases are built reproducibly.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Rewrite `ci.yml`** (AC: 1, 2)
-  - [ ] 1.1 Replace the entire existing file — current content references old CLI structure (`src/cli.ts`, wrong `bun install` at project root) and is completely wrong for the two-process desktop app
-  - [ ] 1.2 Add **engine job**: `runs-on: ubuntu-latest`; steps: checkout → setup Bun 1.3.11 (via `oven-sh/setup-bun@v2`) → `cd engine && bun install --frozen-lockfile` → `bunx tsc --noEmit` → `bun test`
-  - [ ] 1.3 Add **ui-tests job**: `runs-on: ubuntu-latest`; steps: checkout → install apt packages (`blueprint-compiler python3-venv python3-pip meson ninja-build`) → create venv (`python3 -m venv ui/.venv && ui/.venv/bin/pip install pytest pyyaml`) → `meson setup builddir` → `meson compile -C builddir` → `ui/.venv/bin/pytest ui/tests/`; **no `xvfb-run` needed** — the full GI/GTK stack is mocked in `ui/tests/conftest.py` so no X display is required; **no heavy GIR apt packages needed** — `gir1.2-*` are unnecessary since GI is fully mocked
-  - [ ] 1.4 Both jobs run in parallel (no dependency between engine and ui-tests jobs)
-  - [ ] 1.5 Pin action SHAs as in the existing file (commit hash comments, not just tags)
+- [x] **Task 1 — Rewrite `ci.yml`** (AC: 1, 2)
+  - [x] 1.1 Replace the entire existing file — current content references old CLI structure (`src/cli.ts`, wrong `bun install` at project root) and is completely wrong for the two-process desktop app
+  - [x] 1.2 Add **engine job**: `runs-on: ubuntu-latest`; steps: checkout → setup Bun 1.3.11 (via `oven-sh/setup-bun@v2`) → `cd engine && bun install --frozen-lockfile` → `bunx tsc --noEmit` → `bun test`
+  - [x] 1.3 Add **ui-tests job**: `runs-on: ubuntu-latest`; steps: checkout → install apt packages (`blueprint-compiler python3-venv python3-pip meson ninja-build`) → create venv (`python3 -m venv ui/.venv && ui/.venv/bin/pip install pytest pyyaml`) → `meson setup builddir` → `meson compile -C builddir` → `ui/.venv/bin/pytest ui/tests/`; **no `xvfb-run` needed** — the full GI/GTK stack is mocked in `ui/tests/conftest.py` so no X display is required; **no heavy GIR apt packages needed** — `gir1.2-*` are unnecessary since GI is fully mocked
+  - [x] 1.4 Both jobs run in parallel (no dependency between engine and ui-tests jobs)
+  - [x] 1.5 Pin action SHAs as in the existing file (commit hash comments, not just tags)
 
-- [ ] **Task 2 — Rewrite `release.yml`** (AC: 3, 4)
-  - [ ] 2.1 Replace the entire existing file — current content references AppImage (`packaging/appimage/build-appimage.sh`) and `src/cli.ts`; both are wrong; AppImage was never implemented, Flatpak is the distribution format
-  - [ ] 2.2 Trigger: `on: push: tags: ["v*"]`; `permissions: contents: write`
-  - [ ] 2.3 Add test gate before build: engine tests (`cd engine && bun install --frozen-lockfile && bun test`) must pass
-  - [ ] 2.4 Build Flatpak bundle using `flatpak/flatpak-github-actions/flatpak-builder@v6` (see Dev Notes for action config and known constraints); **pin this action to a full commit SHA** per Task 1.5's SHA-pinning policy — find SHA via `gh api repos/flathub/flatpak-github-actions/git/refs/tags/v6` or the action's GitHub releases page; format: `flatpak/flatpak-github-actions/flatpak-builder@<sha> # v6`
-  - [ ] 2.5 Produce artifact named `io.github.ronki2304.ProtonDriveLinuxClient.flatpak`
-  - [ ] 2.6 Create GitHub Release using `softprops/action-gh-release@v2` with `generate_release_notes: true`; attach the `.flatpak` bundle
+- [x] **Task 2 — Rewrite `release.yml`** (AC: 3, 4)
+  - [x] 2.1 Replace the entire existing file — current content references AppImage (`packaging/appimage/build-appimage.sh`) and `src/cli.ts`; both are wrong; AppImage was never implemented, Flatpak is the distribution format
+  - [x] 2.2 Trigger: `on: push: tags: ["v*"]`; `permissions: contents: write`
+  - [x] 2.3 Add test gate before build: engine tests (`cd engine && bun install --frozen-lockfile && bun test`) must pass
+  - [x] 2.4 Build Flatpak bundle using `flatpak/flatpak-github-actions/flatpak-builder@v6` (see Dev Notes for action config and known constraints); **pin this action to a full commit SHA** per Task 1.5's SHA-pinning policy — find SHA via `gh api repos/flathub/flatpak-github-actions/git/refs/tags/v6` or the action's GitHub releases page; format: `flatpak/flatpak-github-actions/flatpak-builder@<sha> # v6`
+  - [x] 2.5 Produce artifact named `io.github.ronki2304.ProtonDriveLinuxClient.flatpak`
+  - [x] 2.6 Create GitHub Release using `softprops/action-gh-release@v2` with `generate_release_notes: true`; attach the `.flatpak` bundle
 
-- [ ] **Task 3 — Fix `e2e.yml`** (AC: 5)
-  - [ ] 3.1 Update `bun test src/__e2e__/` → remove (no e2e directory exists)
-  - [ ] 3.2 Update `bun test src/__integration__/` → `cd engine && bun test src/__integration__/`
-  - [ ] 3.3 Remove `src/cli.ts` build step — engine binary is at `engine/` not project root
-  - [ ] 3.4 Build step: `cd engine && bun build --compile src/main.ts --outfile=dist/engine` (not `--target=bun-linux-x64 src/cli.ts`)
-  - [ ] 3.5 Keep triggers: `workflow_dispatch` and `on: push: tags: ["v*"]`
-  - [ ] 3.6 Wire correct secret env vars: replace `PROTON_TEST_USER`/`PROTON_TEST_PASS` with `PROTON_TEST_TOKEN` and `PROTON_TEST_FOLDER` (these are the env vars the integration tests use per project-context.md); remove the `if: github.event_name == 'push'` condition from the integration tests step — integration tests must run on both `workflow_dispatch` and `v*` tag triggers, not just tag pushes
-  - [ ] 3.7 Fix `bun install` step: change `run: bun install` to `cd engine && bun install --frozen-lockfile` — project root has no `package.json`; all npm state lives in `engine/`; the current file runs install at root which fails silently
+- [x] **Task 3 — Fix `e2e.yml`** (AC: 5)
+  - [x] 3.1 Update `bun test src/__e2e__/` → remove (no e2e directory exists)
+  - [x] 3.2 Update `bun test src/__integration__/` → `cd engine && bun test src/__integration__/`
+  - [x] 3.3 Remove `src/cli.ts` build step — engine binary is at `engine/` not project root
+  - [x] 3.4 Build step: `cd engine && bun build --compile src/main.ts --outfile=dist/engine` (not `--target=bun-linux-x64 src/cli.ts`)
+  - [x] 3.5 Keep triggers: `workflow_dispatch` and `on: push: tags: ["v*"]`
+  - [x] 3.6 Wire correct secret env vars: replace `PROTON_TEST_USER`/`PROTON_TEST_PASS` with `PROTON_TEST_TOKEN` and `PROTON_TEST_FOLDER` (these are the env vars the integration tests use per project-context.md); remove the `if: github.event_name == 'push'` condition from the integration tests step — integration tests must run on both `workflow_dispatch` and `v*` tag triggers, not just tag pushes
+  - [x] 3.7 Fix `bun install` step: change `run: bun install` to `cd engine && bun install --frozen-lockfile` — project root has no `package.json`; all npm state lives in `engine/`; the current file runs install at root which fails silently
 
-- [ ] **Task 4 — Create `CONTRIBUTING.md`** (AC: 6)
-  - [ ] 4.1 Create at project root (not in `ui/` or `engine/`)
-  - [ ] 4.2 Section: **Development Setup** — prerequisites (GNOME SDK 50, Bun 1.3.11, Blueprint compiler, Meson, Flatpak Builder); two-terminal launch commands (see Dev Notes)
-  - [ ] 4.3 Section: **Running Tests** — exact commands for both suites; use the test command table from Dev Notes; note that both local and CI UI runs use pytest (`ui/.venv/bin/pytest ui/tests/`), and `meson compile -C builddir` precedes pytest in CI to validate Blueprint compilation
-  - [ ] 4.4 Section: **Integration Tests** — manual auth flow for `PROTON_TEST_TOKEN`; token expiry warning; why automation is impossible (CAPTCHA); `afterAll` cleanup requirement
-  - [ ] 4.5 Section: **Branch Naming** — `feat/<story-id>-short-desc`, `fix/<issue>-short-desc`, `chore/<desc>`
-  - [ ] 4.6 Section: **Commit Messages** — Conventional Commits with `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:` prefixes; imperative mood; scope optional
+- [x] **Task 4 — Create `CONTRIBUTING.md`** (AC: 6)
+  - [x] 4.1 Create at project root (not in `ui/` or `engine/`)
+  - [x] 4.2 Section: **Development Setup** — prerequisites (GNOME SDK 50, Bun 1.3.11, Blueprint compiler, Meson, Flatpak Builder); two-terminal launch commands (see Dev Notes)
+  - [x] 4.3 Section: **Running Tests** — exact commands for both suites; use the test command table from Dev Notes; note that both local and CI UI runs use pytest (`ui/.venv/bin/pytest ui/tests/`), and `meson compile -C builddir` precedes pytest in CI to validate Blueprint compilation
+  - [x] 4.4 Section: **Integration Tests** — manual auth flow for `PROTON_TEST_TOKEN`; token expiry warning; why automation is impossible (CAPTCHA); `afterAll` cleanup requirement
+  - [x] 4.5 Section: **Branch Naming** — `feat/<story-id>-short-desc`, `fix/<issue>-short-desc`, `chore/<desc>`
+  - [x] 4.6 Section: **Commit Messages** — Conventional Commits with `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:` prefixes; imperative mood; scope optional
 
-- [ ] **Task 5 — Validate** (AC: 1–6)
-  - [ ] 5.1 Lint YAML: `yamllint .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/e2e.yml` or visual inspection
-  - [ ] 5.2 Verify `ci.yml` references `engine/` working directory, not project root, for all Bun commands
-  - [ ] 5.3 Verify `release.yml` references correct manifest path: `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
-  - [ ] 5.4 Verify CONTRIBUTING.md test commands match project-context.md exactly (no drift)
-  - [ ] 5.5 Set story status to `review`
+- [x] **Task 5 — Validate** (AC: 1–6)
+  - [x] 5.1 Lint YAML: `yamllint .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/e2e.yml` or visual inspection
+  - [x] 5.2 Verify `ci.yml` references `engine/` working directory, not project root, for all Bun commands
+  - [x] 5.3 Verify `release.yml` references correct manifest path: `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
+  - [x] 5.4 Verify CONTRIBUTING.md test commands match project-context.md exactly (no drift)
+  - [x] 5.5 Set story status to `review`
 
 ---
 
@@ -95,7 +95,7 @@ Or use `working-directory`:
 
 ### UI test dependencies on Ubuntu (CI)
 
-Because `ui/tests/conftest.py` fully mocks the GI/GTK stack, CI only needs a minimal set of packages. Install these before `meson setup builddir`:
+Because `ui/tests/conftest.py` fully mocks the GI/GTK stack, CI only needs a minimal set of packages. Install these before `meson setup ui builddir`:
 
 ```bash
 sudo apt-get update
@@ -122,7 +122,7 @@ The correct CI approach runs `meson compile` (to validate Blueprint compilation 
   run: python3 -m venv ui/.venv && ui/.venv/bin/pip install pytest pyyaml
 
 - name: Meson setup
-  run: meson setup builddir
+  run: meson setup ui builddir
 
 - name: Compile blueprints
   run: meson compile -C builddir
@@ -140,7 +140,7 @@ The correct CI approach runs `meson compile` (to validate Blueprint compilation 
 sudo apt-get install -y blueprint-compiler python3-venv python3-pip meson ninja-build
 ```
 
-Note: `meson setup builddir` must run from the project root (it finds `ui/meson.build` automatically). Do NOT call `meson` from `ui/` subdirectory or from inside distrobox in CI — use system Meson on ubuntu-latest directly.
+Note: `meson setup ui builddir` must run from the project root — `ui/` is the meson source directory (it contains `meson.build`); `builddir/` is created at the project root. Do NOT call `meson setup builddir` without specifying `ui` as the source directory — there is no `meson.build` at the project root. Do NOT call `meson` from inside the `ui/` subdirectory or from inside distrobox in CI — use system Meson on ubuntu-latest directly.
 
 ### Flatpak release build
 
@@ -261,6 +261,42 @@ All findings resolved autonomously. Rationale documented inline.
 
 ---
 
+## Party-Mode Review — 2026-04-23 (Pass 2)
+
+Agents: Winston (Architect), Amelia (Dev), Quinn (QA), Bob (SM)
+
+All findings resolved autonomously.
+
+- [x] **PM-F1 [PATCH] Dev Notes "Meson setup in CI" section contained stale `meson setup builddir` command.** The CR fixed the live ci.yml but the dev notes prose and YAML example still said `meson setup builddir`, and the explanatory note incorrectly claimed meson auto-discovers `ui/meson.build`. **Fix:** Updated `meson setup builddir` → `meson setup ui builddir` in the YAML example and the prose note. Corrected the note to say "there is no `meson.build` at the project root" and explain the `ui/` source dir convention.
+
+- [x] **PM-F2 [PATCH] Dev Agent Record completion note for Task 1 mentioned stale `meson setup builddir`.** **Fix:** Updated completion note to `meson setup ui builddir`.
+
+- [x] **PM-F3 [VERIFY] All ACs confirmed still satisfied after CR patches** — Quinn checked: AC1 (parallel jobs, both suites) ✓, AC2 (type-check) ✓, AC3 (flatpak release) ✓, AC4 (engine-only gate, `needs: test`) ✓, AC5 (e2e guard + correct paths + both triggers) ✓, AC6 (CONTRIBUTING.md complete with corrected launch command) ✓. Bob confirmed sprint status `done`.
+
+- [x] **PM-F4 [VERIFY] e2e shell guard validated** — `find src/__integration__ -name "*.test.ts" | grep -q .` with `working-directory: engine`: `.gitkeep` does not match `*.test.ts`; grep receives empty input, returns 1; guard correctly skips and exits 0. ✓
+
+---
+
+## Code Review Findings — 2026-04-23
+
+Reviewers: Blind Hunter (adversarial), Edge Case Hunter (boundary), Acceptance Auditor (spec). 18 dismissed as noise. 3 patched. 4 deferred. All ACs pass per Acceptance Auditor.
+
+- [x] **[Review][Patch] `meson setup builddir` broken — no `meson.build` at project root** [`ci.yml`] — `meson setup builddir` fails when the working directory has no `meson.build`. The UI source is in `ui/`. **Fix:** Changed to `meson setup ui builddir` in ci.yml. Rationale: `meson setup <sourcedir> <builddir>` is the correct invocation when source and invocation directory differ; confirmed that the actual dev meson builddir lives at `ui/builddir` (source=`ui/`).
+
+- [x] **[Review][Patch] `meson setup builddir` and `python -m protondrive` broken in CONTRIBUTING.md** [`CONTRIBUTING.md`] — Same meson setup bug as above; also `python -m protondrive` from project root fails ("No module named protondrive") because `ui/src` is not in `sys.path`. **Fix:** Changed to `meson setup ui builddir` and `PYTHONPATH=ui/src PROTONDRIVE_RESOURCE_PATH=builddir/protondrive-resources.gresource python3 -m protondrive`. Rationale: gresource is output to `builddir/protondrive-resources.gresource` after `meson compile -C builddir`; `PYTHONPATH=ui/src` makes the `protondrive` package importable without installation.
+
+- [x] **[Review][Patch] `engine/src/__integration__/` directory missing — e2e.yml exits 1** [`e2e.yml`, `engine/src/__integration__/`] — `bun test src/__integration__/` exits code 1 when no matching test files are found (bun has no `--passWithNoTests` flag). Directory didn't exist at all; even with it created, bun exits 1 on an empty directory. **Fix:** Created `engine/src/__integration__/.gitkeep` and added a shell guard in e2e.yml that skips `bun test` with a clear message if no `.test.ts` files exist, exiting 0. Rationale: integration tests don't exist yet (require live Proton account); e2e workflow must not block tag releases forever.
+
+- [x] **[Review][Defer] E2E workflow has no guard for missing secrets** [`e2e.yml`] — If `PROTON_TEST_TOKEN`/`PROTON_TEST_FOLDER` secrets are not configured, tests run with empty env vars and fail with auth errors rather than a clear "secrets not configured" message. Deferred: adding a secrets-existence check requires workflow logic changes (`env` context secrets not directly comparable in `if:` expressions) and is scope-expanding. Logged in deferred-work.md.
+
+- [x] **[Review][Defer] pip package versions unpinned in ci.yml** [`ci.yml`] — `pip install pytest pyyaml` does not pin versions; a breaking pytest release could silently break UI CI. Deferred: scope-expanding; requires establishing and maintaining a pip lockfile strategy. Logged in deferred-work.md.
+
+- [x] **[Review][Defer] `python -m protondrive` not validated in CI** — CI only runs pytest (unit tests with mocked GI); it does not verify that the installed entry point is actually launchable. A broken `__main__.py` or missing gresource in the Flatpak bundle would pass CI but fail at runtime. Deferred: full launch validation requires a real GNOME session in CI (Xvfb + GI stack) — significant scope. Logged in deferred-work.md.
+
+- [x] **[Review][Defer] Flatpak archive hash mismatch risk** [`flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`] — Flatpak manifest pins SHA256 hashes for Bun binary downloads; if Oven.sh CDN serves different bytes, flatpak-builder fails with cryptic hash mismatch. Deferred: inherent to the approach; fix would require switching to a content-addressed mirror or accepting the risk. Pre-existing architectural constraint.
+
+---
+
 ## Dev Agent Record
 
 ### Agent Model Used
@@ -269,6 +305,29 @@ claude-sonnet-4-6 (Bob SM, create-story workflow)
 
 ### Debug Log References
 
+None — implementation was straightforward; all tasks completed in order per story spec.
+
 ### Completion Notes List
 
+- **Task 1 (ci.yml):** Rewrote with two parallel jobs: `engine` (checkout → Bun 1.3.11 → `bun install --frozen-lockfile` → `bunx tsc --noEmit` → `bun test`, all with `working-directory: engine`) and `ui-tests` (checkout → apt minimal set → Python venv → `meson setup ui builddir` → `meson compile -C builddir` → `ui/.venv/bin/pytest ui/tests/`). No xvfb, no gir packages. All action SHAs pinned to commit hashes with tag comments.
+- **Task 2 (release.yml):** Rewrote with two jobs: `test` (engine-only gate) and `release` (`needs: test`). Flatpak built via `flatpak/flatpak-github-actions/flatpak-builder@401fe28a8384095fc1531b9d320b292f0ee45adb # v6` (SHA fetched via `gh api repos/flatpak/flatpak-github-actions/git/refs/tags/v6` → dereferenced annotated tag). Release created via `softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2` with `.flatpak` artifact attached.
+- **Task 3 (e2e.yml):** Removed stale `__e2e__` step; fixed integration test path to `engine/src/__integration__/` via `working-directory: engine`; fixed build step to `bun build --compile src/main.ts --outfile=dist/engine`; replaced `PROTON_TEST_USER`/`PROTON_TEST_PASS` with `PROTON_TEST_TOKEN`/`PROTON_TEST_FOLDER`; removed `if: github.event_name == 'push'` guard so tests run on both `workflow_dispatch` and `v*` tag triggers; fixed `bun install` to use `--frozen-lockfile` from `engine/`.
+- **Task 4 (CONTRIBUTING.md):** Created at project root. Sections: Development Setup (prerequisites + two-terminal launch), Running Tests (table matching project-context.md), Integration Tests (manual token flow, expiry warning, CAPTCHA rationale, afterAll cleanup), Branch Naming, Commit Messages (Conventional Commits).
+- **Task 5 (Validate):** YAML validated via Python `yaml.safe_load` — all three files parse cleanly. All AC checks confirmed via grep.
+- **CR Pass (2026-04-23):** Fixed `meson setup ui builddir` in ci.yml (project root has no `meson.build`); fixed same in CONTRIBUTING.md plus corrected `python -m protondrive` to `PYTHONPATH=ui/src PROTONDRIVE_RESOURCE_PATH=builddir/protondrive-resources.gresource python3 -m protondrive`; created `engine/src/__integration__/.gitkeep` and added shell guard in e2e.yml to skip `bun test` gracefully when no `.test.ts` files exist.
+
 ### File List
+
+- `.github/workflows/ci.yml`
+- `.github/workflows/release.yml`
+- `.github/workflows/e2e.yml`
+- `CONTRIBUTING.md`
+- `engine/src/__integration__/.gitkeep`
+- `_bmad-output/implementation-artifacts/7-3-ci-cd-pipelines.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`
+- `_bmad-output/implementation-artifacts/deferred-work.md`
+
+## Change Log
+
+- 2026-04-23: Implemented all tasks — rewrote ci.yml (parallel engine + ui-tests jobs), rewrote release.yml (engine test gate + Flatpak release), fixed e2e.yml (correct paths, secrets, triggers), created CONTRIBUTING.md. Story moved to review.
+- 2026-04-23: CR pass — fixed meson setup command (→ `meson setup ui builddir`), fixed CONTRIBUTING.md dev launch command (PYTHONPATH + PROTONDRIVE_RESOURCE_PATH), fixed e2e.yml integration test guard (no-test-files exits 0), created `engine/src/__integration__/.gitkeep`. Story moved to done.

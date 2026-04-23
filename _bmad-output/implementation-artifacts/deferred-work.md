@@ -189,3 +189,12 @@ These were surfaced during the party-mode validation of Story 7.2 (2026-04-23). 
 
 _Resolved items removed during Epic 6 retrospective (2026-04-23):_
 _[4-0b W2], [4-2/4-3], [5-0 CR W1] — solved; Story 2-12 — done; [6-4 D1] — deleted (not relevant); [6-4 D3] — already works; [5-9 CR W1] — fixed by Story 6-0c; [6-0x CR W4] — housekeeping, resolved._
+
+---
+
+## Deferred from: code review of 7-3-ci-cd-pipelines (2026-04-23)
+
+- **[7-3 CR D1]** E2E workflow has no guard for missing secrets — `PROTON_TEST_TOKEN`/`PROTON_TEST_FOLDER` being unset causes confusing auth failures rather than a clear "secrets not configured" skip. Fix would require secrets-existence detection (GitHub Actions `if:` expressions cannot directly compare `secrets.*` to empty string); alternative is a repo-level `vars.HAS_INTEGRATION_SECRETS` variable. Scope-expanding. `.github/workflows/e2e.yml`
+- **[7-3 CR D2]** `pip install pytest pyyaml` in ci.yml unpinned — a major pytest release could silently break UI CI. Requires establishing a pip lockfile strategy (pip-compile or constraints file). Scope-expanding. `.github/workflows/ci.yml`
+- **[7-3 CR D3]** `python -m protondrive` launch not validated in CI — pytest mocks GI so CI passes without verifying the real entry point works; a broken `__main__.py` or missing gresource in the Flatpak bundle would pass CI but fail at user install time. Full launch validation requires Xvfb + full GI stack in CI — significant scope. `.github/workflows/ci.yml`
+- **[7-3 CR D4]** Flatpak manifest pins Bun binary SHA256 hashes — if Oven.sh CDN re-serves with different bytes, flatpak-builder fails cryptically. No fix without switching to a content-addressed mirror or accepting the risk. Pre-existing architectural constraint. `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
