@@ -161,5 +161,15 @@ These were surfaced during the party-mode validation of Story 7.2 (2026-04-23). 
 
 ---
 
+## Deferred from: code review of 7-1 (2026-04-23)
+
+- **[7-1 CR D1]** DoH resolver hardcodes Cloudflare `1.1.1.1` and ignores `http_proxy`/`https_proxy` env vars — proxy users behind corporate firewalls blocking Cloudflare get no connectivity; no fallback DNS server. Pre-existing architectural choice. `engine/src/main.ts`
+- **[7-1 CR D2]** DoH resolver `https.request()` has no socket timeout — hangs indefinitely if `1.1.1.1` is unreachable; only bounded by OS TCP timeout (~2 min on Linux). Pre-existing. `engine/src/main.ts`
+- **[7-1 CR D3]** Inotify watcher exhaustion (`ENOSPC`) sets `inotifyExhausted` but does not reinitialise when descriptors become available again — broken detection until engine restart. Pre-existing. `engine/src/watcher.ts`
+- **[7-1 CR D4]** `CredentialManager` not re-probed after startup — if Secret portal D-Bus service crashes mid-session, all subsequent credential operations fail without recovery. Pre-existing. `ui/src/protondrive/credential_store.py`
+- **[7-1 CR D5]** `_get_stored_token()` returns `None` for both "token not found" and backend errors — conflates transient keyring failure with no-token state; user sent to pre-auth screen on transient error. Pre-existing. `ui/src/protondrive/main.py`
+
+---
+
 _Resolved items removed during Epic 6 retrospective (2026-04-23):_
 _[4-0b W2], [4-2/4-3], [5-0 CR W1] — solved; Story 2-12 — done; [6-4 D1] — deleted (not relevant); [6-4 D3] — already works; [5-9 CR W1] — fixed by Story 6-0c; [6-0x CR W4] — housekeeping, resolved._

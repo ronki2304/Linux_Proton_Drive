@@ -64,9 +64,28 @@ portal (`org.freedesktop.portal.Secret`). This portal:
 System proxy settings (`http_proxy`/`https_proxy` env vars) are automatically
 respected by the sync engine's HTTP client. The engine uses Bun's built-in
 `fetch`, which honours these environment variables at the process level since
-Bun 1.1+. To use a proxy, set the variables in your environment before
-launching the app, or pass them via `flatpak run --env=http_proxy=... io.github.ronki2304.ProtonDriveLinuxClient`.
+Bun 1.1+. The most reliable way to set a proxy is via the explicit `--env=` flag:
+
+```
+flatpak run --env=http_proxy=http://proxy.example.com:8080 io.github.ronki2304.ProtonDriveLinuxClient
+```
+
+Alternatively, `http_proxy`/`https_proxy` set in your shell environment before
+launching are passed through automatically by Flatpak 1.3.1+ (all modern
+distributions).
 
 GNOME proxy settings (`org.gnome.system.proxy` GSettings) are not automatically
 read by the engine in v1. Use the `http_proxy`/`https_proxy` env var mechanism
 described above.
+
+## Intentionally Not Requested
+
+The following permissions were **deliberately omitted** to minimise sandbox scope:
+
+- **`--talk-name=org.freedesktop.secrets`** — Grants direct D-Bus access to the host
+  Secrets service, which would expose all applications' secrets. The Flatpak Secret
+  portal (`org.freedesktop.portal.Secret`) provides equivalent credential storage
+  without cross-app secret access. See [Credential Storage](#credential-storage-secret-portal) above.
+- **`--filesystem=/run/systemd/resolve:ro`** — Not required. Standard `--share=network`
+  provides full DNS resolution. This unusual permission has no documented rationale
+  and would likely flag in Flathub review.
