@@ -198,3 +198,12 @@ _[4-0b W2], [4-2/4-3], [5-0 CR W1] — solved; Story 2-12 — done; [6-4 D1] —
 - **[7-3 CR D2]** `pip install pytest pyyaml` in ci.yml unpinned — a major pytest release could silently break UI CI. Requires establishing a pip lockfile strategy (pip-compile or constraints file). Scope-expanding. `.github/workflows/ci.yml`
 - **[7-3 CR D3]** `python -m protondrive` launch not validated in CI — pytest mocks GI so CI passes without verifying the real entry point works; a broken `__main__.py` or missing gresource in the Flatpak bundle would pass CI but fail at user install time. Full launch validation requires Xvfb + full GI stack in CI — significant scope. `.github/workflows/ci.yml`
 - **[7-3 CR D4]** Flatpak manifest pins Bun binary SHA256 hashes — if Oven.sh CDN re-serves with different bytes, flatpak-builder fails cryptically. No fix without switching to a content-addressed mirror or accepting the risk. Pre-existing architectural constraint. `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
+
+---
+
+## Deferred from: code review of 7-4-end-to-end-mvp-validation-and-manual-test-protocol (2026-04-23)
+
+- **[7-4 CR D1]** Port 44925 availability not checked pre-test — if another service occupies port 44925, Journey 1 auth fails with no clear diagnostic surfaced in TESTING.md. Fix requires app-level port-conflict detection and user-facing error. Pre-existing. `engine/src/main.ts` (auth callback server)
+- **[7-4 CR D2]** No timeout guidance for sync wait steps — Journey 2 Step 4 ("wait for sync to run") and Journey 3 Step 2 ("confirm edits have not yet synced") give no "wait up to N seconds then fail" threshold. Acceptable for MVP manual testing; formalise when converting journeys to automated tests.
+- **[7-4 CR D3]** Session revocation propagation delay (Journey 3) — Proton session revocation may take seconds to propagate; if the app completes its current sync cycle before the 401 arrives, the re-auth modal (Step 4) may not appear. Fix requires app-level retry policy or explicit propagation delay documentation. Pre-existing infra constraint.
+- **[7-4 CR D4]** Journey 4 credential error message not formally specified — "app displays a clear error message" has no formal text or UI component requirement. Minimum MVP acceptance. Formalise in a dedicated accessibility/error-message audit pass pre-Flathub submission.

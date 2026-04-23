@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-23  # Story 7-3 done
+last_updated: 2026-04-23  # Story 7-4 in-progress
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -137,7 +137,7 @@ development_status:
   7-1-flatpak-manifest-and-permission-justifications: done
   7-2-appstream-metainfo-and-desktop-file: done
   7-3-ci-cd-pipelines: done
-  7-4-end-to-end-mvp-validation-and-manual-test-protocol: ready-for-dev
+  7-4-end-to-end-mvp-validation-and-manual-test-protocol: in-progress
   epic-7-retrospective: optional
 
   # Epic 8: SDK Compliance & Incremental Sync
