@@ -162,19 +162,21 @@ class TestOnWatcherStatus:
         win.status_footer_bar.set_initialising.assert_not_called()
         win.status_footer_bar.update_all_synced.assert_not_called()
 
-    def test_ready_with_pending_row_transitions_row_to_synced(self):
+    def test_ready_with_pending_row_does_not_transition_row(self):
+        # Pending rows stay grey until their own sync_progress/sync_complete fires.
         win = _make_window()
         row = _make_row(state="pending")
         win._sync_pair_rows["p1"] = row
         win.on_watcher_status("ready")
-        row.set_state.assert_called_with("synced")
+        row.set_state.assert_not_called()
 
-    def test_ready_with_pending_rows_calls_update_all_synced(self):
+    def test_ready_with_pending_rows_does_not_call_update_all_synced(self):
+        # Pending is treated like "syncing" — footer stays in current state.
         win = _make_window()
         row = _make_row(state="pending")
         win._sync_pair_rows["p1"] = row
         win.on_watcher_status("ready")
-        win.status_footer_bar.update_all_synced.assert_called_once()
+        win.status_footer_bar.update_all_synced.assert_not_called()
 
     def test_ready_does_not_touch_non_pending_rows(self):
         win = _make_window()
@@ -993,6 +995,56 @@ class TestErrorPendingCycleClearance:
 
         win.on_sync_complete({"pair_id": "p1", "timestamp": "2026-04-20T00:00:00.000Z"})
         assert "p1" not in win._error_pair_ids  # cleared after ONE cycle
+
+
+# ---------------------------------------------------------------------------
+# Story 7-0 — on_pair_reconciling
+# ---------------------------------------------------------------------------
+
+
+class TestOnPairReconciling:
+    def test_known_pair_sets_state_syncing(self):
+        win = _make_window()
+        row = _make_row(state="pending")
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_reconciling({"pair_id": "p1"})
+        row.set_state.assert_called_once_with("syncing")
+
+    def test_footer_set_reconciling_called_with_pair_name(self):
+        win = _make_window()
+        row = _make_row(pair_name="Photos")
+        win._sync_pair_rows["p1"] = row
+        win.on_pair_reconciling({"pair_id": "p1"})
+        win.status_footer_bar.set_reconciling.assert_called_once_with("Photos")
+
+    def test_unknown_pair_does_not_crash_and_falls_back_to_pair_id(self):
+        win = _make_window()
+        win.on_pair_reconciling({"pair_id": "unknown-id"})
+        win.status_footer_bar.set_reconciling.assert_called_once_with("unknown-id")
+
+    def test_reconciling_suppressed_when_errors_active(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win._error_pair_ids.add("p2")
+        win.on_pair_reconciling({"pair_id": "p1"})
+        win.status_footer_bar.set_reconciling.assert_not_called()
+
+    def test_reconciling_suppressed_when_conflicts_active(self):
+        win = _make_window()
+        row = _make_row(pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win._conflict_copies_by_pair["p2"] = ["/tmp/file.conflict-2026-01-01"]
+        win.on_pair_reconciling({"pair_id": "p1"})
+        win.status_footer_bar.set_reconciling.assert_not_called()
+
+    def test_folder_missing_row_state_not_overwritten_by_reconciling(self):
+        win = _make_window()
+        row = _make_row(state="folder_missing", pair_name="Docs")
+        win._sync_pair_rows["p1"] = row
+        win._folder_missing_pair_ids.add("p1")
+        win.on_pair_reconciling({"pair_id": "p1"})
+        row.set_state.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

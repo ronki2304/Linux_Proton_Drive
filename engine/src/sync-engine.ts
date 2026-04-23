@@ -56,6 +56,14 @@ function isLocalFolderMissing(err: unknown): boolean {
   );
 }
 
+// True when a SQLite FOREIGN KEY constraint failed — happens when remove_pair
+// IPC deletes a sync_pair row while reconcilePair is awaiting for that pair.
+function isForeignKeyConstraint(err: unknown): boolean {
+  if (err == null || typeof err !== "object") return false;
+  const msg = (err as Error).message ?? "";
+  return msg.includes("FOREIGN KEY constraint failed");
+}
+
 // ── Internal types ───────────────────────────────────────────────────────────
 
 interface LocalFile {
@@ -218,6 +226,7 @@ export class SyncEngine {
     const pairs = this.stateDb.listPairs();
     process.stderr.write(`[ENGINE] reconcileAndEnqueue: ${pairs.length} pair(s)\n`);
     for (let pairObj of pairs) {
+      this.emitEvent({ type: "pair_reconciling", payload: { pair_id: pairObj.pair_id } });
       try {
         await this.reconcilePair(pairObj, client);
       } catch (err) {
@@ -241,6 +250,16 @@ export class SyncEngine {
             payload: { pair_id: pairObj.pair_id, local_path: pairObj.local_path },
           });
           continue; // non-fatal — skip this pair, continue with others
+        }
+        // A FOREIGN KEY constraint failure means the pair was concurrently removed
+        // (remove_pair IPC) while reconcilePair was awaiting. The pair no longer
+        // exists — this is benign. Log for diagnostics and skip silently.
+        if (isForeignKeyConstraint(err)) {
+          debugLog(
+            `sync-engine: pair=${pairObj.pair_id.slice(-8)} removed mid-reconcile (FOREIGN KEY), skipping`,
+            err instanceof Error ? err : undefined,
+          );
+          continue;
         }
         process.stderr.write(`[ENGINE] sync_cycle_error pair=${pairObj.pair_id.slice(-8)}: ${msg}\n`);
         this.emitEvent({
@@ -1152,6 +1171,7 @@ export class SyncEngine {
       const msg = err instanceof Error ? err.message : "unknown";
       debugLog(
         `sync-engine: processQueueEntry failed pair=${pair.pair_id} entry=${entry.id} path=${entry.relative_path}: ${msg}`,
+        err instanceof Error ? err : undefined,
       );
       const errCode = (err as NodeJS.ErrnoException)?.code;
       const message = errCode

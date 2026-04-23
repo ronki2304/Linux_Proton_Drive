@@ -98,6 +98,7 @@ class Application(Adw.Application):
         self._engine.on_event("conflict_detected", self._on_conflict_detected)
         self._engine.on_event("crash_recovery_complete", self._on_crash_recovery_complete)
         self._engine.on_event("local_folder_missing", self._on_local_folder_missing)
+        self._engine.on_event("pair_reconciling", self._on_pair_reconciling)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -192,6 +193,11 @@ class Application(Adw.Application):
         self._watcher_status = payload.get("status", "unknown")
         if self._window is not None:
             self._window.on_watcher_status(self._watcher_status)
+
+    def _on_pair_reconciling(self, message: dict[str, Any]) -> None:
+        payload = message.get("payload", {})
+        if self._window is not None:
+            self._window.on_pair_reconciling(payload)
 
     def _on_sync_progress(self, message: dict[str, Any]) -> None:
         payload = message.get("payload", {})

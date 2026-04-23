@@ -4002,3 +4002,100 @@ describe("local folder missing detection", () => {
     expect(badEvent).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// FOREIGN KEY constraint mid-reconcile (pair removed while reconcilePair awaits)
+// ---------------------------------------------------------------------------
+describe("FOREIGN KEY constraint mid-reconcile", () => {
+  let localPath: string;
+
+  beforeEach(() => {
+    localPath = mkdtempSync(join(tmpdir(), "sync-engine-fk-"));
+  });
+
+  afterEach(() => {
+    mock.restore();
+    rmSync(localPath, { recursive: true, force: true });
+  });
+
+  it("skips silently when pair deleted during reconcile — no sync_cycle_error emitted", async () => {
+    const emitted: IpcPushEvent[] = [];
+    const fkError = new Error("FOREIGN KEY constraint failed");
+
+    const mockClient = {
+      listRemoteFolders: mock(async () => { throw fkError; }),
+      listRemoteFiles: mock(async () => []),
+    } as unknown as DriveClient;
+
+    const localDb = new StateDb(":memory:");
+    localDb.insertPair({
+      pair_id: "fk-pair",
+      local_path: localPath,
+      remote_path: "/Docs",
+      remote_id: "root-id",
+      created_at: new Date().toISOString(),
+      last_synced_at: null,
+    });
+
+    const localEngine = new SyncEngine(localDb, (e) => emitted.push(e));
+    localEngine.setDriveClient(mockClient);
+    await localEngine.reconcileAndEnqueue();
+
+    const errorEvents = emitted.filter(
+      (e) => e.type === "error" &&
+             (e.payload as Record<string, unknown>)["code"] === "sync_cycle_error",
+    );
+    expect(errorEvents).toHaveLength(0);
+  });
+
+  it("continues reconciling remaining pairs after FK skip", async () => {
+    const emitted: IpcPushEvent[] = [];
+    const fkError = new Error("FOREIGN KEY constraint failed");
+    const goodPath = mkdtempSync(join(tmpdir(), "sync-engine-fk-good-"));
+    let goodPairReconciled = false;
+
+    try {
+      let callCount = 0;
+      const mockClient = {
+        listRemoteFolders: mock(async () => {
+          callCount++;
+          if (callCount === 1) throw fkError;
+          goodPairReconciled = true;
+          return [];
+        }),
+        listRemoteFiles: mock(async () => []),
+      } as unknown as DriveClient;
+
+      const localDb = new StateDb(":memory:");
+      localDb.insertPair({
+        pair_id: "fk-pair",
+        local_path: localPath,
+        remote_path: "/Docs",
+        remote_id: "root-id",
+        created_at: new Date().toISOString(),
+        last_synced_at: null,
+      });
+      localDb.insertPair({
+        pair_id: "good-pair",
+        local_path: goodPath,
+        remote_path: "/Pics",
+        remote_id: "root-id2",
+        created_at: new Date().toISOString(),
+        last_synced_at: null,
+      });
+
+      const localEngine = new SyncEngine(localDb, (e) => emitted.push(e));
+      localEngine.setDriveClient(mockClient);
+      await localEngine.reconcileAndEnqueue();
+
+      expect(goodPairReconciled).toBe(true);
+      const errorEvents = emitted.filter(
+        (e) => e.type === "error" &&
+               (e.payload as Record<string, unknown>)["code"] === "sync_cycle_error",
+      );
+      expect(errorEvents).toHaveLength(0);
+    } finally {
+      rmSync(goodPath, { recursive: true, force: true });
+    }
+  });
+});

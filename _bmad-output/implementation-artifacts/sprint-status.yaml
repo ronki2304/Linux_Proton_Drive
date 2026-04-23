@@ -135,7 +135,12 @@ development_status:
   7-0a-startup-indicator-state: done
   7-0b-targeted-debt-cleanup: done
   7-1-flatpak-manifest-and-permission-justifications: done
-  7-2-appstream-metainfo-and-desktop-file: ready-for-dev
+  7-2-appstream-metainfo-and-desktop-file: done
   7-3-ci-cd-pipelines: ready-for-dev
   7-4-end-to-end-mvp-validation-and-manual-test-protocol: ready-for-dev
   epic-7-retrospective: optional
+
+  # Epic 8: SDK Compliance & Incremental Sync
+  epic-8: backlog
+  8-1-event-based-incremental-reconciliation: backlog
+  # 8-2-appversion-header-correction: deferred — pending Proton SDK team confirmation and version scheme

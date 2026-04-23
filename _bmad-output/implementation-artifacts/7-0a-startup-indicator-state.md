@@ -238,6 +238,23 @@ All findings resolved. Story is implementation-ready.
 | 4 | LOW | `test_pending_draws_grey_dot` redundantly set `row._state = "pending"` after `_make_row()` (factory already defaults to `"pending"`). Also `test_pending_transitions_to_syncing` had the same redundancy. | [x] Removed redundant explicit state assignments — factory default is self-documenting. `ui/tests/test_sync_pair_row.py` |
 | 5 | LOW | AC6 gap: only `set_state("syncing")` was tested from pending. AC6 explicitly lists synced/offline/error/conflict too — the synced path is the actual startup happy path and deserved its own test. | [x] Added `test_pending_transitions_to_synced`. 662 UI tests pass, 0 regressions. `ui/tests/test_sync_pair_row.py` |
 
+**Code Review Pass 2 (Amelia) — 2026-04-23**
+
+*Post-implementation design refinement:* After the party-mode review, the engine gained a `pair_reconciling` event emitted before each `reconcilePair` call. This rendered the AC3/AC4 watcher-ready transition approach stale. The implementation was updated:
+
+- **AC3/AC4 design change:** `on_watcher_status("ready")` no longer transitions pending rows to "synced". Instead, `populate_pairs` immediately sets rows to `"syncing"`, and `on_pair_reconciling` fires per-pair to drive state. "Pending" is treated like "syncing" in the any_syncing guard — preventing a false "All synced" flash before reconciliation completes. This is strictly better than the original spec: avoids the pending→synced→syncing state regression that the original design produced.
+
+- **AC1 refinement:** Rows start `"pending"` from `__init__`, but `populate_pairs` immediately calls `row.set_state("syncing")`. The pending state exists for sub-microsecond; visible row state is always "syncing" from first render. The spirit of AC1 (no false green at startup) is preserved.
+
+| # | Severity | Finding | Resolution |
+|---|----------|---------|------------|
+| 6 | CRITICAL | `findChildByName` (sdk.ts) had no type filter — a same-named folder UID could be passed to `uploadFileRevision`, causing confusing SDK failure instead of "this name is a folder" error. | [x] Added `if (node.type && node.type !== NodeType.File) continue;` guard. `engine/src/sdk.ts` |
+| 7 | HIGH | `set_reconciling` and `on_pair_reconciling` had no unit tests. | [x] Added `TestStatusFooterBarSetReconciling` (4 tests) in `test_status_footer_bar.py`; added `TestOnPairReconciling` (5 tests) in `test_window_routing.py`. |
+| 8 | LOW | DEFER: Race condition in draft recovery (findChildByName → uploadFileRevision), inherent to distributed system. | [x] Deferred to `deferred-work.md` [7-0 CR2 D1] |
+| 9 | LOW | DEFER: `on_pair_reconciling` footer falls back to UUID when row not found — benign, only on concurrent removal. | [x] Deferred to `deferred-work.md` [7-0 CR2 D2] |
+| 10 | LOW | DEFER: `set_reconciling` no pluralization for multi-pair — scope-expanding. | [x] Deferred to `deferred-work.md` [7-0 CR2 D3] |
+| 11 | LOW | DEFER: SDK draft recovery + FK handling are scope-expanding additions beyond 7-0 ACs. | [x] Deferred to `deferred-work.md` [7-0 CR2 D4] |
+
 ---
 
 ## Dev Agent Record

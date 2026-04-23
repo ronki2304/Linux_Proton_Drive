@@ -161,6 +161,15 @@ These were surfaced during the party-mode validation of Story 7.2 (2026-04-23). 
 
 ---
 
+## Deferred from: code review of 7-0 second pass (2026-04-23)
+
+- **[7-0 CR2 D1]** Race condition in `uploadFile` draft recovery: between `listRemoteFiles`/`findChildByName` and `uploadFileRevision`, the remote file could be deleted by another client. Inherent limitation of best-effort recovery — not actionable without distributed locking. `engine/src/sdk.ts:476-486`
+- **[7-0 CR2 D2]** `on_pair_reconciling` falls back to raw `pair_id` (UUID) in footer label when the row is not in `_sync_pair_rows`. Benign — this only occurs if a pair was removed concurrently (row already absent from UI), so the footer message is transient noise. `ui/src/protondrive/window.py:736`
+- **[7-0 CR2 D3]** `set_reconciling` shows single pair name only, no count or indication of multi-pair reconciliation progress (e.g., "Reconciling 3 pairs"). Scope-expanding UX improvement; acceptable for MVP. `ui/src/protondrive/widgets/status_footer_bar.py`
+- **[7-0 CR2 D4]** SDK `uploadFile` recovery paths (`NodeWithSameNameExistsValidationError`, draft revision handling) and engine FK constraint skip are scope-expanding additions beyond the 7-0a/7-0b acceptance criteria. No bugs found; documented here as scope note for future story attribution.
+
+---
+
 ## Deferred from: code review of 7-1 (2026-04-23)
 
 - **[7-1 CR D1]** DoH resolver hardcodes Cloudflare `1.1.1.1` and ignores `http_proxy`/`https_proxy` env vars — proxy users behind corporate firewalls blocking Cloudflare get no connectivity; no fallback DNS server. Pre-existing architectural choice. `engine/src/main.ts`

@@ -447,6 +447,157 @@ describe("DriveClient.uploadFile", () => {
     ).rejects.toBeInstanceOf(SyncError);
     expect(cancelledWith).not.toBe("<not called>");
   });
+
+  it("on NodeWithSameNameExistsValidationError: finds existing file and upgrades to uploadFileRevision", async () => {
+    const nameCollision = sdkErrorFactoriesForTests.nodeWithSameName("file.txt");
+    const fakeRevController = {
+      pause: () => {},
+      resume: () => {},
+      completion: mock(async () => ({ nodeUid: "existing-node", nodeRevisionUid: "new-rev" })),
+    };
+    const fakeRevUploader = {
+      uploadFromStream: mock(async (_s: unknown, _t: unknown) => fakeRevController),
+      uploadFromFile: mock(() => {}),
+    };
+    const existingFileNode = makeFakeFileNode("existing-node", "file.txt", new Date(), 512);
+    const sdk = makeFakeSdk({
+      getFileUploader: mock(async () => { throw nameCollision; }),
+      getFileRevisionUploader: mock(async (_n: unknown, _m: unknown) => fakeRevUploader),
+      iterateFolderChildren: asyncGenOf([existingFileNode]),
+    });
+    const client = new DriveClient(sdk);
+    const stream = new ReadableStream<Uint8Array>();
+    const result = await client.uploadFile("parent-id", "file.txt", {
+      stream,
+      sizeBytes: 512,
+      modificationTime: new Date(),
+      mediaType: "text/plain",
+    });
+    expect(result).toEqual({ node_uid: "existing-node", revision_uid: "new-rev" });
+  });
+
+  it("on ValidationError 'Draft revision already exists': finds existing file and upgrades to uploadFileRevision", async () => {
+    const draftErr = sdkErrorFactoriesForTests.validation("Draft revision already exists for this link");
+    const fakeRevController = {
+      pause: () => {},
+      resume: () => {},
+      completion: mock(async () => ({ nodeUid: "draft-node", nodeRevisionUid: "recovered-rev" })),
+    };
+    const fakeRevUploader = {
+      uploadFromStream: mock(async (_s: unknown, _t: unknown) => fakeRevController),
+      uploadFromFile: mock(() => {}),
+    };
+    const existingFileNode = makeFakeFileNode("draft-node", "stale.log", new Date(), 100);
+    const sdk = makeFakeSdk({
+      getFileUploader: mock(async () => { throw draftErr; }),
+      getFileRevisionUploader: mock(async (_n: unknown, _m: unknown) => fakeRevUploader),
+      iterateFolderChildren: asyncGenOf([existingFileNode]),
+    });
+    const client = new DriveClient(sdk);
+    const stream = new ReadableStream<Uint8Array>();
+    const result = await client.uploadFile("parent-id", "stale.log", {
+      stream,
+      sizeBytes: 100,
+      modificationTime: new Date(),
+      mediaType: "text/plain",
+    });
+    expect(result).toEqual({ node_uid: "draft-node", revision_uid: "recovered-rev" });
+  });
+
+  it("on ValidationError 'Draft revision already exists': finds draft-only node via unfiltered walk and upgrades to uploadFileRevision", async () => {
+    const draftErr = sdkErrorFactoriesForTests.validation("Draft revision already exists for this link");
+    const fakeRevController = {
+      pause: () => {},
+      resume: () => {},
+      completion: mock(async () => ({ nodeUid: "draft-only-node", nodeRevisionUid: "fixed-rev" })),
+    };
+    const fakeRevUploader = {
+      uploadFromStream: mock(async (_s: unknown, _t: unknown) => fakeRevController),
+      uploadFromFile: mock(() => {}),
+    };
+    // Draft-only node has no activeRevision so listRemoteFiles skips it,
+    // but the unfiltered walk returns it.
+    const draftOnlyNode = makeFakeNode("draft-only-node", "ghost.log", NODE_TYPE_FILE);
+    let callCount = 0;
+    const sdk = makeFakeSdk({
+      getFileUploader: mock(async () => { throw draftErr; }),
+      getFileRevisionUploader: mock(async (_n: unknown, _m: unknown) => fakeRevUploader),
+      iterateFolderChildren: mock(async function* (_p: unknown, opts?: { type?: string }) {
+        callCount++;
+        // First call (listRemoteFiles with type filter): yield nothing — no active revision
+        if (opts && opts.type) return;
+        // Second call (findChildByName, no filter): yield the draft-only node
+        yield draftOnlyNode;
+      }),
+    });
+    const client = new DriveClient(sdk);
+    const result = await client.uploadFile("parent-id", "ghost.log", {
+      stream: new ReadableStream<Uint8Array>(),
+      sizeBytes: 1,
+      modificationTime: new Date(),
+      mediaType: "text/plain",
+    });
+    expect(result).toEqual({ node_uid: "draft-only-node", revision_uid: "fixed-rev" });
+    expect(callCount).toBe(2); // typed walk + unfiltered walk
+  });
+
+  it("on ValidationError 'Draft revision already exists': folder with same name is skipped, file node returned", async () => {
+    const draftErr = sdkErrorFactoriesForTests.validation("Draft revision already exists for this link");
+    const fakeRevController = {
+      pause: () => {},
+      resume: () => {},
+      completion: mock(async () => ({ nodeUid: "file-uid", nodeRevisionUid: "rev-uid" })),
+    };
+    const fakeRevUploader = {
+      uploadFromStream: mock(async (_s: unknown, _t: unknown) => fakeRevController),
+      uploadFromFile: mock(() => {}),
+    };
+    // Folder with same name appears first; file node (the draft) appears second.
+    const folderNode = makeFakeNode("folder-uid", "file.txt", NODE_TYPE_FOLDER);
+    const fileNode = makeFakeNode("file-uid", "file.txt", NODE_TYPE_FILE);
+    const sdk = makeFakeSdk({
+      getFileUploader: mock(async () => { throw draftErr; }),
+      getFileRevisionUploader: mock(async (_n: unknown, _m: unknown) => fakeRevUploader),
+      iterateFolderChildren: mock(async function* (_p: unknown, opts?: { type?: string }) {
+        // listRemoteFiles (typed walk) yields nothing — no active revision.
+        if (opts && opts.type) return;
+        // findChildByName (unfiltered walk) yields folder first, then file.
+        yield folderNode;
+        yield fileNode;
+      }),
+    });
+    const client = new DriveClient(sdk);
+    const result = await client.uploadFile("parent-id", "file.txt", {
+      stream: new ReadableStream<Uint8Array>(),
+      sizeBytes: 1,
+      modificationTime: new Date(),
+      mediaType: "text/plain",
+    });
+    // Must use the file node UID, not the folder UID.
+    expect(result).toEqual({ node_uid: "file-uid", revision_uid: "rev-uid" });
+  });
+
+  it("on ValidationError 'Draft revision already exists' with no match in any walk: throws SyncError with clear message", async () => {
+    const draftErr = sdkErrorFactoriesForTests.validation("Draft revision already exists for this link");
+    const sdk = makeFakeSdk({
+      getFileUploader: mock(async () => { throw draftErr; }),
+      iterateFolderChildren: asyncGenOf([]),
+    });
+    const client = new DriveClient(sdk);
+    let caught: unknown;
+    try {
+      await client.uploadFile("parent-id", "ghost.log", {
+        stream: new ReadableStream<Uint8Array>(),
+        sizeBytes: 1,
+        modificationTime: new Date(),
+        mediaType: "text/plain",
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(SyncError);
+    expect((caught as Error).message).toContain("stale draft revision");
+  });
 });
 
 describe("DriveClient.uploadFileRevision", () => {

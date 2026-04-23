@@ -54,6 +54,16 @@ class StatusFooterBar(Gtk.Box):
             ["All synced"],
         )
 
+    def set_reconciling(self, pair_name: str) -> None:
+        """Show reconciliation state for a pair."""
+        text = f"Reconciling {pair_name}\u2026"
+        self.footer_label.set_text(text)
+        self._set_dot_state("syncing")
+        self.update_property(
+            [Gtk.AccessibleProperty.LABEL],
+            [text],
+        )
+
     def set_initialising(self) -> None:
         """Show watcher initialisation state."""
         self.footer_label.set_text("Initialising file watcher\u2026")

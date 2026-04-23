@@ -397,3 +397,27 @@ class TestStatusFooterBarPendingState:
         assert bar._dot_state == "pending"
         bar.update_all_synced()
         assert bar._dot_state == "synced"
+
+
+class TestStatusFooterBarSetReconciling:
+    def test_label_set_to_reconciling(self):
+        bar = _make_bar()
+        bar.set_reconciling("Documents")
+        bar.footer_label.set_text.assert_called_with("Reconciling Documents…")
+
+    def test_dot_state_becomes_syncing(self):
+        bar = _make_bar()
+        bar.set_reconciling("Documents")
+        assert bar._dot_state == "syncing"
+
+    def test_css_class_added(self):
+        bar = _make_bar()
+        bar.set_reconciling("Documents")
+        bar.footer_dot.add_css_class.assert_called_with("sync-dot-syncing")
+
+    def test_accessible_label_updated(self):
+        bar = _make_bar()
+        bar.set_reconciling("Photos")
+        assert bar._accessible_label_args is not None
+        _, values = bar._accessible_label_args
+        assert "Reconciling Photos…" in values

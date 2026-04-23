@@ -404,6 +404,30 @@ export class DriveClient {
   }
 
   /**
+   * Walk ALL immediate children of a folder (no server-side type filter) and
+   * return the UID of the first file node whose name matches. Folders with the
+   * same name are skipped client-side. Used to locate draft-only file nodes
+   * that have no active revision and are therefore invisible to the typed
+   * `listRemoteFiles` call.
+   *
+   * Best-effort: returns undefined on any error so callers can fall through.
+   */
+  private async findChildByName(parentId: string, name: string): Promise<string | undefined> {
+    try {
+      for await (const result of this.sdk.iterateFolderChildren(parentId)) {
+        if (!result.ok) continue;
+        const node = result.value as { uid: string; name: string; type?: string };
+        // Skip folders — a same-named folder must not be treated as the file's draft node.
+        if (node.type && node.type !== NodeType.File) continue;
+        if (node.name === name) return node.uid;
+      }
+    } catch {
+      /* best-effort: if the walk fails, fall through to manual-cleanup error */
+    }
+    return undefined;
+  }
+
+  /**
    * Upload a file to the given parent folder.
    *
    * Delegates to the SDK uploader chain
@@ -434,10 +458,38 @@ export class DriveClient {
         revision_uid: result.nodeRevisionUid,
       };
     } catch (err) {
-      // Cancel the source stream defensively so the caller's file descriptor
-      // (e.g. `fs.createReadStream` via `Readable.toWeb`) is released even
-      // when the SDK aborts mid-stream. Best-effort: a stream that is already
-      // closed/locked will reject the cancel — swallow that secondary error.
+      // Recovery paths — stream is unconsumed (errors fire during draft creation,
+      // before any bytes are transferred), so body can be forwarded as-is.
+
+      // A file with this name already exists remotely (race or retry).
+      // Find its UID and upload a new revision instead of creating a duplicate.
+      if (err instanceof NodeWithSameNameExistsValidationError) {
+        const files = await this.listRemoteFiles(parentId);
+        const existing = files.find((f) => f.name === name);
+        if (existing) return this.uploadFileRevision(existing.id, body);
+        throw new SyncError(`File "${name}" exists remotely but could not be found`, { cause: err });
+      }
+
+      // Stale draft from a previous interrupted upload. The SDK found the node
+      // but couldn't attach a new draft because one is already pending.
+      // Two-pass recovery: normal file listing first (node has active revision),
+      // then unfiltered children walk (draft-only nodes have no active revision
+      // and are invisible to the typed file listing but still appear in the raw
+      // folder children iterator). uploadFileRevision handles 2511 natively.
+      if (err instanceof ValidationError && err.message.includes("Draft revision already exists")) {
+        const files = await this.listRemoteFiles(parentId);
+        const existing = files.find((f) => f.name === name);
+        if (existing) return this.uploadFileRevision(existing.id, body);
+        const draftUid = await this.findChildByName(parentId, name);
+        if (draftUid) return this.uploadFileRevision(draftUid, body);
+        throw new SyncError(
+          `"${name}" has a stale draft revision on ProtonDrive — clear it from ProtonDrive Web and retry`,
+          { cause: err },
+        );
+      }
+
+      // Non-recoverable: cancel the source stream so the caller's file descriptor
+      // is released, then translate the SDK error into an engine error type.
       try {
         await body.stream.cancel(err);
       } catch {

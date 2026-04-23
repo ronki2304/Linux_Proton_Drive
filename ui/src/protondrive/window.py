@@ -534,6 +534,7 @@ class MainWindow(Adw.ApplicationWindow):
             local_path = pair.get("local_path", "")
             pair_name = os.path.basename(local_path.rstrip("/")) or local_path
             row = SyncPairRow(pair_id, pair_name)
+            row.set_state("syncing")
             self.pairs_list.append(row)
             self._sync_pair_rows[pair_id] = row
 
@@ -725,6 +726,16 @@ class MainWindow(Adw.ApplicationWindow):
         resume_in = int(resume_in) if resume_in > 0 else 5  # safe default
         self.status_footer_bar.set_rate_limited(resume_in)
 
+    def on_pair_reconciling(self, payload: dict[str, Any]) -> None:
+        """Set pair row to amber and footer to 'Reconciling…' when engine starts reconciling."""
+        pair_id = payload.get("pair_id", "")
+        row = self._sync_pair_rows.get(pair_id)
+        if row is not None and pair_id not in self._folder_missing_pair_ids:
+            row.set_state("syncing")
+        if self._total_active_conflicts() == 0 and not self._error_pair_ids:
+            pair_name = row.pair_name if row is not None else pair_id
+            self.status_footer_bar.set_reconciling(pair_name)
+
     def on_sync_progress(self, payload: dict[str, Any]) -> None:
         """Update pair row and footer bar when sync is in progress."""
         pair_id = payload.get("pair_id", "")
@@ -838,10 +849,13 @@ class MainWindow(Adw.ApplicationWindow):
                 return
             if self._error_pair_ids:  # Story 5-9: error > synced
                 return
-            for row in self._sync_pair_rows.values():
-                if row.state == "pending":
-                    row.set_state("synced")
-            any_syncing = any(r.state == "syncing" for r in self._sync_pair_rows.values())
+            # Pending rows stay grey until their own sync_progress/sync_complete
+            # fires — they represent pairs still waiting to be reconciled.
+            # Treat "pending" like "syncing" so the footer does not flash a
+            # false "All synced" while pairs are queued but not yet started.
+            any_syncing = any(
+                r.state in ("syncing", "pending") for r in self._sync_pair_rows.values()
+            )
             any_offline = any(r.state == "offline" for r in self._sync_pair_rows.values())
             if not any_syncing and not any_offline:
                 self.status_footer_bar.update_all_synced()

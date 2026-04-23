@@ -6,4 +6,5 @@ Icon=io.github.ronki2304.ProtonDriveLinuxClient
 Terminal=false
 Type=Application
 Categories=Network;FileTransfer;
+Keywords=sync;proton;drive;cloud;
 StartupNotify=true

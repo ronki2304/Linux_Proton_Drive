@@ -1,3 +1,6 @@
+[![Flathub](https://img.shields.io/flathub/v/io.github.ronki2304.ProtonDriveLinuxClient?label=Flathub)](https://flathub.org/apps/io.github.ronki2304.ProtonDriveLinuxClient)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
 # ProtonDrive Linux Client
 
 An unofficial open-source sync client for [ProtonDrive](https://proton.me/drive) on Linux — built as a native GTK4 desktop app using Proton's official SDK.
@@ -15,6 +18,8 @@ An unofficial open-source sync client for [ProtonDrive](https://proton.me/drive)
 - Token expiry recovery — re-auth modal with queued change count, no data loss
 - Error surfacing — disk full, permission denied, inotify limit exceeded, file locked
 - Multi-pair management — add, remove, and manage multiple sync pairs independently
+
+![ProtonDrive Linux Client main window](screenshots/main-window.png)
 
 ---
 
@@ -38,7 +43,7 @@ flatpak install flathub io.github.ronki2304.ProtonDriveLinuxClient
 
 ### Why `--filesystem=home`?
 
-The Flatpak manifest requests broad filesystem access. This is a platform limitation: inotify (the Linux file-watching mechanism used for real-time sync) requires direct filesystem access — the XDG portal FUSE layer does not fire inotify events. This is a confirmed upstream limitation ([xdg-desktop-portal #567](https://github.com/flatpak/xdg-desktop-portal/issues/567)), not a design choice. A full plain-language justification is included in the manifest comments.
+The Flatpak manifest requests broad filesystem access. This is a platform limitation: inotify (the Linux file-watching mechanism used for real-time sync) requires direct filesystem access — the XDG portal FUSE layer does not fire inotify events. This is a confirmed upstream limitation ([xdg-desktop-portal #567](https://github.com/flatpak/xdg-desktop-portal/issues/567)), not a design choice. A full plain-language justification is in [`flatpak/PERMISSIONS.md`](./flatpak/PERMISSIONS.md).
 
 ---
 
@@ -101,18 +106,22 @@ Log file is capped at 5 MB and rotates to `engine.log.1`. Tokens are never writt
 
 - **System-browser auth** — replace embedded WebKit with `Gio.AppInfo.launch_default_for_uri()` for the Proton login flow. Improves hardware-key 2FA, password manager autofill, and enables aarch64 support (current WebKitGTK JIT instability on ARM64). Same localhost callback pattern, no server-side changes.
 - **ARM Linux support** — blocked on system-browser auth above.
-- **Remote change polling** — currently the engine detects remote changes only on startup and periodic reconcile. A polling loop or SDK event subscription would surface remote-side edits faster.
+- **Incremental reconciliation via SDK events** — on every startup the engine does a full remote tree walk for each pair (all `GET /folders/.../children` calls), which is slow for large folders and triggers Proton's public-key API rate limit (HTTP 429) on pre-2024 nodes. The SDK already ships a complete events subsystem: `DriveEventType.NodeCreated/NodeUpdated/NodeDeleted`, `VolumeEventManager.getEvents(eventId)` to fetch only changes since a saved event ID, `getLatestEventId()` to bookmark position after a full walk, `DriveEventType.TreeRefresh` as the server-side signal to fall back to a full walk (e.g. log pruned), and `DriveEventType.FastForward` when nothing changed. The pattern: after each reconcile persist `getLatestEventId()` to the state DB; on next startup call `getEvents(savedId)` and process only the delta nodes, falling back to a full walk only on `TreeRefresh`. This would make subsequent startups near-instant regardless of how long the app was closed. Needs confirmation from the Proton Drive SDK team that `VolumeEventManager` is a supported interface for third-party clients before building on it.
 - **Selective sync** — choose which remote subfolders to sync per pair, rather than syncing the full remote folder.
 - **Tray icon** — background sync with system tray status indicator, without keeping the main window open.
+- **Per-pair parallel reconciliation** — currently the engine reconciles all pairs sequentially and only starts queue processing after all pairs have finished their remote tree walk. Each pair should start uploading/downloading as soon as its own reconciliation is done, independent of other pairs.
 
 ### Known MVP limitations
 
 - No automated integration tests — Proton's auth requires CAPTCHA; integration tests need a manually captured token (`PROTONDRIVE_DEBUG=1` + `secret-tool`). Documented in CONTRIBUTING.md.
 - inotify watch limit — the Linux default of 8192 watches may be insufficient for very large sync folders. Increase with `fs.inotify.max_user_watches=524288` in `/etc/sysctl.d/`. The app surfaces this as an actionable error.
 - Same-day conflict copies — if the same file produces two conflicts on the same calendar day, the second copy overwrites the first. Rare in practice; scheduled for post-MVP hardening.
+- Draft-only nodes — if a file upload is interrupted after the remote node is created but before the first revision is committed, the node has no active revision. The engine auto-recovers via a two-pass lookup (typed listing, then unfiltered children walk). Manual deletion from ProtonDrive Web is only needed in the rare case where the SDK does not expose the draft node in any listing.
 
 ---
 
 ## License
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
 MIT — see [LICENSE](./LICENSE).

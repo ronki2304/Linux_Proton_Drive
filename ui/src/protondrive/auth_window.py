@@ -410,20 +410,27 @@ class AuthWindow(Adw.Bin):
         self.emit("auth-completed", token)
 
     def mark_last_token_rejected(self) -> None:
-        """Record the last-sent token as permanently rejected by the engine.
+        """Record the last-sent token as temporarily rejected by the engine.
 
         Called when token_expired fires while the auth browser is active.
-        The visitor-session cookie that Proton's login page always creates has
-        insufficient scope and must never be retried — but we must NOT clear
-        cookies (that would erase the user's "remember this device" 2FA state).
+        The token is blocked for _RESEND_INTERVAL_S, then allowed to retry —
+        after 2FA Proton upgrades the same cookie's scope server-side without
+        changing its value, so a permanent block would leave the user stuck.
 
-        The rejected set is cleared in _on_capture_message when auth_success
-        fires, so that 2FA scope upgrades (same token, broader scope after 2FA)
-        are still caught by the resend timer.
+        The rejected set is also cleared in _on_capture_message when
+        auth_success fires (password captured), which handles the normal
+        email+password login path immediately without waiting for the timer.
         """
         if self._last_token_sent is not None:
-            self._rejected_tokens.add(self._last_token_sent)
-            print("[AUTH] token rejected by engine — won't retry", file=sys.stderr)
+            token = self._last_token_sent
+            self._rejected_tokens.add(token)
+            print("[AUTH] token rejected by engine — will retry after interval", file=sys.stderr)
+
+            def _lift(t: str = token) -> bool:
+                self._rejected_tokens.discard(t)
+                return False  # one-shot timer
+
+            GLib.timeout_add_seconds(int(self._RESEND_INTERVAL_S), _lift)
 
     def mark_auth_complete(self) -> None:
         """Tear down the WebView and stop polling.

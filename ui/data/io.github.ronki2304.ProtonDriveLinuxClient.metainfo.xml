@@ -5,13 +5,67 @@
   <summary>Unofficial open-source sync client for ProtonDrive on Linux</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
+
+  <developer id="io.github.ronki2304">
+    <name>ronki2304</name>
+  </developer>
+
   <description>
     <p>
-      An unofficial, open-source desktop sync client for ProtonDrive,
-      built with GTK4 and Libadwaita for the GNOME desktop.
+      ProtonDrive Linux Client is an unofficial, open-source desktop sync client for
+      ProtonDrive, built with GTK4 and Libadwaita. It uses Proton's official
+      @protontech/drive-sdk — the same SDK Proton uses for their own CLI — ensuring
+      long-term API compatibility.
+    </p>
+    <p>
+      Authenticate with your Proton account through an embedded browser window with
+      full 2FA support. Set up one or more local folders to sync with ProtonDrive,
+      with two-way sync, conflict detection, and automatic conflict copies.
+    </p>
+    <p>
+      The client handles real-world failure modes: offline change queuing with replay on
+      reconnect, token expiry recovery without data loss, and actionable errors for disk
+      full, permission denied, inotify limit exceeded, and file locked conditions.
     </p>
   </description>
+
   <launchable type="desktop-id">io.github.ronki2304.ProtonDriveLinuxClient.desktop</launchable>
-  <url type="homepage">https://github.com/ronki2304/ProtonDriveLinuxClient</url>
-  <content_rating type="oars-1.1" />
+
+  <url type="homepage">https://github.com/ronki2304/ProtonDrive-LinuxClient</url>
+  <url type="bugtracker">https://github.com/ronki2304/ProtonDrive-LinuxClient/issues</url>
+
+  <screenshots>
+    <!-- TODO: replace with real screenshot once app is running in CI -->
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/ronki2304/ProtonDrive-LinuxClient/main/screenshots/main-window.png</image>
+      <caption>Main window showing sync pair management</caption>
+    </screenshot>
+  </screenshots>
+
+  <releases>
+    <release version="0.1.0" date="2026-04-23">
+      <description>
+        <p>Initial release of ProtonDrive Linux Client.</p>
+        <ul>
+          <li>Authenticate with your Proton account via an embedded browser — no manual token management</li>
+          <li>Set up and manage multiple local folders synced to ProtonDrive</li>
+          <li>Two-way file sync with conflict detection and automatic conflict copies</li>
+          <li>Offline resilience — changes queue while offline and replay automatically on reconnect</li>
+          <li>Token expiry recovery with a re-auth modal showing queued change count</li>
+          <li>Actionable error surfacing for disk full, permission denied, inotify limit, and file locked</li>
+          <li>Missing local folder detection with recovery prompt</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">none</content_attribute>
+    <content_attribute id="social-info">none</content_attribute>
+    <content_attribute id="social-audio">none</content_attribute>
+    <content_attribute id="social-location">none</content_attribute>
+    <content_attribute id="social-contacts">none</content_attribute>
+    <content_attribute id="money-purchasing">none</content_attribute>
+    <content_attribute id="money-gambling">none</content_attribute>
+  </content_rating>
 </component>

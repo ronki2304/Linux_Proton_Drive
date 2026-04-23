@@ -184,6 +184,7 @@ This story is documentation and manifest only. No Python, TypeScript, Blueprint,
 ### Review Findings
 
 - [x] [Review][Patch] Missing "Intentionally Not Requested" section in PERMISSIONS.md for `--filesystem=/run/systemd/resolve:ro` [flatpak/PERMISSIONS.md] — applied: added "Intentionally Not Requested" section + clarified proxy --env= guidance
+- [x] [party-mode 2026-04-23][Enhancement] PERMISSIONS.md `--filesystem=home` section claimed "We have reviewed this decision with Flathub maintainers" — unverifiable at time of writing; rewrote to forward-looking: "This permission requires explicit justification during Flathub submission; we will address this with Flathub reviewers…" [flatpak/PERMISSIONS.md:46-47] — applied
 - [x] [Review][Defer] DoH resolver hardcodes Cloudflare 1.1.1.1 and ignores `http_proxy` env var [engine/src/main.ts] — deferred, pre-existing
 - [x] [Review][Defer] DoH resolver has no request timeout — hangs indefinitely if 1.1.1.1 unreachable [engine/src/main.ts] — deferred, pre-existing
 - [x] [Review][Defer] Inotify watcher exhaustion does not auto-recover when descriptors become available [engine/src/watcher.ts] — deferred, pre-existing
@@ -213,6 +214,12 @@ claude-sonnet-4-6 (via party-mode multi-agent review: Bob SM, Winston Architect,
 - 1 patch applied: added "Intentionally Not Requested" section to PERMISSIONS.md documenting deliberate omission of `--talk-name=org.freedesktop.secrets` and `--filesystem=/run/systemd/resolve:ro`; clarified proxy `--env=` as recommended approach with Flatpak 1.3.1+ passthrough noted.
 - 5 pre-existing issues deferred to deferred-work.md [7-1 CR D1–D5]: DoH resolver limitations, inotify non-recovery, credential backend mid-session crash, silent None token return.
 - 8 findings dismissed: RTK diff display artifact (fake duplicate heading), proxy env-var concern (Flatpak whitelists proxy vars by default since 1.3.1+), defensive phrasing, and pre-existing code issues outside story scope.
+
+### Second Party-Mode Pass (2026-04-23) — Bob / Winston / Quinn
+
+- All 7 ACs re-confirmed PASS on fresh read of live manifest + PERMISSIONS.md.
+- 1 enhancement applied: rewrote aspirational "We have reviewed this decision with Flathub maintainers" to honest forward-looking language (see Review Findings above).
+- No new deferrals. No scope-expanding items surfaced. Story remains `done`.
 
 ### File List
 

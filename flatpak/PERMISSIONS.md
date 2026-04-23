@@ -43,8 +43,9 @@ This is a known upstream limitation:
 https://github.com/flatpak/xdg-desktop-portal/issues/567
 
 Until that bug is resolved upstream, `--filesystem=home` is the only way to
-provide reliable file-change detection. We have reviewed this decision with
-Flathub maintainers and will revisit when xdg-desktop-portal #567 is fixed.
+provide reliable file-change detection. This permission requires explicit
+justification during Flathub submission; we will address this with Flathub
+reviewers and will revisit when xdg-desktop-portal #567 is fixed.
 
 **What this permission grants:**
 - Read and write access to files in your home directory
