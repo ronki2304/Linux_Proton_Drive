@@ -38,6 +38,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 flatpak/repo/
 **/__pycache__/
+ui/.venv/
+_repo/
+.rtk/
+screenshots/
+.claude/pipeline-logs/
 
 # GLib schema compiler output — regenerated from .gschema.xml by meson or
 # glib-compile-schemas on each build; never commit.

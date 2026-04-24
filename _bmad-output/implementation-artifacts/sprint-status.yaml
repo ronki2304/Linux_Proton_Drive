@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-23  # Story 7-4 in-progress
+last_updated: 2026-04-24  # Story 7-4 in-progress; epics 5+6 closed
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -103,7 +103,7 @@ development_status:
   epic-4-retrospective: done
 
   # Epic 5: Token Expiry & Error Recovery
-  epic-5: in-progress
+  epic-5: done
   5-0-pre-epic-5-debt-cleanup: done
   5-1-401-detection-and-sync-halt: done
   5-2-re-auth-modal-with-queued-change-count: done
@@ -117,7 +117,7 @@ development_status:
   epic-5-retrospective: done
 
   # Epic 6: Multi-Pair Management & Validation
-  epic-6: in-progress
+  epic-6: done
   6-0a-unbounded-loop-recursion-safety: done
   6-0b-error-code-routing-correctness: done
   6-0c-ui-state-correctness: done

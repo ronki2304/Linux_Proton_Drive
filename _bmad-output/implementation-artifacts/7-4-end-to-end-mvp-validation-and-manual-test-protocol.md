@@ -198,6 +198,11 @@ findings: removed dead `state/protondrive` rm (app never writes XDG_STATE), adde
 to J2 Step 4, confirmed inline comment covers Flatpak path explanation. 4 items deferred to
 deferred-work.md. All 16 total findings across both passes marked [x].
 
+✅ Party-Mode Session 4 complete (2026-04-24): 2 patches applied to TESTING.md (Journey 4 Setup
+block added for source-code context, Orca pair removal dialog row annotated as J5-optional).
+1 item deferred to deferred-work.md [7-4 PM4 D1] (J4 Step 3 KWallet trigger not reproducible on
+demand — exploratory-only for MVP). All 3 Session 4 findings marked [x].
+
 ⏳ Phase 2 blocked on: all Epic 7 stories marked `done` (currently 7-4 itself is `in-progress`).
 Story status intentionally left `in-progress` — Task 6 requires human execution.
 
@@ -212,6 +217,7 @@ Story status intentionally left `in-progress` — Task 6 requires human executio
 **Session 1:** 2026-04-23 — agents: Bob (SM), Quinn (QA), Winston (Architect), Paige (Tech Writer), Amelia (Dev)
 **Session 2:** 2026-04-23 — agents: Bob (SM), Quinn (QA), Winston (Architect), Paige (Tech Writer) — autonomous re-validation pass
 **Session 3:** 2026-04-23 — agents: Bob (SM), Quinn (QA), Winston (Architect), Paige (Tech Writer), Amelia (Dev) — post-CR-pass-2 autonomous validation
+**Session 4:** 2026-04-24 — agents: Bob (SM), Quinn (QA), Winston (Architect), Paige (Tech Writer), Amelia (Dev) — final autonomous validation sweep
 
 ### Findings
 
@@ -282,3 +288,16 @@ Story status intentionally left `in-progress` — Task 6 requires human executio
 
 - [x] **[LOW] PF3 — Explanatory context for explicit Flatpak paths** [TESTING.md:uninstall]
   P1 patch removed the Flatpak XDG root note. Inline comment in the bash block now explains the path rationale ("The Flatpak sandbox stores data under ~/.var/app/..., not the host $XDG_* paths"). Sufficient — no additional callout block needed. **Resolution:** Confirmed inline comment is adequate; no further change required.
+
+---
+
+### Party-Mode Session 4 Findings (2026-04-24 — Quinn, Winston, Paige, Amelia, Bob)
+
+- [x] **[MEDIUM] SF4-3 — Orca table includes Journey 5 element (pair removal dialog) despite Orca scope being J1–3**
+  The Accessibility section header states "Run Orca during Journeys 1, 2, and 3" but the verification table includes "Pair removal confirmation dialog" — an element that only appears in Journey 5. A tester following the document literally would never encounter this element during J1–3 and would have no pass/fail signal for it, creating a dead verification row. **Resolution:** Annotated the pair removal dialog table row with "(optional — this element appears in Journey 5, not J1–3; run Journey 5 with Orca active to verify it — beyond AC5 minimum scope)" so testers know the expected workflow and the element is no longer ambiguously unreachable.
+
+- [x] **[LOW] SF4-1 — Journey 4 missing Setup block for source-code context**
+  Journeys 2, 3, and 5 each have explicit Setup blocks stating environmental prerequisites; Journey 4 does not. Steps 1 and 2 run `grep` on `engine/src/` and check `flatpak/PERMISSIONS.md` — both require the project source repository, not just the installed Flatpak. Step 3 requires a Bazzite/KDE session. A contributor validating from a fresh machine has no guidance on where to run Steps 1 and 2. **Resolution:** Added a Setup block to Journey 4: "Steps 1 and 2 are source-code checks — run from the project root (the cloned repository, not inside the Flatpak sandbox). Step 3 requires a Bazzite system (or any KDE session) with the app installed via Flatpak."
+
+- [x] **[DEFER] SF4-2 — Journey 4 Step 3 provides no reproducible trigger for the KWallet-unavailable credential error path**
+  Step 3 says "If KWallet is not unlocked or credential storage fails via the Secret Portal..." but provides no instructions for ensuring KWallet is in the unavailable state. As written, the test executes only if conditions happen to be right — it is not reproducible on demand. Full formalization would require an explicit wallet-locking step (e.g., `qdbus org.kde.kwalletd5 /modules/kwalletd closeAllWallets` or a login-without-unlock procedure). Related to existing [7-4 CR D4] which defers credential error message specification. **Resolution:** Deferred to pre-Flathub accessibility/error-message audit pass. Entry added to deferred-work.md as [7-4 PM4 D1]. No TESTING.md change — J4 Step 3 already uses conditional language ("if KWallet is not unlocked...") which accurately reflects the exploratory nature of this check for MVP.

@@ -192,12 +192,27 @@ _[4-0b W2], [4-2/4-3], [5-0 CR W1] — solved; Story 2-12 — done; [6-4 D1] —
 
 ---
 
+## Deferred from: code review of 7-3-ci-cd-pipelines pass 2 (2026-04-24)
+
+- **[7-3 CR2 D1]** `bun test` in ci.yml engine job will discover integration tests when added — the engine job runs `bun test` with no path filter; when `.test.ts` files land in `engine/src/__integration__/`, they will run on every PR without `PROTON_TEST_TOKEN`, breaking CI. Fix at the time integration tests are written: add path exclusion (e.g., `bun test --filter 'src --exclude __integration__'` or explicit path args). `.github/workflows/ci.yml` engine job.
+- **[7-3 CR2 D2]** No explicit Flatpak artifact existence check before `action-gh-release` — if `flatpak-github-actions/flatpak-builder` exits 0 but fails to write the bundle file, `softprops/action-gh-release` attempts to upload a missing file (visible error but not user-friendly). Defensive fix: add `test -f io.github.ronki2304.ProtonDriveLinuxClient.flatpak || exit 1` step between build and release. Scope-expanding defensive hardening. `.github/workflows/release.yml`.
+
+---
+
 ## Deferred from: code review of 7-3-ci-cd-pipelines (2026-04-23)
 
 - **[7-3 CR D1]** E2E workflow has no guard for missing secrets — `PROTON_TEST_TOKEN`/`PROTON_TEST_FOLDER` being unset causes confusing auth failures rather than a clear "secrets not configured" skip. Fix would require secrets-existence detection (GitHub Actions `if:` expressions cannot directly compare `secrets.*` to empty string); alternative is a repo-level `vars.HAS_INTEGRATION_SECRETS` variable. Scope-expanding. `.github/workflows/e2e.yml`
 - **[7-3 CR D2]** `pip install pytest pyyaml` in ci.yml unpinned — a major pytest release could silently break UI CI. Requires establishing a pip lockfile strategy (pip-compile or constraints file). Scope-expanding. `.github/workflows/ci.yml`
 - **[7-3 CR D3]** `python -m protondrive` launch not validated in CI — pytest mocks GI so CI passes without verifying the real entry point works; a broken `__main__.py` or missing gresource in the Flatpak bundle would pass CI but fail at user install time. Full launch validation requires Xvfb + full GI stack in CI — significant scope. `.github/workflows/ci.yml`
 - **[7-3 CR D4]** Flatpak manifest pins Bun binary SHA256 hashes — if Oven.sh CDN re-serves with different bytes, flatpak-builder fails cryptically. No fix without switching to a content-addressed mirror or accepting the risk. Pre-existing architectural constraint. `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
+- **[7-3 PM3 D1]** ci.yml missing `concurrency:` group to cancel stale PR runs — without `concurrency: group: ci-${{ github.ref }}, cancel-in-progress: true`, pushing multiple commits to a PR in quick succession launches parallel CI instances; stale runs waste runner minutes. Low risk, efficiency-only. `.github/workflows/ci.yml`
+- **[7-3 PM3 D2]** release.yml workflow-level `permissions: contents: write` over-scoped for `test` job — the test job only needs `contents: read`; scoping to job-level permissions would follow least-privilege principle. Negligible risk (GitHub sandbox limits what write permissions can do in a read-only job). `.github/workflows/release.yml`
+
+---
+
+## Deferred from: party-mode session 4 of 7-4 (2026-04-24)
+
+- **[7-4 PM4 D1]** Journey 4 Step 3 provides no reproducible trigger for the "KWallet unavailable" credential error path — the step says "if KWallet is not unlocked..." but gives no instructions for locking KWallet or starting a session without it. The test is effectively exploratory: it only executes if the tester happens to be in the right state. Full formalization (e.g., explicit `qdbus org.kde.kwalletd5 /modules/kwalletd closeAllWallets` step or login-without-unlock procedure) would make this test deterministic. Related to existing [7-4 CR D4] which defers credential error message specification. Defer to pre-Flathub accessibility/error-message audit pass. `TESTING.md:Journey 4, Step 3`
 
 ---
 

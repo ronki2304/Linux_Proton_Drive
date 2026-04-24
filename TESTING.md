@@ -147,6 +147,8 @@ Run all five journeys on each distro in the matrix. Fill in the Distro Matrix se
 
 **Goal:** Verify SDK boundary compliance, PERMISSIONS.md exists, and credential storage errors are surfaced gracefully on non-GNOME desktops.
 
+**Setup:** Steps 1 and 2 are source-code checks — run from the project root (the cloned repository, not inside the Flatpak sandbox). Step 3 requires a Bazzite system (or any KDE session) with the app installed via Flatpak.
+
 | # | Step | Pass/Fail |
 |---|------|-----------|
 | 1 | Verify SDK boundary: `grep -r "@protontech/drive-sdk" engine/src/ \| grep -v sdk.ts` returns empty. | |
@@ -231,7 +233,7 @@ Run Orca during Journeys 1, 2, and 3. Verify the following are announced:
 | Error banner | Banner title text when the banner receives focus |
 | Re-auth modal | Dialog title + queued changes count label |
 | Conflict toast (`AdwToast`) | Toast message text when the toast appears |
-| Pair removal confirmation dialog | Dialog title + pair name in body |
+| Pair removal confirmation dialog | Dialog title + pair name in body — **optional:** this element appears in Journey 5, not J1–3; run Journey 5 with Orca active to verify it (beyond AC5 minimum scope) |
 
 **Known minor gap:** A stale error banner title may persist after the banner is hidden (deferred
 per `deferred-work.md [6-0d CR W2]`). The stale title is not announced by Orca while the banner

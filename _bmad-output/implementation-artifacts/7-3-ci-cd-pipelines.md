@@ -297,6 +297,34 @@ Reviewers: Blind Hunter (adversarial), Edge Case Hunter (boundary), Acceptance A
 
 ---
 
+## Party-Mode Validation — 2026-04-24 (Pass 3)
+
+Agents: Winston (Architect), Amelia (Dev), Quinn (QA), Bob (SM)
+
+All findings resolved or deferred autonomously.
+
+- [x] **PM3-F1 [VERIFY] All 6 ACs confirmed against live files** — Quinn audited each AC against the actual workflow files and CONTRIBUTING.md: AC1 (ci.yml parallel `engine`+`ui-tests` jobs on `pull_request: branches: ["**"]`, both suites run independently) ✓; AC2 (`bunx tsc --noEmit` in engine job) ✓; AC3 (release.yml `on: push: tags: ["v*"]`, flatpak-builder action SHA-pinned `@401fe28a...`, artifact `io.github.ronki2304.ProtonDriveLinuxClient.flatpak`) ✓; AC4 (test job runs `bun test` engine-only, release job has `needs: test`, no meson/pytest in release gate) ✓; AC5 (e2e.yml path corrected to `engine/src/__integration__/` via `working-directory: engine`, secrets `PROTON_TEST_TOKEN`/`PROTON_TEST_FOLDER`, both `workflow_dispatch` and `v*` triggers, no `if: push` guard, `bun install --frozen-lockfile`, shell guard exits 0 when no `.test.ts` files) ✓; AC6 (CONTRIBUTING.md at project root, covers all 6 required sections) ✓. Bob confirmed sprint status `done`.
+
+- [x] **PM3-F2 [PATCH] CONTRIBUTING.md Prerequisites missing `python3-venv` and `python3-pip`** — On Ubuntu (the most common contributor platform and the CI runner), `python3 -m venv` requires `python3-venv` and `pip install` requires `python3-pip`; neither was listed in the Prerequisites section. Other apt packages (blueprint-compiler, meson, ninja-build) were already shown; the omission would cause a confusing error on a fresh Ubuntu install ("The virtual environment was not created successfully because ensurepip is not available"). **Fix:** Added `Python 3 + venv` bullet to Prerequisites with apt command. Rationale: Contributors shouldn't need to reverse-engineer a missing dependency from a cryptic venv error.
+
+- [x] **PM3-F3 [DEFER] ci.yml missing `concurrency:` group to cancel stale PR runs** — Without `concurrency: group: ci-${{ github.ref }}, cancel-in-progress: true`, rapid pushes to a PR branch launch parallel CI instances, wasting runner minutes. Scope-expanding (not in ACs). Logged in deferred-work.md as [7-3 PM3 D1]. **Decision:** Defer — efficiency improvement only, does not affect correctness.
+
+- [x] **PM3-F4 [DEFER] release.yml workflow-level `permissions: contents: write` over-scoped for `test` job** — The `test` job only needs `contents: read` but inherits `write` from the workflow level; scoping to job-level would follow least-privilege. Negligible risk since the test job only reads code. Logged in deferred-work.md as [7-3 PM3 D2]. **Decision:** Defer — security micro-optimization, not blocking.
+
+---
+
+## Code Review Findings — 2026-04-24 (Pass 2)
+
+Reviewers: Blind Hunter (adversarial), Edge Case Hunter (boundary), Acceptance Auditor (spec). 8 dismissed as noise. 1 patched. 2 deferred. All ACs pass per Acceptance Auditor.
+
+- [x] **[Review][Patch] `ui/.venv/` not in `.gitignore`** [`.gitignore`] — CONTRIBUTING.md (created by this story) instructs developers to run `python3 -m venv ui/.venv`, and the CI ui-tests job creates this directory too. Without a `.gitignore` entry, the directory showed as `?? ui/.venv/` in `git status` for every developer who follows setup — untracked noise and risk of accidental `git add .` inclusion. **Fix:** Added `ui/.venv/` after `**/__pycache__/` in `.gitignore`.
+
+- [x] **[Review][Defer] `bun test` in ci.yml will discover integration tests when they are added** [`ci.yml`] — The engine job runs `bun test` with no path filter from `engine/`. When `.test.ts` files are added to `engine/src/__integration__/`, Bun will discover and run them in normal PR CI without `PROTON_TEST_TOKEN`, breaking every PR until an exclusion is added. Fix: scope `bun test` to exclude `src/__integration__/` at the time integration tests are written. Scope-expanding now. Logged in deferred-work.md as [7-3 CR2 D1].
+
+- [x] **[Review][Defer] No explicit Flatpak artifact existence check before `action-gh-release`** [`release.yml`] — If `flatpak-github-actions/flatpak-builder` exits 0 but fails to produce the bundle (filesystem error, partial write), `softprops/action-gh-release` attempts to upload a missing file. The action would fail visibly, but a defensive `test -f` step between build and release would surface the failure immediately with a clear message. Scope-expanding defensive hardening. Logged in deferred-work.md as [7-3 CR2 D2].
+
+---
+
 ## Dev Agent Record
 
 ### Agent Model Used

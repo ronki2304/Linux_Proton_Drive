@@ -8,6 +8,7 @@
 - **Bun 1.3.11** — JavaScript runtime for the sync engine; install via [bun.sh](https://bun.sh)
 - **Blueprint compiler** — for `.blp` UI files (`apt install blueprint-compiler` on Ubuntu 24.04)
 - **Meson + Ninja** — build system for the GTK UI (`apt install meson ninja-build`)
+- **Python 3 + venv** — for the UI test suite (`apt install python3-venv python3-pip` on Ubuntu; included with Python on Fedora/Arch)
 - **Flatpak Builder** — for building the Flatpak bundle (`apt install flatpak-builder`)
 
 For full Flatpak permission rationale see [`flatpak/PERMISSIONS.md`](flatpak/PERMISSIONS.md).
