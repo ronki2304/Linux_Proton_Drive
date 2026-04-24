@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-25  # 8-0 done
+last_updated: 2026-04-25  # 8-1 ready-for-dev
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -143,7 +143,7 @@ development_status:
   # Epic 8: SDK Compliance & Incremental Sync + Activity Log
   epic-8: in-progress
   8-0-pre-epic-debt-cleanup: done
-  8-1-event-based-incremental-reconciliation: backlog
+  8-1-event-based-incremental-reconciliation: ready-for-dev
   8-2-ipc-activity-events: backlog
   8-3-activity-feed-ui: backlog
   8-4-release-engineering-version-management: backlog  # Added Epic 7 retro 2026-04-24: canonical version source, pre-release dry-run, release runbook
