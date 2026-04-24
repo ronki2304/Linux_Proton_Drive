@@ -16,6 +16,19 @@ function makeMockWatcher(): FSWatcher {
   return { close: mock(() => {}), on: mock(() => {}) } as unknown as FSWatcher;
 }
 
+// Returns a readdirFn mock that yields exactly sub1 and sub2 under parentPath.
+// Use this in tests that rely on a deterministic subdir count — readdir({recursive:true})
+// behaves differently across Bun versions / CI environments.
+function makeSubdirReaddir(parentPath: string) {
+  return mock(async (_path: string) =>
+    ["sub1", "sub2"].map((name) => ({
+      isDirectory: () => true,
+      parentPath,
+      name,
+    })) as unknown as import("node:fs").Dirent[],
+  );
+}
+
 function makeTestPair(localPath: string): SyncPair {
   return {
     pair_id: "p1",
@@ -203,6 +216,9 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
       (e) => emittedEvents.push(e),
       mockWatch as unknown as WatchFn,
       50,
+      () => true,
+      () => {},
+      makeSubdirReaddir(tmpDir),
     );
 
     await fw.initialize();
@@ -237,6 +253,9 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
       (e) => emittedEvents.push(e),
       mockWatch as unknown as WatchFn,
       50,
+      () => true,
+      () => {},
+      makeSubdirReaddir(tmpDir),
     );
 
     await fw.initialize();
@@ -268,6 +287,9 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
       (_e) => {},
       mockWatch as unknown as WatchFn,
       50,
+      () => true,
+      () => {},
+      makeSubdirReaddir(tmpDir),
     );
 
     await fw.initialize();
@@ -321,7 +343,7 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
 
   // AC3 (Story 6-0b): file-watcher callback fires after inotifyExhausted → onChangesDetected NOT called
   it("watcher callback fires after inotifyExhausted → onChangesDetected NOT called", async () => {
-    // Use the 3-dir setup from beforeEach: root + sub1 + sub2
+    // Use the 3-dir setup from mockReaddir: root + sub1 + sub2
     // mockWatch: 1st call (root) succeeds and captures listener, 2nd (sub1) throws ENOSPC
     const listeners: WatchListener<string>[] = [];
     const mockWatch = mock((_path: string, listener: unknown): FSWatcher => {
@@ -341,6 +363,9 @@ describe("FileWatcher — ENOSPC handling (AC3, AC6)", () => {
       (_e) => {},
       mockWatch as unknown as WatchFn,
       50,
+      () => true,
+      () => {},
+      makeSubdirReaddir(tmpDir),
     );
 
     await fw.initialize();  // inotifyExhausted = true after ENOSPC on sub1
@@ -430,6 +455,9 @@ describe("FileWatcher — stop() (AC4, AC6)", () => {
       (_e) => {},
       mockWatch as unknown as WatchFn,
       50,
+      () => true,
+      () => {},
+      makeSubdirReaddir(tmpDir),
     );
 
     await fw.initialize();

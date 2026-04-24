@@ -85,11 +85,16 @@ afterAll(async () => {
 
 ## Branch Naming
 
+**Default: one branch per story.** This keeps PRs small and lets CI validate each story before the next one starts.
+
 | Type | Pattern | Example |
 |------|---------|---------|
-| Feature | `feat/<story-id>-short-desc` | `feat/7-3-ci-pipelines` |
-| Bug fix | `fix/<issue>-short-desc` | `fix/42-token-refresh-crash` |
-| Chore | `chore/<desc>` | `chore/update-dependencies` |
+| Story (default) | `story/<epic>-<story>-short-desc` | `story/8-1-incremental-reconciliation` |
+| Epic (docs/planning only) | `epic/<epic>-short-desc` | `epic/7-packaging` |
+| Bug fix | `fix/<story-or-issue>-short-desc` | `fix/7-4-token-cleanup` |
+| Chore | `chore/<desc>` | `chore/update-deps` |
+
+Use an epic-level branch only when the work is pure documentation or planning with no code changes. For all implementation stories, use `story/<epic>-<story>-...`.
 
 ---
 

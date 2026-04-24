@@ -279,7 +279,7 @@ Always resolve via env var with fallback — never hardcode `~/.config` or `~/.l
 
 #### Git Conventions
 
-- **Branch naming:** `feat/<story-id>-short-desc`, `fix/<issue>-short-desc`, `chore/<desc>` (e.g., `feat/story-3-sync-panel`, `fix/ipc-timeout`, `chore/update-deps`)
+- **Branch naming (default: story-level):** `story/<epic>-<story>-short-desc` for implementation (e.g., `story/8-1-incremental-reconciliation`); `epic/<epic>-short-desc` for docs/planning-only epics (e.g., `epic/7-packaging`); `fix/<story-or-issue>-short-desc` for bug fixes; `chore/<desc>` for maintenance. One branch per story — keeps PRs small and CI validates each story before the next starts.
 - **Commit messages:** Conventional Commits — `feat:`, `fix:`, `chore:`, `docs:`, `test:`, `refactor:` prefix; imperative mood; scope optional (e.g., `feat(engine): add conflict detection`)
 - **`dist/` is gitignored** — never commit compiled output
 
