@@ -12,6 +12,13 @@
 
 ---
 
+## Deferred from: code review of 8-0-pre-epic-debt-cleanup (2026-04-25)
+
+- `atomicWriteConfig` no cleanup on `writeFileSync` failure — stale `.tmp` left on disk on disk-full/permission error; `renameSync` also throws `EXDEV` if `XDG_CONFIG_HOME` resolves to a different filesystem (`engine/src/config.ts`). Pre-existing pattern predating this story.
+- `atomicWriteConfig` no fsync before rename — power-loss after rename can leave destination file with zero bytes; weaker durability than the "atomic write" name implies (`engine/src/config.ts`). Pre-existing pattern predating this story.
+
+---
+
 ## WebKit aarch64 JIT Instability — Dev Environment Only
 
 **Discovered:** 2026-04-16 during embedded auth flow testing on Fedora 43 aarch64 VM (party-mode session with Winston/Amelia/Quinn).

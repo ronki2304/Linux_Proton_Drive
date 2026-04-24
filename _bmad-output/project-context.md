@@ -154,6 +154,7 @@ This bypasses the wrapper entirely and calls the real `/usr/bin/meson` binary in
 #### Python UI Tests (pytest via Meson compile)
 
 - **Two-step local workflow:** `meson compile -C builddir` (fast, compiles assets only) → `.venv/bin/pytest ui/tests/` (fast, runs tests directly). Raw `python -m pytest` without the compile step breaks tests touching `@Gtk.Template` or `Gio.Settings` — always compile first.
+- **Post-patch rebuild required:** After patching any `.blp`, `.gschema.xml`, `.gresource.xml`, or `protondrive.gresource.xml` file, run `meson compile -C builddir` before running the app or tests — skipping the compile step produces stale resource artifacts that will disagree with code changes.
 - **Mock the IPC socket, never spawn real engine** — UI tests validate signal wiring, state transitions, and IPC message parsing in isolation
 - **Widget tests via Xvfb** — optional in CI (`CI_SKIP_WIDGET_TESTS=1`); required for any test that instantiates a GTK widget
 - **`conftest.py` provides shared fixtures** — mock engine connection, mock `Gio.Settings`, mock libsecret; never duplicate fixture setup across test files

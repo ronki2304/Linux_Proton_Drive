@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "bun run src/main.ts",
     "build": "bun build --compile src/main.ts --outfile=dist/engine",
-    "test": "bun test"
+    "test": "bun test --path-ignore-patterns '__integration__'"
   },
   "license": "MIT",
   "dependencies": {

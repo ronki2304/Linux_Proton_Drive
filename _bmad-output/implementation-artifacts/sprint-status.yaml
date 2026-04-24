@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-24  # Story 7-4 in-progress; epics 5+6 closed
+last_updated: 2026-04-25  # 8-0 done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -138,9 +138,14 @@ development_status:
   7-2-appstream-metainfo-and-desktop-file: done
   7-3-ci-cd-pipelines: done
   7-4-end-to-end-mvp-validation-and-manual-test-protocol: in-progress
-  epic-7-retrospective: optional
+  epic-7-retrospective: done
 
-  # Epic 8: SDK Compliance & Incremental Sync
-  epic-8: backlog
+  # Epic 8: SDK Compliance & Incremental Sync + Activity Log
+  epic-8: in-progress
+  8-0-pre-epic-debt-cleanup: done
   8-1-event-based-incremental-reconciliation: backlog
-  # 8-2-appversion-header-correction: deferred — pending Proton SDK team confirmation and version scheme
+  8-2-ipc-activity-events: backlog
+  8-3-activity-feed-ui: backlog
+  8-4-release-engineering-version-management: backlog  # Added Epic 7 retro 2026-04-24: canonical version source, pre-release dry-run, release runbook
+  8-5-license-alignment: backlog  # Added 2026-04-25 CC: GPL-3.0 required by @protontech/drive-sdk; replaces MIT declarations in LICENSE, metainfo, package.json, README
+  epic-8-retrospective: optional

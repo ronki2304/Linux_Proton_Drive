@@ -35,9 +35,9 @@ PYTHONPATH=ui/src PROTONDRIVE_RESOURCE_PATH=builddir/protondrive-resources.greso
 
 | Scope | Command | When to use |
 |-------|---------|-------------|
-| Engine unit | `cd engine && bun test` | Local dev, always |
+| Engine unit | `cd engine && bun test --path-ignore-patterns '__integration__'` | Local dev, always |
 | Engine type-check | `cd engine && bunx tsc --noEmit` | Before pushing |
-| UI (local) | `ui/.venv/bin/pytest ui/tests/` | Local dev, always |
+| UI (local) | `.venv/bin/pytest ui/tests/` | Local dev, always |
 | UI (CI) | `meson compile -C builddir && ui/.venv/bin/pytest ui/tests/` | CI validates blueprint compilation first |
 | Integration | `cd engine && bun test src/__integration__/` | Only with valid `PROTON_TEST_TOKEN` |
 
@@ -79,6 +79,38 @@ Each integration test file must call `afterAll` to delete any files or folders i
 afterAll(async () => {
   // delete test-created remote files/folders
 });
+```
+
+---
+
+## Retrieving Logs
+
+### Flatpak (production install)
+
+Enable debug logging:
+
+```bash
+flatpak override --user --env=PROTONDRIVE_DEBUG=1 io.github.ronki2304.ProtonDriveLinuxClient
+```
+
+Engine log path:
+
+```
+~/.var/app/io.github.ronki2304.ProtonDriveLinuxClient/cache/protondrive/engine.log
+```
+
+Stream GNOME/systemd app logs:
+
+```bash
+journalctl --user -f _FLATPAK_APP_ID=io.github.ronki2304.ProtonDriveLinuxClient
+```
+
+### Native dev
+
+Engine log (when `PROTONDRIVE_DEBUG=1`):
+
+```
+~/.cache/protondrive/engine.log   # default XDG_CACHE_HOME
 ```
 
 ---

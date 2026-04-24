@@ -49,7 +49,11 @@ ProtonDriveLinuxClient/
 │   │   ├── icons/
 │   │   │   ├── io.github.ronki2304.ProtonDriveLinuxClient.svg
 │   │   │   └── io.github.ronki2304.ProtonDriveLinuxClient-symbolic.svg
-│   │   └── io.github.ronki2304.ProtonDriveLinuxClient.gschema.xml
+│   │   ├── io.github.ronki2304.ProtonDriveLinuxClient.gschema.xml
+│   │   ├── io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml  ← AppStream metadata
+│   │   ├── io.github.ronki2304.ProtonDriveLinuxClient.desktop       ← Desktop entry
+│   │   ├── protondrive.gresource.xml
+│   │   └── style.css
 │   └── tests/
 │       ├── conftest.py
 │       ├── test_auth.py             ← localhost server + libsecret (mocked)
@@ -80,9 +84,7 @@ ProtonDriveLinuxClient/
 │           └── conflict.integration.test.ts
 │
 └── flatpak/
-    ├── io.github.ronki2304.ProtonDriveLinuxClient.yml          ← Flatpak manifest
-    ├── io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml ← AppStream
-    └── io.github.ronki2304.ProtonDriveLinuxClient.desktop
+    └── io.github.ronki2304.ProtonDriveLinuxClient.yml          ← Flatpak manifest
 ```
 
 ## Requirements → Structure Mapping
@@ -103,6 +105,7 @@ ProtonDriveLinuxClient/
 | inotify + offline queue | `engine/src/watcher.ts` |
 | IPC server + framing + protocol | `engine/src/ipc.ts` |
 | Typed errors | `engine/src/errors.ts` |
+| AppStream metainfo + desktop entry | `ui/data/` |
 | Flatpak packaging | `flatpak/` |
 | CI/CD | `.github/workflows/` |
 
