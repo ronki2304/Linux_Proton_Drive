@@ -73,6 +73,89 @@ So that the UI can display a live feed of what was synced without polling the en
 
 ---
 
+## Story 8-2a: Reconcile Progress — Clean State on Error
+
+As a user,
+I want the sync progress indicator to always reach a resting state even when a sync error occurs,
+So that I never see a permanently spinning indicator after a failure.
+
+**Background:** Story 8-2 implemented `reconcile_progress` phase events. On clean paths, `idle`
+is the terminal phase — the only signal that truly clears the indicator. All other non-clean exits
+leave the pair in a **paused** state: sync is halted but will resume when the blocking condition
+is resolved. Two engine signals trigger the paused state:
+
+- `{ type: "error", payload: { pair_id, code } }` — pair-scoped block (DISK_FULL, PERMISSION_DENIED,
+  etc.). Indicator pauses until the user resolves the condition; the engine will retry and emit new
+  phase events when sync resumes.
+- `{ type: "token_expired" }` — session-wide auth expiry; ALL pair indicators pause. After re-auth
+  the engine relaunches automatically and emits fresh `scanning` events that resume the indicators.
+  No watchdog for this path — re-auth is the resume mechanism.
+
+A watchdog (30s no update) acts as a safety net for paused pairs where the `error` signal may not
+have been emitted (e.g. reconcilePair exception). The watchdog fully clears the indicator rather
+than pausing it, since the root cause is unknown. It does NOT apply to `token_expired`-paused pairs.
+
+**Acceptance Criteria:**
+
+**Given** the engine emits `{ type: "error", payload: { pair_id, code } }` for a pair
+**When** the UI receives it
+**Then** the phase indicator for that `pair_id` transitions to a **paused** state (visually distinct
+  from active and from idle — sync is blocked, not finished)
+**And** the existing error state UI for that pair (error banner/row) explains why sync is paused
+**And** when the engine resumes and emits `reconcile_progress { phase: "scanning"|"uploading"|"downloading" }`
+  for that pair, the paused indicator transitions to active (watchdog resets)
+**And** when the engine emits `reconcile_progress { phase: "idle" }` for that pair (clean cycle
+  completed after retry), the indicator is fully cleared — `idle` exits pause the same as it exits
+  active: it is the only true clean-finish terminal state
+
+**Given** the engine emits `{ type: "token_expired" }`
+**When** the UI receives it
+**Then** the phase indicator for ALL active pairs transitions to a **paused** state (visually distinct
+  from both active and idle — sync is halted, not finished)
+**And** the re-auth modal (existing, Story 5-2) takes over
+**And** when the engine restarts after re-auth it emits `reconcile_progress { phase: "scanning" }`
+  which the normal event handler uses to transition paused → active — no special `session_ready`
+  handling required in this story
+
+**Given** a pair is in an active or paused phase (but NOT paused by `token_expired`)
+**When** no `reconcile_progress` event for that pair has been received for 30 seconds
+**Then** the UI fully clears the phase indicator (watchdog — safety net when cause is unknown)
+**And** no error or paused state is shown (the watchdog clears silently)
+**Note:** The watchdog is NOT armed for pairs paused by `token_expired` — re-auth auto-relaunches
+sync and emits fresh phase events when the session resumes.
+
+**Given** the UI later receives `{ type: "reconcile_progress", phase: "idle" }` for a pair whose
+indicator was already cleared by an error event, token_expired, or the watchdog
+**When** the UI processes the event
+**Then** it is a no-op — the pair is already at rest, no visual change occurs
+
+**Given** the UI test suite
+**When** this story is complete
+**Then** new tests cover:
+  - `error` event for pair_id → indicator transitions to paused; watchdog armed
+  - `reconcile_progress { phase: active }` after `error` → paused indicator resumes active (engine retried)
+  - `reconcile_progress { phase: "idle" }` after `error` → indicator fully cleared (clean cycle completed)
+  - `token_expired` → all pair indicators enter paused state; no watchdog set
+  - `reconcile_progress { phase: "scanning" }` after `token_expired` → paused indicator transitions
+    back to active (no special session_ready handler — the normal event flow covers it)
+  - Watchdog fires after 30s without update → indicator fully cleared (not paused)
+  - `reconcile_progress` event received → watchdog timer reset for that pair
+  - `idle` → indicator cleared (the only true clean-finish terminal state)
+
+---
+
+## Story 8-4b: Actionable Decryption Error UX
+
+As a user with multiple sync pairs,
+I want to see a clear, actionable message when a folder cannot be decrypted,
+so that I know exactly which pair is affected and what to do — without needing to read engine logs.
+
+**Background:** When `fetchAndDecryptKeys` decrypts fewer keys than available (e.g. after a Proton password change that retired old node keys), affected pairs enter permanent error state with raw SDK string `"Decryption error"` — not actionable. User action that resolves this: open `drive.proton.me` and browse the affected folder so Proton's web client re-wraps old node keys.
+
+**Acceptance Criteria:** See `_bmad-output/implementation-artifacts/8-4b-actionable-decryption-error-ux.md` for full spec (AC1–AC9, T1–T5).
+
+---
+
 ## Story 8.5: License Alignment (GPL-3.0)
 
 As a maintainer,
@@ -150,8 +233,43 @@ So that I know the app is working and can see which files were recently transfer
 **Given** a `reconcile_progress` event arrives with `phase: "scanning" | "uploading" | "downloading"`
 **When** the engine is actively working
 **Then** a spinner or subtle progress indicator appears at the top of the feed
-**And** it disappears when `phase` transitions to `"idle"`
+**And** it disappears when any of the following occur:
+  - `phase` transitions to `"idle"` for that pair
+  - An `error` event is received for that pair (handled by Story 8-2a — indicator enters paused state)
+  - The watchdog timer fires (30s without update, handled by Story 8-2a — indicator cleared silently)
 
 **Given** the UI test suite
 **When** this story is complete
 **Then** new tests cover: activity row rendering, empty state, 100-item cap, multi-pair interleaving
+
+---
+
+## Story 8-6: SDK Client Identification — x-pm-appversion Header
+
+As a maintainer,
+I want all Proton API requests to carry the correct x-pm-appversion header,
+So that the app accurately identifies itself and does not spoof another Proton client.
+
+**Background:** `ProtonHTTPClient` in `sdk.ts` previously injected `"web-drive@5.0.0.0"` — the Proton web client's identity. Proton's API policy requires external clients to use the format `{client-id}@{version}` and prohibits spoofing or falsifying this value. This app's correct identity is `ronki230-ProtonDriveLinuxClient@{version}`.
+
+**Acceptance Criteria:**
+
+**Given** any Proton API request (`fetchJson` or `fetchBlob` to a `proton.me/drive` or `protonmail.com` host)
+**When** the engine makes an API call
+**Then** the `x-pm-appversion` header is set to `ronki230-ProtonDriveLinuxClient@{version}`
+**And** `{version}` matches the `"version"` field in `engine/package.json`
+
+**Given** a `fetchBlob` request to a storage host (e.g. `fra-storage.proton.me`)
+**When** the engine uploads a file block
+**Then** `x-pm-appversion` is NOT set (storage servers reject Proton API headers)
+
+**Given** the string `"web-drive@5.0.0.0"` in the codebase
+**When** this story is complete
+**Then** it does not appear anywhere in `engine/src/`
+
+**Given** the engine test suite
+**When** this story is complete
+**Then** new unit tests cover:
+  - `fetchJson` path: `x-pm-appversion` header set to correct value
+  - `fetchBlob` Proton-host path: `x-pm-appversion` header set to correct value
+  - `fetchBlob` storage-host path: `x-pm-appversion` header absent

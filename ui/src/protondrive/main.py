@@ -99,6 +99,8 @@ class Application(Adw.Application):
         self._engine.on_event("crash_recovery_complete", self._on_crash_recovery_complete)
         self._engine.on_event("local_folder_missing", self._on_local_folder_missing)
         self._engine.on_event("pair_reconciling", self._on_pair_reconciling)
+        self._engine.on_event("reconcile_progress", self._on_reconcile_progress)
+        self._engine.on_event("file_synced", self._on_file_synced)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -198,6 +200,20 @@ class Application(Adw.Application):
         payload = message.get("payload", {})
         if self._window is not None:
             self._window.on_pair_reconciling(payload)
+
+    def _on_reconcile_progress(self, message: dict[str, Any]) -> None:
+        payload = message.get("payload", {})
+        if not isinstance(payload, dict):
+            return
+        if self._window is not None:
+            self._window.on_reconcile_progress(payload)
+
+    def _on_file_synced(self, message: dict[str, Any]) -> None:
+        payload = message.get("payload", {})
+        if not isinstance(payload, dict):
+            return
+        if self._window is not None:
+            self._window.on_file_synced(payload)
 
     def _on_sync_progress(self, message: dict[str, Any]) -> None:
         payload = message.get("payload", {})
@@ -521,6 +537,7 @@ class Application(Adw.Application):
             if self._window.is_auth_browser_active():
                 self._window.mark_last_auth_token_rejected()
                 return
+            self._window.on_token_expired_phase_pause()
             self._window.show_token_expired_warning(queued_changes)
             self.show_reauth_dialog()
 

@@ -10,6 +10,7 @@
 - **Meson + Ninja** — build system for the GTK UI (`apt install meson ninja-build`)
 - **Python 3 + venv** — for the UI test suite (`apt install python3-venv python3-pip` on Ubuntu; included with Python on Fedora/Arch)
 - **Flatpak Builder** — for building the Flatpak bundle (`apt install flatpak-builder`)
+- **`jq`** — JSON processor used by the version bump script (see [Releasing > Prerequisites](#prerequisites-1) for install commands)
 
 For full Flatpak permission rationale see [`flatpak/PERMISSIONS.md`](flatpak/PERMISSIONS.md).
 
@@ -158,3 +159,104 @@ chore: update Bun to 1.3.11
 docs: add CONTRIBUTING.md
 test(engine): cover offline queue replay edge cases
 ```
+
+---
+
+## Releasing
+
+### Prerequisites
+
+In addition to the development prerequisites above, releasing requires:
+- **`jq`** — JSON processor for the version bump script (`sudo dnf install jq` / `sudo apt install jq`)
+- GitHub write access to push tags
+
+### Pre-release dry run (safe — does not affect "Latest Release")
+
+Use this path to exercise the full release pipeline without publishing the stable release:
+
+```bash
+# 1. Ensure tests pass
+cd engine && bun test --path-ignore-patterns '__integration__'
+cd .. && .venv/bin/pytest ui/tests/
+
+# 2. Bump version (if needed) — updates VERSION, meson.build, package.json, metainfo
+./scripts/bump-version.sh 0.1.0
+git add VERSION ui/meson.build engine/package.json \
+  ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml
+git commit -m "chore: bump version to 0.1.0"
+git push
+
+# 3. Push a pre-release tag (contains '-' → GitHub pre-release, not "Latest Release")
+git tag v0.1.0-rc1
+git push origin v0.1.0-rc1
+
+# 4. Monitor CI and verify:
+#    - Both 'test' and 'release' jobs are green
+#    - GitHub Release page shows a "Pre-release" badge (not "Latest Release")
+#    - Flatpak bundle is attached to the release
+
+# 5. Clean up after verification
+# Delete the GitHub Release first (web UI): Releases → Edit → Delete this release
+git tag -d v0.1.0-rc1
+git push origin :refs/tags/v0.1.0-rc1
+```
+
+### Final release
+
+```bash
+# 1. Ensure pre-release dry run passed (see above)
+
+# 2. Bump version if not already done
+./scripts/bump-version.sh 0.1.0   # safe to re-run; always overwrites all four locations
+git add VERSION ui/meson.build engine/package.json \
+  ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml
+git commit -m "chore: bump version to 0.1.0"
+git push
+
+# 3. Push the stable tag (no '-' suffix → marked as stable "Latest Release")
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+### Failure recovery — deleting a bad tag
+
+If CI fails or the release has an error after tagging:
+
+```bash
+# Delete the GitHub Release first (if created):
+# Go to: https://github.com/ronki2304/Linux_Proton_Drive/releases
+# Click the release → Edit → scroll to bottom → "Delete this release"
+# Note: delete the Release BEFORE the tag — deleting the tag while the Release
+# still references it orphans the Release object in GitHub.
+
+# Delete locally
+git tag -d v0.1.0
+
+# Delete remotely
+git push origin :refs/tags/v0.1.0
+```
+
+### Pre-tag checklist
+
+Before pushing any `v*` tag, confirm:
+
+- [ ] `bun run test` and `.venv/bin/pytest ui/tests/` pass locally
+- [ ] `VERSION` file contains the intended release version (base, no pre-release suffix)
+- [ ] `metainfo.xml` `<release version>` matches and `date` is today
+- [ ] `engine/package.json` `"version"` matches
+- [ ] `ui/meson.build` `version:` matches
+- [ ] All changes committed and pushed
+
+## License
+
+This project is licensed under **GPL-3.0-only** — see [LICENSE](./LICENSE).
+
+**Why GPL-3.0?** The bundled `@protontech/drive-sdk` (GPL-3.0) is embedded into the distributed
+binary via `bun build --compile`, making the combined work a GPL-3.0 derivative.
+
+**Runtime dependency licenses:**
+- `@protontech/drive-sdk` — GPL-3.0 (the triggering dependency)
+- `openpgp` — LGPL-3.0+ (compatible with GPL-3.0)
+- `bcryptjs`, `js-yaml`, `undici` — MIT (compatible with GPL-3.0)
+
+No proprietary or AGPL dependencies are included. Full audit: 56 packages checked 2026-04-25.

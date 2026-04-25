@@ -228,15 +228,17 @@ export function createNetworkMonitorCallback(
 // key_password is included in the payload when it was derived in this session
 // so the UI can persist it to the OS keyring (AC4).
 // ---------------------------------------------------------------------------
-function _activateSession(
+async function _activateSession(
   client: DriveClient,
   info: Record<string, unknown>,
   keyPassword?: string,
-): void {
+): Promise<void> {
   driveClient = client;
   syncEngine?.setDriveClient(client);
-  // startSyncAll() = reconcile (fresh remote walk) + drainQueue (processes any
-  // change_queue entries accumulated during the token-expiry window, Story 5-3).
+  // Start subscription before deciding whether to full-walk (Story 8-1).
+  await syncEngine?.startRemoteEventSubscription(client);
+  await syncEngine?.drainEventQueue(client);
+  // startSyncAll() = reconcile (skipped if checkpoint present) + drainQueue
   void syncEngine?.startSyncAll();
   fileWatcher?.stop();
   fileWatcher = new FileWatcher(
@@ -262,6 +264,7 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
   const raw = command.payload?.["token"] as string | undefined;
 
   if (!raw) {
+    syncEngine?.disposeEventSubscription();
     driveClient = null;
     syncEngine?.setDriveClient(null);
     fileWatcher?.stop();
@@ -298,7 +301,7 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
     | undefined;
 
   try {
-    const client = createDriveClient(token, uid);
+    const client = createDriveClient(token, uid, syncEngine?.makeLatestEventIdProvider());
     const info = (await client.validateSession()) as unknown as Record<
       string,
       unknown
@@ -309,7 +312,7 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
       // Relaunch with stored keyPassword — try silent unlock.
       try {
         await client.applyKeyPassword(storedKeyPassword);
-        _activateSession(client, info);
+        void _activateSession(client, info);
         return;
       } catch {
         // Stored keyPassword invalid (password changed / key rotation) — fall
@@ -329,7 +332,7 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
       try {
         process.stderr.write(`[ENGINE] attempting silent unlock with ${capturedSalts.length} captured salt(s)\n`);
         const keyPassword = await client.deriveAndUnlock(loginPassword, undefined, capturedSalts);
-        _activateSession(client, info, keyPassword);
+        void _activateSession(client, info, keyPassword);
         return;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -377,6 +380,7 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
 
     // Token invalid — clear everything and report expiry.
     cachedSaltArray = undefined; // reset so next login gets a fresh pre-fetch
+    syncEngine?.disposeEventSubscription();
     driveClient = null;
     syncEngine?.setDriveClient(null);
     fileWatcher?.stop();
@@ -428,7 +432,7 @@ async function handleUnlockKeys(command: IpcCommand): Promise<void> {
       string,
       unknown
     >;
-    _activateSession(driveClient, info, keyPassword);
+    void _activateSession(driveClient, info, keyPassword);
   } catch (e) {
     // Wrong password or network error — let user retry.
     // Do NOT log password or keyPassword.
@@ -859,6 +863,7 @@ async function main(): Promise<void> {
     () => networkMonitor?.forceCheck(),                 // onNetworkFailure (existing)
     () => {                                             // onTokenExpired (NEW)
       if (!driveClient) return;                         // idempotent — already expired
+      syncEngine?.disposeEventSubscription();
       driveClient = null;
       syncEngine?.setDriveClient(null);
       // DO NOT stop fileWatcher — keep queuing local changes (AC3)
@@ -903,11 +908,15 @@ async function main(): Promise<void> {
   await server.start();
 
   process.on("SIGTERM", () => {
+    syncEngine?.disposeEventSubscription();
+    fileWatcher?.stop();
     networkMonitor?.stop();
     server.close();
   });
 
   process.on("SIGINT", () => {
+    syncEngine?.disposeEventSubscription();
+    fileWatcher?.stop();
     networkMonitor?.stop();
     server.close();
   });

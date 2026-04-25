@@ -1,4 +1,4 @@
-# Story 8.4: Actionable Decryption Error UX
+# Story 8-4b: Actionable Decryption Error UX
 
 Status: backlog
 

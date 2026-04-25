@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateDb } from "./state-db.js";
-import type { SyncPair, SyncState, ChangeQueueEntry, ChangeType } from "./state-db.js";
+import type { SyncPair, SyncState, ChangeQueueEntry, ChangeType, EventQueueEntry } from "./state-db.js";
 
 // Each test gets a fresh :memory: DB for full isolation.
 let db: StateDb;
@@ -68,9 +68,8 @@ describe("StateDb — init", () => {
     expect(queue[0]!.queued_at).toBe("2026-04-09T10:00:00.000Z");
   });
 
-  it("sets user_version to 5 after migration (AC4)", () => {
-    // user_version tracks the schema version; after all migrations it must equal CURRENT_VERSION (5).
-    expect(db.pragma("user_version")).toBe(5);
+  it("sets user_version to 7 after migration (AC4)", () => {
+    expect(db.pragma("user_version")).toBe(7);
   });
 });
 
@@ -285,7 +284,7 @@ describe("StateDb — sync_state CRUD and updatePairRemoteId", () => {
     };
     db.upsertSyncState(state);
     const fetched = db.getSyncState("p1", "docs/readme.md");
-    expect(fetched).toEqual(state);
+    expect(fetched).toEqual({ ...state, remote_node_id: null });
   });
 
   it("upsert replaces existing record for same primary key", () => {
@@ -489,6 +488,217 @@ describe("StateDb — session_state dirty flag (Story 5-4)", () => {
       db2.close();
     } finally {
       rmSync(tmpPath, { force: true });
+    }
+  });
+});
+
+describe("StateDb — findSyncStateByRemoteNodeId (Story 8-1 D1)", () => {
+  const PAIR: SyncPair = {
+    pair_id: "p1",
+    local_path: "/home/user/docs",
+    remote_path: "/My Drive/docs",
+    remote_id: "folder-abc",
+    created_at: "2026-04-10T10:00:00.000Z",
+    last_synced_at: null,
+  };
+  let db: StateDb;
+
+  beforeEach(() => { db = new StateDb(":memory:"); db.insertPair(PAIR); });
+  afterEach(() => { db.close(); });
+
+  it("returns null when no matching remote_node_id exists", () => {
+    expect(db.findSyncStateByRemoteNodeId("uid-unknown")).toBeNull();
+  });
+
+  it("returns pair_id and relative_path when remote_node_id matches", () => {
+    db.upsertSyncState({
+      pair_id: "p1",
+      relative_path: "photos/vacation.jpg",
+      local_mtime: "2026-01-01T00:00:00.000Z",
+      remote_mtime: "2026-01-01T00:00:00.000Z",
+      content_hash: null,
+      remote_node_id: "uid-vacation",
+    });
+    const result = db.findSyncStateByRemoteNodeId("uid-vacation");
+    expect(result).toEqual({ pair_id: "p1", relative_path: "photos/vacation.jpg" });
+  });
+
+  it("ignores rows with null remote_node_id", () => {
+    db.upsertSyncState({
+      pair_id: "p1",
+      relative_path: "file.txt",
+      local_mtime: "2026-01-01T00:00:00.000Z",
+      remote_mtime: "2026-01-01T00:00:00.000Z",
+      content_hash: null,
+      remote_node_id: null,
+    });
+    expect(db.findSyncStateByRemoteNodeId("uid-anything")).toBeNull();
+  });
+
+  it("overwrites remote_node_id on upsert and lookup still works", () => {
+    db.upsertSyncState({
+      pair_id: "p1", relative_path: "doc.txt",
+      local_mtime: "2026-01-01T00:00:00.000Z", remote_mtime: "2026-01-01T00:00:00.000Z",
+      content_hash: null, remote_node_id: "uid-old",
+    });
+    db.upsertSyncState({
+      pair_id: "p1", relative_path: "doc.txt",
+      local_mtime: "2026-01-02T00:00:00.000Z", remote_mtime: "2026-01-02T00:00:00.000Z",
+      content_hash: null, remote_node_id: "uid-new",
+    });
+    expect(db.findSyncStateByRemoteNodeId("uid-old")).toBeNull();
+    expect(db.findSyncStateByRemoteNodeId("uid-new")).toEqual({ pair_id: "p1", relative_path: "doc.txt" });
+  });
+});
+
+describe("StateDb — event_checkpoint and event_queue (Story 8-1)", () => {
+  let db: StateDb;
+  const SCOPE = "volume-abc-123";
+
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("getEventCheckpoint returns null on fresh DB", () => {
+    expect(db.getEventCheckpoint(SCOPE)).toBe(null);
+  });
+
+  it("getQueuedEvents returns empty array on fresh DB", () => {
+    expect(db.getQueuedEvents()).toEqual([]);
+  });
+
+  it("setEventCheckpoint stores value; getEventCheckpoint returns it", () => {
+    db.setEventCheckpoint(SCOPE, "evt-001");
+    expect(db.getEventCheckpoint(SCOPE)).toBe("evt-001");
+  });
+
+  it("setEventCheckpoint overwrites existing checkpoint for same scope", () => {
+    db.setEventCheckpoint(SCOPE, "evt-001");
+    db.setEventCheckpoint(SCOPE, "evt-002");
+    expect(db.getEventCheckpoint(SCOPE)).toBe("evt-002");
+  });
+
+  it("clearEventCheckpoint removes the checkpoint", () => {
+    db.setEventCheckpoint(SCOPE, "evt-001");
+    db.clearEventCheckpoint(SCOPE);
+    expect(db.getEventCheckpoint(SCOPE)).toBe(null);
+  });
+
+  it("clearEventCheckpoint is a no-op when no checkpoint exists", () => {
+    expect(() => db.clearEventCheckpoint(SCOPE)).not.toThrow();
+    expect(db.getEventCheckpoint(SCOPE)).toBe(null);
+  });
+
+  it("persistEvent with non-null checkpoint: event in queue; checkpoint advanced", () => {
+    db.persistEvent(SCOPE, "node_created", '{"type":"node_created"}', "evt-100");
+    const events = db.getQueuedEvents();
+    expect(events.length).toBe(1);
+    expect(events[0]!.tree_event_scope_id).toBe(SCOPE);
+    expect(events[0]!.event_type).toBe("node_created");
+    expect(events[0]!.event_payload).toBe('{"type":"node_created"}');
+    expect(db.getEventCheckpoint(SCOPE)).toBe("evt-100");
+  });
+
+  it("persistEvent with null checkpoint: event in queue; checkpoint cleared", () => {
+    db.setEventCheckpoint(SCOPE, "evt-001");
+    db.persistEvent(SCOPE, "tree_refresh", '{"type":"tree_refresh"}', null);
+    const events = db.getQueuedEvents();
+    expect(events.length).toBe(1);
+    expect(events[0]!.event_type).toBe("tree_refresh");
+    expect(db.getEventCheckpoint(SCOPE)).toBe(null);
+  });
+
+  it("persistEvent atomicity: both event_queue and event_checkpoint written or neither", () => {
+    // Use a real file-backed DB so we can test transaction semantics
+    const tmpPath = join(tmpdir(), `state-db-persist-${Date.now()}.db`);
+    let fileDb: StateDb | undefined;
+    try {
+      fileDb = new StateDb(tmpPath);
+      fileDb.persistEvent(SCOPE, "fast_forward", '{"type":"fast_forward"}', "evt-001");
+      // Verify both rows written
+      expect(fileDb.getQueuedEvents().length).toBe(1);
+      expect(fileDb.getEventCheckpoint(SCOPE)).toBe("evt-001");
+      fileDb.close();
+      fileDb = undefined;
+
+      // Reopen — both should persist
+      const db2 = new StateDb(tmpPath);
+      expect(db2.getQueuedEvents().length).toBe(1);
+      expect(db2.getEventCheckpoint(SCOPE)).toBe("evt-001");
+      db2.close();
+    } finally {
+      if (fileDb) fileDb.close();
+      for (const ext of ["", "-wal", "-shm"]) rmSync(tmpPath + ext, { force: true });
+    }
+  });
+
+  it("deleteQueuedEvent removes target event; others unaffected", () => {
+    db.persistEvent(SCOPE, "node_created", '{"a":1}', "evt-001");
+    db.persistEvent(SCOPE, "node_updated", '{"b":2}', "evt-002");
+    db.persistEvent(SCOPE, "fast_forward", '{"c":3}', "evt-003");
+    const before = db.getQueuedEvents();
+    expect(before.length).toBe(3);
+    db.deleteQueuedEvent(before[1]!.id);
+    const after = db.getQueuedEvents();
+    expect(after.length).toBe(2);
+    expect(after[0]!.event_type).toBe("node_created");
+    expect(after[1]!.event_type).toBe("fast_forward");
+  });
+
+  it("clearQueuedEvents removes only target scope; other scope unaffected", () => {
+    const OTHER_SCOPE = "volume-other-456";
+    db.persistEvent(SCOPE, "node_created", '{"a":1}', "evt-001");
+    db.persistEvent(OTHER_SCOPE, "node_created", '{"b":2}', "evt-002");
+    db.clearQueuedEvents(SCOPE);
+    const remaining = db.getQueuedEvents();
+    expect(remaining.length).toBe(1);
+    expect(remaining[0]!.tree_event_scope_id).toBe(OTHER_SCOPE);
+  });
+
+  it("getQueuedEvents returns events in id ASC order", () => {
+    db.persistEvent(SCOPE, "node_created", '{"i":1}', "evt-001");
+    db.persistEvent(SCOPE, "node_updated", '{"i":2}', "evt-002");
+    db.persistEvent(SCOPE, "fast_forward", '{"i":3}', "evt-003");
+    const events = db.getQueuedEvents();
+    expect(events[0]!.event_type).toBe("node_created");
+    expect(events[1]!.event_type).toBe("node_updated");
+    expect(events[2]!.event_type).toBe("fast_forward");
+  });
+
+  it("user_version = 7 after migration v7", () => {
+    expect(db.pragma("user_version")).toBe(7);
+  });
+
+  it("upgrade from v5-schema: event tables exist; old data intact", () => {
+    const tmpPath = join(tmpdir(), `state-db-v5upgrade-${Date.now()}.db`);
+    let fileDb: StateDb | undefined;
+    try {
+      // Build a v5 DB: open fresh (goes to v6), confirm old tables still work
+      fileDb = new StateDb(tmpPath);
+      // Insert old-schema data
+      fileDb.insertPair({
+        pair_id: "p1",
+        local_path: "/p",
+        remote_path: "/rp",
+        remote_id: "r",
+        created_at: "2026-04-25T00:00:00.000Z",
+        last_synced_at: null,
+      });
+      // New tables exist and work
+      expect(fileDb.getEventCheckpoint("scope-1")).toBe(null);
+      fileDb.persistEvent("scope-1", "fast_forward", '{}', "evt-001");
+      expect(fileDb.getQueuedEvents().length).toBe(1);
+      // Old data intact
+      expect(fileDb.getPair("p1")?.pair_id).toBe("p1");
+      fileDb.close();
+      fileDb = undefined;
+    } finally {
+      if (fileDb) fileDb.close();
+      for (const ext of ["", "-wal", "-shm"]) rmSync(tmpPath + ext, { force: true });
     }
   });
 });

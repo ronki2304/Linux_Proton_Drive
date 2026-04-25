@@ -17,6 +17,7 @@ import {
   AbortError,
   ConnectionError,
   DecryptionError,
+  DriveEventType,
   IntegrityError,
   MemoryCache,
   NodeType,
@@ -47,6 +48,9 @@ import type { SRPModule, PrivateKey as SDKPrivateKey, PublicKey as SDKPublicKey 
 // ---------------------------------------------------------------------------
 import type {
   CachedCryptoMaterial,
+  DriveEvent,
+  DriveListener,
+  LatestEventIdProvider,
   MaybeNode,
   NodeEntity,
   OpenPGPCryptoProxy,
@@ -59,6 +63,16 @@ import type {
   ProtonDriveHTTPClientJsonRequest,
   UploadMetadata,
 } from "@protontech/drive-sdk";
+
+// EventSubscription is not in the public SDK index — define it locally
+// matching the shape from dist/internal/events/interface.d.ts
+export interface EventSubscription {
+  dispose(): void;
+}
+
+// Re-export SDK event types so callers never import from @protontech/drive-sdk directly
+export type { DriveListener, DriveEvent, LatestEventIdProvider } from "@protontech/drive-sdk";
+export { DriveEventType } from "@protontech/drive-sdk";
 
 // Full openpgp bundle (NOT "openpgp/lightweight" — project-context.md hard rule).
 // Imported here at the boundary to keep the SDK boundary discipline honest:
@@ -143,6 +157,8 @@ export type ProtonDriveClientLike = Pick<
   | "getFileDownloader"
   | "createFolder"
   | "trashNodes"
+  | "subscribeToTreeEvents"
+  | "getNode"
 >;
 
 // ---------------------------------------------------------------------------
@@ -753,6 +769,43 @@ export class DriveClient {
         storage_total: 0,
         plan: "",
       };
+    } catch (err) {
+      mapSdkError(err);
+      throw err;
+    }
+  }
+
+  /** Returns the treeEventScopeId for My Files root — shared across all pairs. */
+  async getRootTreeEventScopeId(): Promise<string> {
+    try {
+      const root = await this.sdk.getMyFilesRootFolder();
+      if (!root.ok) {
+        throw new SyncError("My Files root unavailable");
+      }
+      return root.value.treeEventScopeId;
+    } catch (err) {
+      mapSdkError(err);
+      throw err;
+    }
+  }
+
+  /** Subscribes to remote drive events. */
+  async subscribeToRemoteEvents(
+    treeEventScopeId: string,
+    callback: DriveListener,
+  ): Promise<EventSubscription> {
+    try {
+      return await this.sdk.subscribeToTreeEvents(treeEventScopeId, callback) as EventSubscription;
+    } catch (err) {
+      mapSdkError(err);
+      throw err;
+    }
+  }
+
+  /** Resolves a single node by UID — used to inspect NodeCreated/Updated events. */
+  async getRemoteNode(nodeUid: string): Promise<MaybeNode> {
+    try {
+      return await this.sdk.getNode(nodeUid);
     } catch (err) {
       mapSdkError(err);
       throw err;
@@ -1775,7 +1828,7 @@ class ProtonAccountAdapter implements ProtonDriveAccount {
 // The account adapter is injected into both ProtonDriveClient (for SDK crypto
 // operations) and DriveClient (for validateSession).
 // ---------------------------------------------------------------------------
-export function createDriveClient(token: string, uid?: string): DriveClient {
+export function createDriveClient(token: string, uid?: string, latestEventIdProvider?: LatestEventIdProvider): DriveClient {
   try {
     const httpClient = new ProtonHTTPClient(token, uid);
 
@@ -1806,7 +1859,7 @@ export function createDriveClient(token: string, uid?: string): DriveClient {
       config,
       featureFlagProvider: new NullFeatureFlagProvider(),
       telemetry: undefined,
-      latestEventIdProvider: undefined,
+      latestEventIdProvider,
     };
 
     const sdkClient = new ProtonDriveClient(params);
@@ -1816,3 +1869,12 @@ export function createDriveClient(token: string, uid?: string): DriveClient {
     throw err; // defensive
   }
 }
+
+// ---------------------------------------------------------------------------
+// Test-only factory — NOT for use outside sdk.test.ts.
+// The _ prefix signals non-public API; no other engine file may import this.
+// ---------------------------------------------------------------------------
+export const _forTesting = {
+  createHTTPClient: (token: string, uid?: string) =>
+    new ProtonHTTPClient(token, uid),
+};

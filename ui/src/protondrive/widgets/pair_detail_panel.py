@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from gi.repository import Adw, GLib, GObject, Gtk
 
+from protondrive.widgets.activity_feed import ActivityFeed
 from protondrive.widgets.conflict_log import ConflictLog
 from protondrive.widgets.sync_progress_card import SyncProgressCard
 
@@ -53,6 +54,7 @@ class PairDetailPanel(Adw.Bin):
     file_count_row: Adw.ActionRow = Gtk.Template.Child()
     total_size_row: Adw.ActionRow = Gtk.Template.Child()
     progress_slot: Gtk.Box = Gtk.Template.Child()
+    activity_slot: Gtk.Box = Gtk.Template.Child()
     # Story 4-6:
     view_conflict_log_btn: Gtk.Button = Gtk.Template.Child()
     conflict_log_slot: Gtk.Box = Gtk.Template.Child()
@@ -67,8 +69,11 @@ class PairDetailPanel(Adw.Bin):
         super().__init__(**kwargs)
         self._current_pair_id: str | None = None
         self._sync_complete_timer: int | None = None
+        self._rate_limited_timer: int | None = None
         self._progress_card: SyncProgressCard | None = None
         self._conflict_log: ConflictLog | None = None  # lazy-created on first use
+        self._activity_feed: ActivityFeed = ActivityFeed()
+        self.activity_slot.append(self._activity_feed)
         self.setup_btn.connect("clicked", lambda _: self.emit("setup-requested"))
         self.conflict_banner.connect("button-clicked", self._on_conflict_banner_dismissed)
         self.error_banner.connect("button-clicked", self._on_error_banner_dismissed)
@@ -99,6 +104,18 @@ class PairDetailPanel(Adw.Bin):
     def _on_remove_pair_clicked(self, _button: Gtk.Button) -> None:
         if self._current_pair_id is not None:
             self.emit("remove-pair-requested", self._current_pair_id)
+
+    def clear_activity(self) -> None:
+        """Clear the activity feed (called before replaying cached events for the new pair)."""
+        self._activity_feed.clear()
+
+    def on_file_synced(self, payload: dict) -> None:
+        """Prepend a file_synced event row to the activity feed."""
+        self._activity_feed.add_event(payload)
+
+    def set_activity_syncing(self, active: bool) -> None:
+        """Show or hide the reconcile-progress spinner in the activity feed."""
+        self._activity_feed.set_syncing(active)
 
     def show_conflict_log_page(self, entries: list[dict]) -> None:
         """Populate and show the conflict log page.
@@ -149,11 +166,28 @@ class PairDetailPanel(Adw.Bin):
         else:
             self.error_banner.set_revealed(False)
 
+    def show_rate_limited(self, resume_in: int) -> None:
+        """Show a transient rate-limited notice in the conflict banner, auto-clearing after resume_in seconds."""
+        if self._rate_limited_timer is not None:
+            GLib.source_remove(self._rate_limited_timer)
+            self._rate_limited_timer = None
+        self.conflict_banner.set_title(f"ProtonDrive rate limit — retrying in ~{resume_in}s")
+        self.conflict_banner.set_revealed(True)
+        self._rate_limited_timer = GLib.timeout_add(
+            resume_in * 1000, self._on_rate_limited_timeout
+        )
+
+    def _on_rate_limited_timeout(self) -> bool:
+        self._rate_limited_timer = None
+        self.conflict_banner.set_revealed(False)
+        return GLib.SOURCE_REMOVE
+
     def show_no_pairs(self) -> None:
         """Show the 'no pairs' empty state."""
         self._cancel_sync_timer()
         self._hide_progress_card()
         self._current_pair_id = None
+        self._activity_feed.clear()
         self.detail_stack.set_visible_child_name("no-pairs")
 
     def show_select_prompt(self) -> None:
@@ -244,6 +278,14 @@ class PairDetailPanel(Adw.Bin):
             self._progress_card._cancel_pulse()
             self.progress_slot.remove(self._progress_card)
             self._progress_card = None
+
+    @property
+    def current_pair_id(self) -> str | None:
+        return self._current_pair_id
+
+    def set_last_synced(self, pair_id: str, text: str) -> None:
+        if self._current_pair_id == pair_id:
+            self.last_synced_row.set_subtitle(text)
 
     def _cancel_sync_timer(self) -> None:
         if self._sync_complete_timer is not None:

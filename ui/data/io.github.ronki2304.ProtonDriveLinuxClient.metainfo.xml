@@ -4,7 +4,7 @@
   <name>ProtonDrive Linux Client</name>
   <summary>Unofficial open-source sync client for ProtonDrive on Linux</summary>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
+  <project_license>GPL-3.0-only</project_license>
 
   <developer id="io.github.ronki2304">
     <name>ronki2304</name>
@@ -31,14 +31,21 @@
 
   <launchable type="desktop-id">io.github.ronki2304.ProtonDriveLinuxClient.desktop</launchable>
 
-  <url type="homepage">https://github.com/ronki2304/ProtonDrive-LinuxClient</url>
-  <url type="bugtracker">https://github.com/ronki2304/ProtonDrive-LinuxClient/issues</url>
+  <url type="homepage">https://github.com/ronki2304/Linux_Proton_Drive</url>
+  <url type="bugtracker">https://github.com/ronki2304/Linux_Proton_Drive/issues</url>
 
   <screenshots>
-    <!-- TODO: replace with real screenshot once app is running in CI -->
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/ronki2304/ProtonDrive-LinuxClient/main/screenshots/main-window.png</image>
+      <image>https://raw.githubusercontent.com/ronki2304/Linux_Proton_Drive/main/screenshots/main-window.png</image>
       <caption>Main window showing sync pair management</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/ronki2304/Linux_Proton_Drive/main/screenshots/pair-detail.png</image>
+      <caption>Sync pair detail panel with local and remote folder paths</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/ronki2304/Linux_Proton_Drive/main/screenshots/sign-in.png</image>
+      <caption>Proton account sign-in via embedded browser</caption>
     </screenshot>
   </screenshots>
 

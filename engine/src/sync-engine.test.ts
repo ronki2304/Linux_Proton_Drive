@@ -15,7 +15,8 @@ import { createHash } from "node:crypto";
 
 import { StateDb } from "./state-db.js";
 import { SyncEngine } from "./sync-engine.js";
-import type { DriveClient, RemoteFile } from "./sdk.js";
+import type { DriveClient, EventSubscription, RemoteFile } from "./sdk.js";
+import { DriveEventType } from "./sdk.js";
 import type { IpcPushEvent } from "./ipc.js";
 import type { ConfigPair } from "./config.js";
 import { AuthExpiredError, RateLimitError, SyncError } from "./errors.js";
@@ -4097,5 +4098,638 @@ describe("FOREIGN KEY constraint mid-reconcile", () => {
     } finally {
       rmSync(goodPath, { recursive: true, force: true });
     }
+  });
+});
+
+// ── Story 8-1: Event subscription lifecycle ───────────────────────────────────
+
+describe("SyncEngine — event callback (Story 8-1)", () => {
+  const SCOPE = "volume-abc";
+
+  let evtDb: StateDb;
+  let evtEngine: SyncEngine;
+  let capturedCallback: ((event: unknown) => Promise<void>) | undefined;
+  let mockSubscription: EventSubscription;
+  let evtClient: DriveClient;
+
+  beforeEach(() => {
+    evtDb = new StateDb(":memory:");
+    evtEngine = new SyncEngine(evtDb, () => {});
+    capturedCallback = undefined;
+    mockSubscription = { dispose: mock(() => {}) };
+    evtClient = {
+      getRootTreeEventScopeId: mock(async () => SCOPE),
+      subscribeToRemoteEvents: mock(async (_scopeId: string, cb: unknown) => {
+        capturedCallback = cb as (event: unknown) => Promise<void>;
+        return mockSubscription;
+      }),
+      getRemoteNode: mock(async () => ({ ok: false as const, error: { message: "not found" } })),
+    } as unknown as DriveClient;
+  });
+
+  afterEach(() => {
+    evtDb.close();
+  });
+
+  it("callback is thin: persists event to DB and does not call getRemoteNode", async () => {
+    await evtEngine.startRemoteEventSubscription(evtClient);
+    expect(capturedCallback).toBeDefined();
+
+    const event = {
+      type: DriveEventType.NodeCreated,
+      nodeUid: "node-001",
+      treeEventScopeId: SCOPE,
+      eventId: "evt-001",
+      isTrashed: false,
+      isShared: false,
+    };
+    await capturedCallback!(event);
+
+    // Event persisted to queue
+    const queued = evtDb.getQueuedEvents();
+    expect(queued.length).toBe(1);
+    expect(queued[0]!.event_type).toBe(DriveEventType.NodeCreated);
+    // getRemoteNode NOT called (drain is async/debounced, not sync in callback)
+    expect((evtClient.getRemoteNode as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  it("callback never throws: persistEvent error logged; callback returns normally", async () => {
+    // Sabotage the DB to make persistEvent throw
+    evtDb.close(); // close DB so operations fail
+
+    const failEngine = new SyncEngine(evtDb, () => {});
+    failEngine.setDriveClient(evtClient);
+    let callbackRef: ((event: unknown) => Promise<void>) | undefined;
+    const failClient = {
+      getRootTreeEventScopeId: mock(async () => SCOPE),
+      subscribeToRemoteEvents: mock(async (_scopeId: string, cb: unknown) => {
+        callbackRef = cb as (event: unknown) => Promise<void>;
+        return mockSubscription;
+      }),
+    } as unknown as DriveClient;
+
+    await failEngine.startRemoteEventSubscription(failClient);
+    expect(callbackRef).toBeDefined();
+
+    const event = {
+      type: DriveEventType.FastForward,
+      treeEventScopeId: SCOPE,
+      eventId: "evt-001",
+    };
+    // Must NOT throw even though DB is closed
+    await expect(callbackRef!(event)).resolves.toBeUndefined();
+  });
+});
+
+describe("SyncEngine — drainEventQueue (Story 8-1)", () => {
+  const SCOPE = "volume-abc";
+  let drainDb: StateDb;
+  let drainEngine: SyncEngine;
+  let reconcileCalls: number;
+  let drainClient: DriveClient;
+
+  beforeEach(() => {
+    drainDb = new StateDb(":memory:");
+    reconcileCalls = 0;
+    drainEngine = new SyncEngine(drainDb, () => {}, () => []);
+    drainClient = {
+      getRootTreeEventScopeId: mock(async () => SCOPE),
+      getRemoteNode: mock(async () => ({ ok: false as const, error: { message: "not found" } })),
+      subscribeToRemoteEvents: mock(async () => ({ dispose: () => {} } as EventSubscription)),
+    } as unknown as DriveClient;
+    // Patch reconcileAndEnqueue to count calls without doing real work
+    (drainEngine as unknown as Record<string, unknown>)["reconcileAndEnqueue"] = mock(async () => {
+      reconcileCalls++;
+      return false;
+    });
+    drainEngine.setDriveClient(drainClient);
+  });
+
+  afterEach(() => {
+    drainDb.close();
+  });
+
+  it("FastForward: deleted from queue; no node resolution", async () => {
+    drainDb.persistEvent(SCOPE, DriveEventType.FastForward, JSON.stringify({
+      type: DriveEventType.FastForward,
+      treeEventScopeId: SCOPE,
+      eventId: "evt-001",
+    }), "evt-001");
+
+    await drainEngine.drainEventQueue(drainClient);
+
+    expect(drainDb.getQueuedEvents().length).toBe(0);
+    expect((drainClient.getRemoteNode as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  it("TreeRefresh: queue cleared for scope; reconcileAndEnqueue called", async () => {
+    drainDb.persistEvent(SCOPE, DriveEventType.FastForward, JSON.stringify({
+      type: DriveEventType.FastForward,
+      treeEventScopeId: SCOPE,
+      eventId: "evt-pre",
+    }), "evt-pre");
+    drainDb.persistEvent(SCOPE, DriveEventType.TreeRefresh, JSON.stringify({
+      type: DriveEventType.TreeRefresh,
+      treeEventScopeId: SCOPE,
+      eventId: "evt-refresh",
+    }), null);
+
+    await drainEngine.drainEventQueue(drainClient);
+
+    expect(reconcileCalls).toBeGreaterThanOrEqual(1);
+    expect(drainDb.getQueuedEvents().length).toBe(0);
+  });
+
+  it("NodeCreated with no parent: event deleted, no API call", async () => {
+    drainDb.persistEvent(SCOPE, DriveEventType.NodeCreated, JSON.stringify({
+      type: DriveEventType.NodeCreated,
+      nodeUid: "node-xyz",
+      treeEventScopeId: SCOPE,
+      eventId: "evt-001",
+      isTrashed: false,
+      isShared: false,
+    }), "evt-001");
+
+    await drainEngine.drainEventQueue(drainClient);
+
+    expect(drainDb.getQueuedEvents().length).toBe(0);
+    expect((drainClient.getRemoteNode as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+  });
+
+  it("NodeCreated with parent matching sync pair root: targeted enqueue, no extra API calls", async () => {
+    drainDb.insertPair({
+      pair_id: "p1", local_path: "/drive", remote_path: "/My Drive",
+      remote_id: "folder-root", created_at: "2026-01-01T00:00:00.000Z", last_synced_at: null,
+    });
+    const clientWithNode = {
+      ...drainClient,
+      getRemoteNode: mock(async () => ({ ok: true as const, value: { uid: "node-abc", name: "photo.jpg" } })),
+    } as unknown as DriveClient;
+    drainDb.persistEvent(SCOPE, DriveEventType.NodeCreated, JSON.stringify({
+      type: DriveEventType.NodeCreated,
+      nodeUid: "node-abc",
+      parentNodeUid: "folder-root",
+      treeEventScopeId: SCOPE,
+      eventId: "evt-002",
+      isTrashed: false,
+      isShared: false,
+    }), "evt-002");
+
+    await drainEngine.drainEventQueue(clientWithNode);
+
+    expect(drainDb.getQueuedEvents().length).toBe(0);
+    const q = drainDb.listQueue("p1");
+    expect(q.length).toBe(1);
+    expect(q[0]!.relative_path).toBe("photo.jpg");
+    expect(q[0]!.change_type).toBe("modified");
+  });
+
+  it("NodeUpdated for known file: targeted enqueue without API call", async () => {
+    drainDb.insertPair({
+      pair_id: "p1", local_path: "/drive", remote_path: "/My Drive",
+      remote_id: "folder-root", created_at: "2026-01-01T00:00:00.000Z", last_synced_at: null,
+    });
+    drainDb.upsertSyncState({
+      pair_id: "p1", relative_path: "docs/report.pdf",
+      local_mtime: "2026-01-01T00:00:00.000Z", remote_mtime: "2026-01-01T00:00:00.000Z",
+      content_hash: null, remote_node_id: "uid-report",
+    });
+    drainDb.persistEvent(SCOPE, DriveEventType.NodeUpdated, JSON.stringify({
+      type: DriveEventType.NodeUpdated,
+      nodeUid: "uid-report",
+      treeEventScopeId: SCOPE,
+      eventId: "evt-003",
+      isTrashed: false,
+      isShared: false,
+    }), "evt-003");
+
+    await drainEngine.drainEventQueue(drainClient);
+
+    expect(drainDb.getQueuedEvents().length).toBe(0);
+    expect((drainClient.getRemoteNode as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    const q = drainDb.listQueue("p1");
+    expect(q.length).toBe(1);
+    expect(q[0]!.relative_path).toBe("docs/report.pdf");
+    expect(q[0]!.change_type).toBe("modified");
+  });
+
+  it("NodeCreated with unknown parent: reconcile-trigger enqueued for all pairs", async () => {
+    drainDb.insertPair({
+      pair_id: "p1", local_path: "/drive", remote_path: "/My Drive",
+      remote_id: "folder-root", created_at: "2026-01-01T00:00:00.000Z", last_synced_at: null,
+    });
+    drainDb.persistEvent(SCOPE, DriveEventType.NodeCreated, JSON.stringify({
+      type: DriveEventType.NodeCreated,
+      nodeUid: "node-deep",
+      parentNodeUid: "uid-unknown-subfolder",
+      treeEventScopeId: SCOPE,
+      eventId: "evt-004",
+      isTrashed: false,
+      isShared: false,
+    }), "evt-004");
+
+    await drainEngine.drainEventQueue(drainClient);
+
+    expect(drainDb.getQueuedEvents().length).toBe(0);
+    expect((drainClient.getRemoteNode as ReturnType<typeof mock>).mock.calls.length).toBe(0);
+    const q = drainDb.listQueue("p1");
+    expect(q.length).toBe(1);
+    expect(q[0]!.relative_path).toBe(".reconcile-trigger");
+  });
+
+  it("drain stops on parse error: first failing event stays; subsequent events not processed", async () => {
+    // First event has invalid JSON
+    drainDb.persistEvent(SCOPE, "node_created", "{{invalid json}}", "evt-001");
+    // Second event is valid
+    drainDb.persistEvent(SCOPE, DriveEventType.FastForward, JSON.stringify({
+      type: DriveEventType.FastForward,
+      treeEventScopeId: SCOPE,
+      eventId: "evt-002",
+    }), "evt-002");
+
+    await drainEngine.drainEventQueue(drainClient);
+
+    // Drain stops on error — first event stays, second is NOT processed
+    const remaining = drainDb.getQueuedEvents();
+    expect(remaining.length).toBe(2); // both remain (drain stopped)
+  });
+
+  it("leftover queue from previous session drained before full walk decision", async () => {
+    // Pre-populate queue (simulating previous session crash)
+    drainDb.persistEvent(SCOPE, DriveEventType.FastForward, JSON.stringify({
+      type: DriveEventType.FastForward,
+      treeEventScopeId: SCOPE,
+      eventId: "evt-stale",
+    }), "evt-stale");
+
+    // Set checkpoint so full walk would be skipped — drain must still process leftovers
+    drainDb.setEventCheckpoint(SCOPE, "evt-stale");
+
+    await drainEngine.drainEventQueue(drainClient);
+
+    // Leftover was drained
+    expect(drainDb.getQueuedEvents().length).toBe(0);
+  });
+});
+
+describe("SyncEngine — subscription lifecycle (Story 8-1)", () => {
+  const SCOPE = "volume-abc";
+  let lifecycleDb: StateDb;
+  let lifecycleEngine: SyncEngine;
+
+  beforeEach(() => {
+    lifecycleDb = new StateDb(":memory:");
+    lifecycleEngine = new SyncEngine(lifecycleDb, () => {}, () => []);
+  });
+
+  afterEach(() => {
+    lifecycleDb.close();
+  });
+
+  it("disposeEventSubscription calls subscription.dispose()", async () => {
+    const disposeMock = mock(() => {});
+    const fakeSubscription: EventSubscription = { dispose: disposeMock };
+    const fakeClient = {
+      getRootTreeEventScopeId: mock(async () => SCOPE),
+      subscribeToRemoteEvents: mock(async () => fakeSubscription),
+    } as unknown as DriveClient;
+
+    await lifecycleEngine.startRemoteEventSubscription(fakeClient);
+    lifecycleEngine.disposeEventSubscription();
+
+    expect(disposeMock.mock.calls.length).toBe(1);
+  });
+
+  it("startRemoteEventSubscription guard: called only once even if invoked twice", async () => {
+    const subscribeRemote = mock(async () => ({ dispose: mock(() => {}) } as EventSubscription));
+    const fakeClient = {
+      getRootTreeEventScopeId: mock(async () => SCOPE),
+      subscribeToRemoteEvents: subscribeRemote,
+    } as unknown as DriveClient;
+
+    await lifecycleEngine.startRemoteEventSubscription(fakeClient);
+    await lifecycleEngine.startRemoteEventSubscription(fakeClient);
+
+    expect(subscribeRemote.mock.calls.length).toBe(1);
+  });
+
+  it("first run (no checkpoint): reconcileAndEnqueue is called (full walk)", async () => {
+    let reconcileCalled = false;
+    const engine = new SyncEngine(lifecycleDb, () => {}, () => []);
+    (engine as unknown as Record<string, unknown>)["reconcileAndEnqueue"] = mock(async (force?: boolean) => {
+      if (!force) reconcileCalled = true;
+      return false;
+    });
+    const fakeClient = {
+      getRootTreeEventScopeId: mock(async () => SCOPE),
+      subscribeToRemoteEvents: mock(async () => ({ dispose: () => {} } as EventSubscription)),
+    } as unknown as DriveClient;
+    engine.setDriveClient(fakeClient);
+
+    // No checkpoint → full walk should run
+    await engine.startRemoteEventSubscription(fakeClient);
+    await engine.drainEventQueue(fakeClient);
+    await engine.startSyncAll();
+
+    expect(reconcileCalled).toBe(true);
+  });
+
+  it("subsequent run (checkpoint exists): full walk skipped", async () => {
+    lifecycleDb.setEventCheckpoint(SCOPE, "evt-saved");
+
+    let reconcileCallArgs: boolean[] = [];
+    const engine = new SyncEngine(lifecycleDb, () => {}, () => []);
+    (engine as unknown as Record<string, unknown>)["reconcileAndEnqueue"] = mock(async (force = false) => {
+      reconcileCallArgs.push(force);
+      return false;
+    });
+    const fakeClient = {
+      getRootTreeEventScopeId: mock(async () => SCOPE),
+      subscribeToRemoteEvents: mock(async () => ({ dispose: () => {} } as EventSubscription)),
+    } as unknown as DriveClient;
+    engine.setDriveClient(fakeClient);
+
+    await engine.startSyncAll();
+
+    // reconcileAndEnqueue called with force=false → should have returned early
+    // (force=false + checkpoint present → returns false without walking)
+    expect(reconcileCallArgs.every((f) => f === false)).toBe(true);
+  });
+});
+
+// ── Story 8-2: IPC Activity Events ───────────────────────────────────────────
+
+describe("SyncEngine — IPC activity events (Story 8-2)", () => {
+  beforeEach(() => {
+    mock.restore(); // clear any node:fs/promises module mocks from earlier describe blocks
+    db = new StateDb(":memory:");
+    emittedEvents = [];
+    tmpDir = mkdtempSync(join(tmpdir(), "sync-engine-8-2-test-"));
+    setupPair();
+  });
+
+  afterEach(() => {
+    db.close();
+    rmSync(tmpDir, { recursive: true, force: true });
+    mock.restore();
+  });
+
+  function makeActivityClient(overrides: Partial<DriveClient> = {}): DriveClient {
+    return {
+      ...makeMockClient(),
+      trashNode: mock(async (_uid: string) => {}),
+      ...overrides,
+    } as unknown as DriveClient;
+  }
+
+  function enqueueActivity(
+    relativePath: string,
+    changeType: "created" | "modified" | "deleted",
+  ): void {
+    db.enqueue({
+      pair_id: PAIR_ID,
+      relative_path: relativePath,
+      change_type: changeType,
+      queued_at: "2026-04-25T00:00:00.000Z",
+    });
+  }
+
+  function makeDownloadClient(
+    remoteFiles: ReturnType<typeof makeRemoteFile>[],
+  ): DriveClient {
+    return makeActivityClient({
+      listRemoteFiles: mock(async () => remoteFiles),
+      downloadFile: mock(async (_uid: string, target: WritableStream<Uint8Array>) => {
+        const writer = target.getWriter();
+        await writer.write(new Uint8Array([1, 2, 3]));
+        await writer.close();
+      }),
+    });
+  }
+
+  it("4.1 file_synced emitted with direction:download and bare file_name after reconcilePair download", async () => {
+    const remoteMtime = "2030-01-01T00:00:00.000Z";
+    mockClient = makeDownloadClient([makeRemoteFile("file.txt", remoteMtime, 100, "uid-dl")]);
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const events = emittedEvents.filter((e) => e.type === "file_synced");
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const ev = events[0]!;
+    expect(ev.payload["direction"]).toBe("download");
+    expect(ev.payload["file_name"]).toBe("file.txt");
+    expect(ev.payload["pair_id"]).toBe(PAIR_ID);
+    expect(String(ev.payload["file_name"]).includes("/")).toBe(false);
+  });
+
+  it("4.2 file_synced emitted with direction:upload after drainQueue upload", async () => {
+    writeLocalFile("file.txt");
+    enqueueActivity("file.txt", "created");
+
+    mockClient = makeActivityClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => ({ node_uid: "uid-up", revision_uid: "rev-1" })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const events = emittedEvents.filter((e) => e.type === "file_synced");
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const ev = events[0]!;
+    expect(ev.payload["direction"]).toBe("upload");
+    expect(ev.payload["file_name"]).toBe("file.txt");
+    expect(ev.payload["pair_id"]).toBe(PAIR_ID);
+  });
+
+  it("4.3 file_synced NOT emitted when processQueueEntry resolves to conflict", async () => {
+    writeLocalFile("file.txt");
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "file.txt",
+      local_mtime: "2026-04-10T09:00:00.000Z",
+      remote_mtime: "2026-04-10T10:00:00.000Z",
+      content_hash: null,
+    });
+    enqueueActivity("file.txt", "modified");
+
+    mockClient = makeActivityClient({
+      listRemoteFiles: mock(async () => [
+        makeRemoteFile("file.txt", "2026-04-11T10:00:00.000Z"),
+      ]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const events = emittedEvents.filter((e) => e.type === "file_synced");
+    expect(events.length).toBe(0);
+  });
+
+  it("4.4 reconcile_progress phase:scanning is the first reconcile_progress event", async () => {
+    mockClient = makeActivityClient({
+      listRemoteFiles: mock(async () => []),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const progressEvents = emittedEvents.filter((e) => e.type === "reconcile_progress");
+    expect(progressEvents.length).toBeGreaterThanOrEqual(1);
+    expect(progressEvents[0]!.payload["phase"]).toBe("scanning");
+    expect(progressEvents[0]!.payload["pair_id"]).toBe(PAIR_ID);
+  });
+
+  it("4.5 phase transition scanning→downloading→idle for download-only scenario, no uploading", async () => {
+    const remoteMtime = "2030-01-01T00:00:00.000Z";
+    mockClient = makeDownloadClient([makeRemoteFile("file.txt", remoteMtime, 100, "uid-dl")]);
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const progressEvents = emittedEvents.filter((e) => e.type === "reconcile_progress");
+    const phases = progressEvents.map((e) => e.payload["phase"] as string);
+    expect(phases[0]).toBe("scanning");
+    expect(phases).toContain("downloading");
+    expect(phases[phases.length - 1]).toBe("idle");
+    expect(phases).not.toContain("uploading");
+  });
+
+  it("4.6 phase transition includes scanning, uploading, idle for upload-only scenario", async () => {
+    writeLocalFile("file.txt");
+    enqueueActivity("file.txt", "created");
+
+    mockClient = makeActivityClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => ({ node_uid: "uid-up", revision_uid: "rev-1" })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const progressEvents = emittedEvents.filter((e) => e.type === "reconcile_progress");
+    const phases = progressEvents.map((e) => e.payload["phase"] as string);
+    expect(phases).toContain("scanning");
+    expect(phases).toContain("uploading");
+    expect(phases).toContain("idle");
+    expect(phases[0]).toBe("scanning");
+    expect(phases.indexOf("uploading")).toBeGreaterThan(phases.indexOf("scanning"));
+    expect(phases[phases.length - 1]).toBe("idle");
+  });
+
+  it("4.7 reconcile_progress files_total and files_processed are accurate for two-file download", async () => {
+    const remoteMtime = "2030-01-01T00:00:00.000Z";
+    mockClient = makeDownloadClient([
+      makeRemoteFile("a.txt", remoteMtime, 10, "uid-a"),
+      makeRemoteFile("b.txt", remoteMtime, 20, "uid-b"),
+    ]);
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.startSyncAll();
+
+    const dlEvents = emittedEvents.filter(
+      (e) => e.type === "reconcile_progress" && e.payload["phase"] === "downloading",
+    );
+    const initial = dlEvents.find((e) => Number(e.payload["files_processed"]) === 0);
+    expect(initial).toBeDefined();
+    expect(initial!.payload["files_total"]).toBe(2);
+    const afterFirst = dlEvents.find((e) => Number(e.payload["files_processed"]) === 1);
+    expect(afterFirst).toBeDefined();
+    const final = dlEvents.find((e) => Number(e.payload["files_processed"]) === 2);
+    expect(final).toBeDefined();
+  });
+
+  it("4.8 file_synced timestamp is a valid ISO 8601 string", async () => {
+    writeLocalFile("file.txt");
+    enqueueActivity("file.txt", "created");
+
+    mockClient = makeActivityClient({
+      listRemoteFiles: mock(async () => []),
+      uploadFile: mock(async () => ({ node_uid: "uid-up", revision_uid: "rev-1" })),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const events = emittedEvents.filter((e) => e.type === "file_synced");
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const ts = events[0]!.payload["timestamp"] as string;
+    expect(typeof ts).toBe("string");
+    expect(new Date(ts).toISOString()).toBe(ts);
+  });
+
+  it("4.9 file_synced NOT emitted when processQueueEntry resolves via trashNode", async () => {
+    const remoteMtime = "2026-04-10T10:00:00.000Z";
+    db.upsertSyncState({
+      pair_id: PAIR_ID,
+      relative_path: "gone.txt",
+      local_mtime: "2026-04-10T09:00:00.000Z",
+      remote_mtime: remoteMtime,
+      content_hash: null,
+    });
+    enqueueActivity("gone.txt", "deleted");
+
+    mockClient = makeActivityClient({
+      listRemoteFiles: mock(async () => [makeRemoteFile("gone.txt", remoteMtime, 100, "remote-uid")]),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const events = emittedEvents.filter((e) => e.type === "file_synced");
+    expect(events.length).toBe(0);
+  });
+
+  it("4.10 file_synced NOT emitted when processQueueEntry resolves via dequeue (deleted, no state, no remote)", async () => {
+    // Deleted entry + no sync_state + no remote → outcome = "dequeue" directly (no stat call)
+    enqueueActivity("gone.txt", "deleted");
+
+    mockClient = makeActivityClient({
+      listRemoteFiles: mock(async () => []),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const events = emittedEvents.filter((e) => e.type === "file_synced");
+    expect(events.length).toBe(0);
+  });
+
+  it("4.11 file_synced emitted with direction:download for inline_download path (no sync state, remote newer than local)", async () => {
+    // state=undefined, remote defined, !isDelete, localStat.mtime < remote.remote_mtime → inline_download
+    writeLocalFile("file.txt");
+    enqueueActivity("file.txt", "modified");
+
+    const remoteMtime = "2030-01-01T00:00:00.000Z"; // guaranteed future date → remote is newer
+    mockClient = makeActivityClient({
+      listRemoteFiles: mock(async () => [makeRemoteFile("file.txt", remoteMtime, 100, "uid-inline")]),
+      downloadFile: mock(async (_uid: string, target: WritableStream<Uint8Array>) => {
+        const writer = target.getWriter();
+        await writer.write(new Uint8Array([1, 2, 3]));
+        await writer.close();
+      }),
+    });
+    engine = new SyncEngine(db, (e) => emittedEvents.push(e));
+    engine.setDriveClient(mockClient);
+
+    await engine.drainQueue();
+
+    const events = emittedEvents.filter((e) => e.type === "file_synced");
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const ev = events[0]!;
+    expect(ev.payload["direction"]).toBe("download");
+    expect(ev.payload["file_name"]).toBe("file.txt");
+    expect(ev.payload["pair_id"]).toBe(PAIR_ID);
   });
 });

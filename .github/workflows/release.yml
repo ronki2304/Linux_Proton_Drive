@@ -28,7 +28,7 @@ jobs:
 
       - name: Run engine tests
         working-directory: engine
-        run: bun test
+        run: bun run test
 
   release:
     name: Build & Release
@@ -38,6 +38,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Validate version consistency
+        run: |
+          TAG_BASE="${GITHUB_REF_NAME#v}"
+          TAG_BASE="${TAG_BASE%%-*}"
+          [ -f VERSION ] || { echo "ERROR: VERSION file not found at repo root. Run: ./scripts/bump-version.sh <version>"; exit 1; }
+          FILE_VERSION="$(cat VERSION)"
+          if [ "$TAG_BASE" != "$FILE_VERSION" ]; then
+            echo "ERROR: Tag '${GITHUB_REF_NAME}' base version ('${TAG_BASE}') != VERSION file ('${FILE_VERSION}')."
+            echo "Run: ./scripts/bump-version.sh ${TAG_BASE} && git add VERSION ui/meson.build engine/package.json ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml && git commit -m 'chore: bump version to ${TAG_BASE}' && git push"
+            exit 1
+          fi
+          echo "✓ Version ${FILE_VERSION} matches tag ${GITHUB_REF_NAME}"
 
       - name: Install Flatpak dependencies
         run: |
@@ -58,3 +71,4 @@ jobs:
         with:
           files: io.github.ronki2304.ProtonDriveLinuxClient.flatpak
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}

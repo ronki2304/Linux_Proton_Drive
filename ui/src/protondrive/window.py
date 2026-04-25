@@ -60,6 +60,7 @@ class MainWindow(Adw.ApplicationWindow):
         self._session_data: dict[str, Any] | None = None
         self._sync_pair_rows: dict[str, SyncPairRow] = {}
         self._pairs_data: dict[str, dict] = {}
+        self._timestamp_refresh_timer: int | None = None
         # Set by `on_queue_replay_complete` — non-zero means the footer is
         # showing "N conflict copies need attention" and must not be reset
         # to "All synced" by on_sync_complete / on_watcher_status / on_online.
@@ -83,6 +84,12 @@ class MainWindow(Adw.ApplicationWindow):
         self._pending_remove_pair_id: str | None = None
         self._folder_missing_pair_ids: set[str] = set()  # Story 6-4
         self._pending_update_pair_id: str | None = None  # Story 6-4
+        # Phase state machine (Story 8-2a).
+        # _pair_phase: pair_id → "active" | "paused" | "paused_token" (absent = cleared)
+        # _phase_watchdog_timers: pair_id → GLib timer ID (30s silence watchdog)
+        self._pair_phase: dict[str, str] = {}
+        self._phase_watchdog_timers: dict[str, int] = {}
+        self._file_synced_cache: dict[str, list[dict]] = {}  # pair_id → recent events (capped)
         self.add_pair_button.connect("clicked", self._on_add_pair_clicked)
         self.status_footer_bar.connect("conflict-clicked", self._on_footer_conflict_clicked)
         self.pair_detail_panel.connect("setup-requested", self._on_setup_requested)
@@ -197,6 +204,10 @@ class MainWindow(Adw.ApplicationWindow):
         self._pending_remove_pair_id = None
         self._folder_missing_pair_ids = set()  # Story 6-4
         self._pending_update_pair_id = None    # Story 6-4
+        self._cancel_all_watchdogs()
+        self._pair_phase = {}
+        self._phase_watchdog_timers = {}
+        self._file_synced_cache = {}
         self.hide_engine_crashed_banner()
         self._row_activated_connected = False
         self.add_pair_button.set_sensitive(False)
@@ -427,9 +438,9 @@ class MainWindow(Adw.ApplicationWindow):
             application_name="ProtonDrive Linux Client",
             application_icon=APP_ID,
             version="0.1.0",
-            license_type=Gtk.License.MIT_X11,
-            issue_url="https://github.com/ronki2304/ProtonDrive-LinuxClient/issues",
-            website="https://github.com/ronki2304/ProtonDrive-LinuxClient",
+            license_type=Gtk.License.GPL_3_0_ONLY,
+            issue_url="https://github.com/ronki2304/Linux_Proton_Drive/issues",
+            website="https://github.com/ronki2304/Linux_Proton_Drive",
             debug_info=(
                 f"Flatpak App ID: {APP_ID}\n"
                 f"SDK: @protontech/drive-sdk 0.14.3\n"
@@ -487,6 +498,50 @@ class MainWindow(Adw.ApplicationWindow):
             self.status_footer_bar.set_error(self._get_pair_name(pair_id))
         else:
             self.status_footer_bar.set_error(f"{count} pairs")
+
+    def _reset_watchdog(self, pair_id: str) -> None:
+        self._cancel_watchdog(pair_id)
+        self._phase_watchdog_timers[pair_id] = GLib.timeout_add_seconds(
+            30, lambda pid=pair_id: self._on_watchdog_fired(pid) or GLib.SOURCE_REMOVE
+        )
+
+    def _cancel_watchdog(self, pair_id: str) -> None:
+        timer_id = self._phase_watchdog_timers.pop(pair_id, None)
+        if timer_id is not None:
+            GLib.source_remove(timer_id)
+
+    def _cancel_all_watchdogs(self) -> None:
+        for timer_id in self._phase_watchdog_timers.values():
+            GLib.source_remove(timer_id)
+        self._phase_watchdog_timers = {}
+
+    def _on_watchdog_fired(self, pair_id: str) -> bool:
+        self._phase_watchdog_timers.pop(pair_id, None)
+        if pair_id not in self._pair_phase:
+            return GLib.SOURCE_REMOVE
+        if self._pair_phase.get(pair_id) == "paused_token":
+            return GLib.SOURCE_REMOVE
+        del self._pair_phase[pair_id]
+        self._apply_resting_state(pair_id)
+        has_active = any(v == "active" for v in self._pair_phase.values())
+        self.pair_detail_panel.set_activity_syncing(has_active)
+        return GLib.SOURCE_REMOVE
+
+    def _apply_resting_state(self, pair_id: str) -> None:
+        """Set pair row to its non-phase resting state (error/conflict/synced)."""
+        row = self._sync_pair_rows.get(pair_id)
+        if row is None or row.state == "offline":
+            return
+        if pair_id in self._folder_missing_pair_ids:
+            return  # folder-missing is authoritative; only update_path/remove_pair clears it
+        if pair_id in self._error_pair_ids:
+            row.set_state("error")
+            return
+        pair_conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
+        if pair_conflict_count > 0:
+            row.set_state("conflict", conflict_count=pair_conflict_count)
+        else:
+            row.set_state("synced")
 
     def on_session_ready(self, payload: dict[str, Any]) -> None:
         """Handle session_ready from engine — same for initial auth and re-auth."""
@@ -546,6 +601,7 @@ class MainWindow(Adw.ApplicationWindow):
                 d["last_synced_text"] = _fmt_relative_time(last_synced_at)
             self._pairs_data[p.get("pair_id", "")] = d
 
+        self._start_timestamp_refresh_timer()
         self._scan_existing_conflict_copies()
 
         if not pairs:
@@ -557,11 +613,18 @@ class MainWindow(Adw.ApplicationWindow):
             self.pairs_list.connect("row-activated", self._on_row_activated)
             self._row_activated_connected = True
 
+    def _reload_activity_feed(self, pair_id: str) -> None:
+        """Clear the activity feed and replay cached events for pair_id (most-recent-first)."""
+        self.pair_detail_panel.clear_activity()
+        for event in reversed(self._file_synced_cache.get(pair_id, [])):
+            self.pair_detail_panel.on_file_synced(event)
+
     def _on_row_activated(self, list_box: Gtk.ListBox, row: Gtk.ListBoxRow) -> None:
         """Handle pair row selection — route to pair detail in content area."""
         pair_id = row.pair_id
         pair_data = self._pairs_data.get(pair_id, {})
         self.pair_detail_panel.show_pair(pair_data)  # resets banner to hidden
+        self._reload_activity_feed(pair_id)
         # Immediately restore banner if this pair has active conflicts.
         conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
@@ -587,6 +650,7 @@ class MainWindow(Adw.ApplicationWindow):
         self.pairs_list.select_row(row)
         pair_data = self._pairs_data.get(pair_id, {})
         self.pair_detail_panel.show_pair(pair_data)
+        self._reload_activity_feed(pair_id)
         conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         self.pair_detail_panel.set_conflict_state(pair_id, conflict_count, row.pair_name)
         if pair_id in self._folder_missing_pair_ids:      # Story 6-4
@@ -605,6 +669,8 @@ class MainWindow(Adw.ApplicationWindow):
         self._error_messages.pop(pair_id, None)
         self._folder_missing_pair_ids.discard(pair_id)  # Story 6-4
         self._conflict_copies_by_pair.pop(pair_id, None)
+        self._cancel_watchdog(pair_id)
+        self._pair_phase.pop(pair_id, None)
         self._sync_pair_rows.pop(pair_id, None)
         self._pairs_data.pop(pair_id, None)
 
@@ -701,12 +767,30 @@ class MainWindow(Adw.ApplicationWindow):
         row = self._sync_pair_rows.get(pair_id)
         if row is None:
             return
-        row.set_state("error")
+        # Phase indicator: active → paused (watchdog continues from active; now includes error-paused).
+        if pair_id in self._pair_phase:
+            self._pair_phase[pair_id] = "paused"
+            row.set_state("paused")
+        else:
+            row.set_state("error")
         self._error_pair_ids.add(pair_id)
         self._error_pending_cycle.add(pair_id)
         self._error_messages[pair_id] = message          # Story 6-0d
         self.pair_detail_panel.set_error_state(pair_id, True, message)  # Story 6-0d
         self._update_footer_error_state()
+        has_active = any(v == "active" for v in self._pair_phase.values())
+        self.pair_detail_panel.set_activity_syncing(has_active)
+
+    def on_token_expired_phase_pause(self) -> None:
+        """Pause all active/paused phase indicators when the session token expires."""
+        for pair_id, phase in list(self._pair_phase.items()):
+            if phase in ("active", "paused"):
+                self._pair_phase[pair_id] = "paused_token"
+                self._cancel_watchdog(pair_id)  # no watchdog for token_expired-paused
+                row = self._sync_pair_rows.get(pair_id)
+                if row is not None and pair_id not in self._folder_missing_pair_ids:
+                    row.set_state("paused")
+        self.pair_detail_panel.set_activity_syncing(False)
 
     def on_pair_folder_missing(self, pair_id: str, local_path: str) -> None:
         """Handle engine local_folder_missing event (Story 6-4 AC1, AC5)."""
@@ -720,11 +804,29 @@ class MainWindow(Adw.ApplicationWindow):
         self.pair_detail_panel.show_folder_missing(pair_id, local_path)
         self._update_footer_error_state()
 
+    def _start_timestamp_refresh_timer(self) -> None:
+        if self._timestamp_refresh_timer is not None:
+            GLib.source_remove(self._timestamp_refresh_timer)
+        self._timestamp_refresh_timer = GLib.timeout_add_seconds(60, self._refresh_timestamps)
+
+    def _refresh_timestamps(self) -> bool:
+        current_pair_id = self.pair_detail_panel.current_pair_id
+        for pair_id, data in self._pairs_data.items():
+            ts = data.get("last_synced_at")
+            if not ts or data.get("last_synced_text") == "Syncing…":
+                continue
+            fresh = _fmt_relative_time(ts)
+            data["last_synced_text"] = fresh
+            if pair_id == current_pair_id:
+                self.pair_detail_panel.set_last_synced(pair_id, fresh)
+        return GLib.SOURCE_CONTINUE
+
     def on_rate_limited(self, payload: dict[str, Any]) -> None:
         """Handle engine's `rate_limited` push event (Story 3-4 AC4)."""
         resume_in = (payload.get("resume_in_seconds") or 0)
         resume_in = int(resume_in) if resume_in > 0 else 5  # safe default
         self.status_footer_bar.set_rate_limited(resume_in)
+        self.pair_detail_panel.show_rate_limited(resume_in)
 
     def on_pair_reconciling(self, payload: dict[str, Any]) -> None:
         """Set pair row to amber and footer to 'Reconciling…' when engine starts reconciling."""
@@ -735,16 +837,64 @@ class MainWindow(Adw.ApplicationWindow):
         if self._total_active_conflicts() == 0 and not self._error_pair_ids:
             pair_name = row.pair_name if row is not None else pair_id
             self.status_footer_bar.set_reconciling(pair_name)
+        if pair_id in self._pairs_data:
+            self._pairs_data[pair_id]["last_synced_text"] = "Syncing…"
+            self.pair_detail_panel.set_last_synced(pair_id, "Syncing…")
+
+    def on_reconcile_progress(self, payload: dict[str, Any]) -> None:
+        """Handle reconcile_progress push event — drive per-pair phase state machine."""
+        pair_id = payload.get("pair_id", "")
+        phase = payload.get("phase", "")
+        if not pair_id or not phase:
+            return
+
+        if phase in ("scanning", "uploading", "downloading"):
+            self._pair_phase[pair_id] = "active"
+            self._reset_watchdog(pair_id)
+            row = self._sync_pair_rows.get(pair_id)
+            if row is not None and pair_id not in self._folder_missing_pair_ids:
+                row.set_state("syncing")
+
+        elif phase == "idle":
+            if pair_id not in self._pair_phase:
+                return  # already cleared — AC 8 no-op
+            self._cancel_watchdog(pair_id)
+            del self._pair_phase[pair_id]
+            # on_sync_complete fires before idle (per 8-2 emission order),
+            # so row state is already correct. _apply_resting_state is a
+            # defensive fallback for the rare case they arrive out of order.
+            row = self._sync_pair_rows.get(pair_id)
+            if row is not None and row.state in ("syncing", "paused"):
+                self._apply_resting_state(pair_id)
+
+        # Update activity feed spinner — show if any pair is actively reconciling.
+        has_active = any(v == "active" for v in self._pair_phase.values())
+        self.pair_detail_panel.set_activity_syncing(has_active)
+
+    def on_file_synced(self, payload: dict[str, Any]) -> None:
+        """Cache file_synced event per pair and forward to the feed only if that pair is shown."""
+        pair_id = payload.get("pair_id", "")
+        row = self._sync_pair_rows.get(pair_id)
+        pair_name = row.pair_name if row is not None else ""
+        if not pair_name:
+            local_path = self._pairs_data.get(pair_id, {}).get("local_path", "")
+            pair_name = os.path.basename(local_path.rstrip("/")) if local_path else pair_id
+        enriched = dict(payload)
+        enriched["pair_name"] = pair_name
+        cache = self._file_synced_cache.setdefault(pair_id, [])
+        cache.insert(0, enriched)
+        if len(cache) > 50:
+            cache.pop()
+        if self.pair_detail_panel.current_pair_id == pair_id:
+            self.pair_detail_panel.on_file_synced(enriched)
 
     def on_sync_progress(self, payload: dict[str, Any]) -> None:
         """Update pair row and footer bar when sync is in progress."""
         pair_id = payload.get("pair_id", "")
         row = self._sync_pair_rows.get(pair_id)
-        if row is not None:
+        if row is not None and row.state not in ("offline", "folder_missing", "error", "conflict", "paused"):
             row.set_state("syncing")
-        pair_name = payload.get("pair_name", pair_id)
-        if not pair_name and row is not None:
-            pair_name = row.pair_name
+        pair_name = payload.get("pair_name") or (row.pair_name if row is not None else pair_id)
         files_done = payload.get("files_done", 0)
         files_total = payload.get("files_total", 0)
         # Conflict > Syncing: only update footer to "syncing" if no active conflicts or errors.
@@ -780,7 +930,11 @@ class MainWindow(Adw.ApplicationWindow):
         # Determine post-sync state for this pair's row.
         pair_conflict_count = len(self._conflict_copies_by_pair.get(pair_id, []))
         row = self._sync_pair_rows.get(pair_id)
-        if row is not None and row.state != "offline":
+        # If the reconcile phase is still active for this pair, the row must stay
+        # "syncing" (teal). The idle phase event via on_reconcile_progress is the
+        # authoritative end-of-reconcile signal; let it call _apply_resting_state.
+        still_reconciling = self._pair_phase.get(pair_id) == "active"
+        if row is not None and row.state != "offline" and not still_reconciling:
             if pair_id in self._error_pair_ids:
                 # Cycle-based error clearing: if no new error arrived this cycle for this pair,
                 # clear error state. If error arrived again this cycle, keep it and reset the flag.
@@ -811,9 +965,9 @@ class MainWindow(Adw.ApplicationWindow):
 
         self.pair_detail_panel.on_sync_complete(payload)
         if pair_id in self._pairs_data:
-            self._pairs_data[pair_id]["last_synced_text"] = _fmt_relative_time(
-                payload.get("timestamp", "")
-            )
+            ts = payload.get("timestamp", "")
+            self._pairs_data[pair_id]["last_synced_at"] = ts
+            self._pairs_data[pair_id]["last_synced_text"] = _fmt_relative_time(ts)
             file_count = payload.get("file_count", None)
             total_bytes = payload.get("total_bytes", 0)
             if isinstance(file_count, int):

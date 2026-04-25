@@ -1,5 +1,5 @@
 # generated: 2026-04-08
-# last_updated: 2026-04-08
+# last_updated: 2026-04-25  # 8-2 done
 # project: ProtonDrive-LinuxClient
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-25  # 8-1 ready-for-dev
+last_updated: 2026-04-25  # 8-6 done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -143,9 +143,12 @@ development_status:
   # Epic 8: SDK Compliance & Incremental Sync + Activity Log
   epic-8: in-progress
   8-0-pre-epic-debt-cleanup: done
-  8-1-event-based-incremental-reconciliation: ready-for-dev
-  8-2-ipc-activity-events: backlog
-  8-3-activity-feed-ui: backlog
-  8-4-release-engineering-version-management: backlog  # Added Epic 7 retro 2026-04-24: canonical version source, pre-release dry-run, release runbook
-  8-5-license-alignment: backlog  # Added 2026-04-25 CC: GPL-3.0 required by @protontech/drive-sdk; replaces MIT declarations in LICENSE, metainfo, package.json, README
+  8-1-event-based-incremental-reconciliation: done
+  8-2-ipc-activity-events: done
+  8-2a-reconcile-progress-state-machine: done
+  8-3-activity-feed-ui: done
+  8-4-release-engineering-version-management: done  # T5 (manual dry-run, AC6) deferred to end of Epic 8
+  8-4b-actionable-decryption-error-ux: backlog  # Draft story pre-existing; renamed from 8-4 to make room for release engineering; well-finished spec
+  8-5-license-alignment: done  # Added 2026-04-25 CC: GPL-3.0 required by @protontech/drive-sdk; replaces MIT declarations in LICENSE, metainfo, package.json, README
+  8-6-sdk-client-identification: done  # Added 2026-04-25 CC: x-pm-appversion was spoofing web-drive@5.0.0.0; must use ronki230-ProtonDriveLinuxClient@{version}
   epic-8-retrospective: optional

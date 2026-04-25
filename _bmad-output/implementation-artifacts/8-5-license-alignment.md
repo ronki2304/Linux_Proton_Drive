@@ -1,6 +1,6 @@
 # Story 8-5: License Alignment (GPL-3.0)
 
-Status: ready-for-dev
+Status: done
 
 ## Story
 
@@ -70,7 +70,8 @@ All 56 bundled packages checked. No proprietary or AGPL licenses found.
 ### AC6 — No MIT references remain in distributed artifacts
 
 **When** the story is complete
-**Then** `grep -r "MIT" LICENSE engine/package.json ui/data/*.metainfo.xml README.md` returns no matches
+**Then** `grep -rw "MIT" LICENSE engine/package.json ui/data/*.metainfo.xml README.md` returns no matches
+_(Note: `-w` required — GPL-3.0 boilerplate contains "MIT" as a substring in words like PERMITTED and LIMITED.)_
 
 ### AC7 — All tests pass
 
@@ -84,29 +85,29 @@ All 56 bundled packages checked. No proprietary or AGPL licenses found.
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Replace root `LICENSE` file** (AC1)
-  - [ ] 1.1 Replace `LICENSE` with the full GNU General Public License Version 3 text
-  - [ ] 1.2 Obtain GPL-3.0 text from https://www.gnu.org/licenses/gpl-3.0.txt — keep copyright header: `Copyright (c) 2026 ProtonDrive Linux Client Contributors`
+- [x] **Task 1 — Replace root `LICENSE` file** (AC1)
+  - [x] 1.1 Replace `LICENSE` with the full GNU General Public License Version 3 text
+  - [x] 1.2 Obtain GPL-3.0 text from https://www.gnu.org/licenses/gpl-3.0.txt — keep copyright header: `Copyright (c) 2026 ProtonDrive Linux Client Contributors`
 
-- [ ] **Task 2 — Update `engine/package.json`** (AC2)
-  - [ ] 2.1 Change `"license": "MIT"` to `"license": "GPL-3.0-only"` in `engine/package.json`
+- [x] **Task 2 — Update `engine/package.json`** (AC2)
+  - [x] 2.1 Change `"license": "MIT"` to `"license": "GPL-3.0-only"` in `engine/package.json`
 
-- [ ] **Task 3 — Update AppStream metainfo** (AC3)
-  - [ ] 3.1 In `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml`, change `<project_license>MIT</project_license>` to `<project_license>GPL-3.0-only</project_license>`
-  - [ ] 3.2 Run `appstream-util validate ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml` — confirm no errors
+- [x] **Task 3 — Update AppStream metainfo** (AC3)
+  - [x] 3.1 In `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml`, change `<project_license>MIT</project_license>` to `<project_license>GPL-3.0-only</project_license>`
+  - [x] 3.2 Run `appstream-util validate ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml` — confirm no errors
 
-- [ ] **Task 4 — Update README.md** (AC4)
-  - [ ] 4.1 Replace both MIT badge instances with GPL-3.0 badge (shield URL: `https://img.shields.io/badge/License-GPL--3.0-blue.svg`)
-  - [ ] 4.2 Update the license section text to reference GPL-3.0-only and list bundled copyleft deps
+- [x] **Task 4 — Update README.md** (AC4)
+  - [x] 4.1 Replace both MIT badge instances with GPL-3.0 badge (shield URL: `https://img.shields.io/badge/License-GPL--3.0-blue.svg`)
+  - [x] 4.2 Update the license section text to reference GPL-3.0-only and list bundled copyleft deps
 
-- [ ] **Task 5 — Add License section to CONTRIBUTING.md** (AC5)
-  - [ ] 5.1 Add a "## License" section near the bottom of `CONTRIBUTING.md` with the dep audit summary (see AC5 for exact items)
+- [x] **Task 5 — Add License section to CONTRIBUTING.md** (AC5)
+  - [x] 5.1 Add a "## License" section near the bottom of `CONTRIBUTING.md` with the dep audit summary (see AC5 for exact items)
 
-- [ ] **Task 6 — Final validation** (AC6, AC7)
-  - [ ] 6.1 `grep -r "MIT" LICENSE engine/package.json ui/data/*.metainfo.xml README.md` — must return no matches
-  - [ ] 6.2 `bun test 'src/*.test.ts'` from `engine/` — all pass
-  - [ ] 6.3 `.venv/bin/pytest ui/tests/` — all pass, zero regressions
-  - [ ] 6.4 Set story status to `review`
+- [x] **Task 6 — Final validation** (AC6, AC7)
+  - [x] 6.1 `grep -r "MIT" LICENSE engine/package.json ui/data/*.metainfo.xml README.md` — must return no matches
+  - [x] 6.2 `bun test 'src/*.test.ts'` from `engine/` — all pass
+  - [x] 6.3 `.venv/bin/pytest ui/tests/` — all pass, zero regressions
+  - [x] 6.4 Set story status to `review`
 
 ---
 
@@ -142,13 +143,36 @@ Version 3, 29 June 2007
 
 LGPL-3.0+ is explicitly designed to be compatible with GPL-3.0. No special treatment required for openpgp — it is used as a library (not modified), and its LGPL terms are satisfied by distribution of the Flatpak. The README and CONTRIBUTING.md should mention it for transparency.
 
+### metainfo.xml: do NOT touch `metadata_license`
+
+Line 6 reads `<metadata_license>CC0-1.0</metadata_license>`. **Leave it unchanged.** It licenses the metainfo XML file itself (an AppStream requirement) — not the application. Flathub requires CC0-1.0 here. Only `<project_license>` on line 7 changes.
+
+### CONTRIBUTING.md: exact section to append (end of file, after line 248)
+
+```markdown
+
+## License
+
+This project is licensed under **GPL-3.0-only** — see [LICENSE](./LICENSE).
+
+**Why GPL-3.0?** The bundled `@protontech/drive-sdk` (GPL-3.0) is embedded into the distributed
+binary via `bun build --compile`, making the combined work a GPL-3.0 derivative.
+
+**Runtime dependency licenses:**
+- `@protontech/drive-sdk` — GPL-3.0 (the triggering dependency)
+- `openpgp` — LGPL-3.0+ (compatible with GPL-3.0)
+- `bcryptjs`, `js-yaml`, `undici` — MIT (compatible with GPL-3.0)
+
+No proprietary or AGPL dependencies are included. Full audit: 56 packages checked 2026-04-25.
+```
+
 ### Files touched
 
 - `LICENSE` — Task 1: full text replacement
-- `engine/package.json` — Task 2: one field change
-- `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml` — Task 3: one field change
+- `engine/package.json` — Task 2: one field change (`"license"` only; `"version"` is managed by bump-version.sh and is untouched)
+- `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml` — Task 3: one field change (`<project_license>` only)
 - `README.md` — Task 4: badge + section text
-- `CONTRIBUTING.md` — Task 5: new License section
+- `CONTRIBUTING.md` — Task 5: new License section appended at end
 
 ---
 
@@ -156,12 +180,40 @@ LGPL-3.0+ is explicitly designed to be compatible with GPL-3.0. No special treat
 
 ### Agent Model Used
 
-<!-- fill in -->
+claude-sonnet-4-6
 
 ### Completion Notes List
 
-<!-- fill in -->
+- Task 1: Fetched GPL-3.0 full text via `curl https://www.gnu.org/licenses/gpl-3.0.txt` (674 lines, 35KB). Prepended copyright line as specified. LICENSE is now 676 lines.
+- Task 2: `engine/package.json` `"license"` changed from `"MIT"` to `"GPL-3.0-only"`. Only that field touched; `"version"` left unchanged.
+- Task 3: `<project_license>` changed from `MIT` to `GPL-3.0-only`. `<metadata_license>CC0-1.0</metadata_license>` left untouched per spec. `appstream-util` not present in sandbox; used `appstreamcli validate` which reported only pre-existing URL reachability warnings (GitHub 502, screenshot 404) — no schema or license errors. License field is valid SPDX.
+- Task 4: Both MIT badge instances replaced with GPL-3.0 badge using `replace_all`. License text line updated to exact AC4 specification.
+- Task 5: `## License` section appended after line 248 (end of file), matching exact text from AC5/Dev Notes.
+- Task 6: AC6 — `grep -w "MIT"` returns no matches across LICENSE, package.json, metainfo.xml, README.md. Note: GPL-3.0 boilerplate contains "MIT" as a substring within words like "PERMITTED" and "LIMITED"; `grep -r "MIT"` (without `-w`) would flag these false positives — the AC6 grep command should use `-w` for word-boundary matching. No MIT license declarations remain. AC7 — 400/400 engine tests pass; 696/696 UI tests pass.
+
+### Change Log
+
+- 2026-04-25: License alignment complete — replaced MIT with GPL-3.0-only across LICENSE, engine/package.json, metainfo.xml, README.md; added License section to CONTRIBUTING.md.
 
 ### File List
 
-<!-- fill in -->
+- `LICENSE` — full replacement with GPL-3.0 text (+ copyright header)
+- `engine/package.json` — `"license"` field: MIT → GPL-3.0-only
+- `ui/data/io.github.ronki2304.ProtonDriveLinuxClient.metainfo.xml` — `<project_license>`: MIT → GPL-3.0-only
+- `README.md` — both MIT badges replaced; license section text updated
+- `CONTRIBUTING.md` — `## License` section appended at end of file
+
+---
+
+### Review Findings
+
+- [x] [Review][Decision] Repository URL inconsistency — resolved: repo confirmed renamed to `Linux_Proton_Drive`; updated README.md, CONTRIBUTING.md, window.py
+- [x] [Review][Patch] `Gtk.License.MIT_X11` in About dialog not updated to GPL-3.0 [`ui/src/protondrive/window.py:438`]
+- [x] [Review][Patch] CI `release.yml` uses bare `bun test` — fixed: `bun run test` [`.github/workflows/release.yml`]
+- [x] [Review][Patch] Pre-tag checklist uses bare `bun test` — fixed: `bun run test` [`CONTRIBUTING.md`]
+- [x] [Review][Patch] Pre-release dry-run cleanup missing GitHub Release deletion step — fixed [`CONTRIBUTING.md`]
+- [x] [Review][Patch] `jq` listed twice — fixed: cross-reference added at line 13 [`CONTRIBUTING.md:13`]
+- [x] [Review][Patch] AC6 grep produces false positives — fixed: amended to `grep -rw "MIT"` [`8-5-license-alignment.md` AC6]
+- [x] [Review][Defer] `appstream-util validate` not run — used `appstreamcli validate` instead (tool unavailable in sandbox); no schema or license errors found — deferred, environment limitation
+- [x] [Review][Defer] README Flatpak debug log path shows native path `~/.cache/protondrive/engine.log` instead of Flatpak path `~/.var/app/.../cache/protondrive/engine.log` [`README.md:71-74`] — deferred, pre-existing
+- [x] [Review][Defer] GNU-only `chmod --reference` and `sed -i` (no empty-string arg) in `bump-version.sh` — deferred, pre-existing from story 8-4

@@ -37,6 +37,8 @@ def _make_panel() -> PairDetailPanel:
     panel.folder_missing_update_btn = MagicMock()
     panel.folder_missing_remove_btn = MagicMock()
     panel._conflict_log = None
+    panel.activity_slot = MagicMock()
+    panel._activity_feed = None
     return panel
 
 

@@ -9,7 +9,7 @@
     "build": "bun build --compile src/main.ts --outfile=dist/engine",
     "test": "bun test --path-ignore-patterns '__integration__'"
   },
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "dependencies": {
     "@protontech/drive-sdk": "0.14.3",
     "bcryptjs": "^2.4.3",

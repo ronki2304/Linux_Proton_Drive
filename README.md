@@ -1,5 +1,5 @@
 [![Flathub](https://img.shields.io/flathub/v/io.github.ronki2304.ProtonDriveLinuxClient?label=Flathub)](https://flathub.org/apps/io.github.ronki2304.ProtonDriveLinuxClient)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](./LICENSE)
 
 # ProtonDrive Linux Client
 
@@ -39,7 +39,7 @@ Flatpak is the only supported installation method for the MVP.
 flatpak install flathub io.github.ronki2304.ProtonDriveLinuxClient
 ```
 
-> Flathub submission is pending. Until it lands, install from the bundle in [GitHub Releases](https://github.com/ronki2304/ProtonDrive-LinuxClient/releases).
+> Flathub submission is pending. Until it lands, install from the bundle in [GitHub Releases](https://github.com/ronki2304/Linux_Proton_Drive/releases).
 
 ### Why `--filesystem=home`?
 
@@ -49,14 +49,27 @@ The Flatpak manifest requests broad filesystem access. This is a platform limita
 
 ## Building from source
 
-Requirements: Python 3.12, [Bun](https://bun.sh) ≥ 1.1, Meson, GNOME Platform runtime 50.
+### Flatpak build (recommended — matches the release artifact)
+
+Requirements: `flatpak`, `flatpak-builder`, GNOME Platform runtime 47.
 
 ```bash
-git clone https://github.com/ronki2304/ProtonDrive-LinuxClient
-cd ProtonDrive-LinuxClient
-bun install
-distrobox-enter -n LinuxProtonDrive -- bash -c "/usr/bin/meson setup builddir && /usr/bin/meson compile -C builddir"
+git clone https://github.com/ronki2304/Linux_Proton_Drive
+cd Linux_Proton_Drive
+
+# Build and export to local repo
+flatpak-builder --user --force-clean --disable-rofiles-fuse --repo=_repo builddir \
+  flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml
+
+# Register the local repo (first time only)
+flatpak remote-add --user --no-gpg-verify local-repo _repo
+
+# Install and run
+flatpak install --user --reinstall -y local-repo io.github.ronki2304.ProtonDriveLinuxClient
+flatpak run io.github.ronki2304.ProtonDriveLinuxClient
 ```
+
+> `--disable-rofiles-fuse` is required in most Linux desktop environments — rootless containers and immutable distros typically lack FUSE mount permissions.
 
 See [CONTRIBUTING.md](./CONTRIBUTING.md) for the full development setup, two-terminal launch procedure, and test commands.
 
@@ -132,6 +145,6 @@ If you changed your Proton account password in the past, some folders may have t
 
 ## License
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](./LICENSE)
 
-MIT — see [LICENSE](./LICENSE).
+GPL-3.0-only — see [LICENSE](./LICENSE). Bundles @protontech/drive-sdk (GPL-3.0) and openpgp (LGPL-3.0+).

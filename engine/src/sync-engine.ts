@@ -3,8 +3,9 @@ import { createHash } from "node:crypto";
 import { join, relative, dirname, basename } from "node:path";
 import { createReadStream, createWriteStream } from "node:fs";
 import { Readable, Writable } from "node:stream";
-import type { IpcPushEvent } from "./ipc.js";
-import type { DriveClient, RemoteFile } from "./sdk.js";
+import type { IpcPushEvent, FileSyncedPayload, ReconcileProgressPayload } from "./ipc.js";
+import type { DriveClient, DriveEvent, EventSubscription, LatestEventIdProvider, RemoteFile } from "./sdk.js";
+import { DriveEventType } from "./sdk.js";
 import type { ChangeQueueEntry, StateDb, SyncPair, SyncState } from "./state-db.js";
 import { listConfigPairs, type ConfigPair } from "./config.js";
 import { AuthExpiredError, NetworkError, RateLimitError, SyncError } from "./errors.js";
@@ -129,6 +130,8 @@ export class SyncEngine {
   private isDraining = false;
   // Populated by reconcilePair; read by both sync_complete emitters.
   private _pairStats = new Map<string, { fileCount: number; totalBytes: number }>();
+  private eventSubscription?: EventSubscription;
+  private drainTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly stateDb: StateDb,
@@ -173,6 +176,164 @@ export class SyncEngine {
     this.driveClient = client;
   }
 
+  makeLatestEventIdProvider(): LatestEventIdProvider {
+    return {
+      getLatestEventId: async (scopeId: string) =>
+        this.stateDb.getEventCheckpoint(scopeId),
+    };
+  }
+
+  private makeEventCallback(): (event: DriveEvent) => Promise<void> {
+    return async (event: DriveEvent) => {
+      try {
+        const newCheckpoint =
+          event.type === DriveEventType.TreeRefresh ||
+          event.type === DriveEventType.TreeRemove
+            ? null
+            : event.eventId ?? null;
+
+        this.stateDb.persistEvent(
+          event.treeEventScopeId,
+          event.type,
+          JSON.stringify(event),
+          newCheckpoint,
+        );
+
+        this.scheduleDrain();
+      } catch (err) {
+        debugLog("Failed to persist event (non-fatal): " + String(err));
+        // Never rethrow — DriveListener must not throw (SDK contract)
+      }
+    };
+  }
+
+  private scheduleDrain(): void {
+    if (this.drainTimer) clearTimeout(this.drainTimer);
+    this.drainTimer = setTimeout(() => {
+      this.drainTimer = undefined;
+      if (this.driveClient) void this.drainEventQueue(this.driveClient);
+    }, 500);
+  }
+
+  async drainEventQueue(client: DriveClient): Promise<void> {
+    let events = this.stateDb.getQueuedEvents();
+    while (events.length > 0) {
+      for (const entry of events) {
+        try {
+          const parsedEvent = JSON.parse(entry.event_payload) as DriveEvent;
+
+          if (parsedEvent.type === DriveEventType.FastForward) {
+            debugLog("Caught up to: " + parsedEvent.eventId);
+            this.stateDb.deleteQueuedEvent(entry.id);
+
+          } else if (parsedEvent.type === DriveEventType.TreeRefresh) {
+            this.stateDb.deleteQueuedEvent(entry.id);
+            this.stateDb.clearQueuedEvents(entry.tree_event_scope_id);
+            await this.reconcileAndEnqueue(true);
+            break; // restart drain loop after full walk
+
+          } else if (
+            parsedEvent.type === DriveEventType.NodeCreated ||
+            parsedEvent.type === DriveEventType.NodeUpdated
+          ) {
+            const nodeEvent = parsedEvent as Extract<DriveEvent, { type: DriveEventType.NodeCreated | DriveEventType.NodeUpdated }>;
+            const parentUid = (nodeEvent as { parentNodeUid?: string }).parentNodeUid;
+            const pairs = this.stateDb.listPairs();
+
+            // Fast path for NodeUpdated: look up the file we already track by its remote UID
+            const knownFile = parsedEvent.type === DriveEventType.NodeUpdated
+              ? this.stateDb.findSyncStateByRemoteNodeId(nodeEvent.nodeUid)
+              : null;
+
+            // For NodeCreated (or unknown NodeUpdated): check if parent is a sync pair root
+            const rootPair = !knownFile && parentUid
+              ? pairs.find(p => p.remote_id === parentUid)
+              : null;
+
+            if (knownFile) {
+              // Updated file we already track — targeted enqueue, no API call needed
+              this.stateDb.enqueue({
+                pair_id: knownFile.pair_id,
+                relative_path: knownFile.relative_path,
+                change_type: "modified",
+                queued_at: new Date().toISOString(),
+              });
+            } else if (rootPair) {
+              // Direct child of a sync root — fetch name and enqueue targeted
+              const result = await client.getRemoteNode(nodeEvent.nodeUid);
+              if (!result.ok) {
+                debugLog(`drainEventQueue: node ${nodeEvent.nodeUid} unavailable, skipping`);
+                this.stateDb.deleteQueuedEvent(entry.id);
+                continue;
+              }
+              this.stateDb.enqueue({
+                pair_id: rootPair.pair_id,
+                relative_path: result.value.name,
+                change_type: "modified",
+                queued_at: new Date().toISOString(),
+              });
+            } else {
+              // Parent not locally known (deep subfolder or brand-new folder) — fall back
+              debugLog(`drainEventQueue: parent ${parentUid ?? "unknown"} not locally known, falling back to reconcile-trigger`);
+              for (const pair of pairs) {
+                this.stateDb.enqueue({
+                  pair_id: pair.pair_id,
+                  relative_path: ".reconcile-trigger",
+                  change_type: "modified",
+                  queued_at: new Date().toISOString(),
+                });
+              }
+            }
+            this.stateDb.deleteQueuedEvent(entry.id);
+
+          } else if (parsedEvent.type === DriveEventType.NodeDeleted) {
+            // Deferred: mark pairs for reconcile on next cycle
+            const pairs = this.stateDb.listPairs();
+            for (const pair of pairs) {
+              this.stateDb.enqueue({
+                pair_id: pair.pair_id,
+                relative_path: ".reconcile-trigger",
+                change_type: "modified",
+                queued_at: new Date().toISOString(),
+              });
+            }
+            this.stateDb.deleteQueuedEvent(entry.id);
+
+          } else if (parsedEvent.type === DriveEventType.TreeRemove) {
+            debugLog(`drainEventQueue: scope ${entry.tree_event_scope_id} removed`);
+            this.stateDb.deleteQueuedEvent(entry.id);
+
+          } else {
+            // SharedWithMeUpdated and any unknown types
+            this.stateDb.deleteQueuedEvent(entry.id);
+          }
+        } catch (err) {
+          debugLog("drainEventQueue: error processing entry " + entry.id + ": " + String(err));
+          return; // stop drain; preserve ordering; retry on next drain call
+        }
+      }
+      events = this.stateDb.getQueuedEvents();
+    }
+  }
+
+  async startRemoteEventSubscription(client: DriveClient): Promise<void> {
+    if (this.eventSubscription) return;
+    const scopeId = await client.getRootTreeEventScopeId();
+    this.eventSubscription = await client.subscribeToRemoteEvents(
+      scopeId,
+      this.makeEventCallback(),
+    );
+  }
+
+  disposeEventSubscription(): void {
+    if (this.drainTimer) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = undefined;
+    }
+    this.eventSubscription?.dispose();
+    this.eventSubscription = undefined;
+  }
+
   /** Thin wrapper: reconcile then drain. Called on cold start, post-auth, and add_pair. */
   async startSyncAll(): Promise<void> {
     const networkFailed = await this.reconcileAndEnqueue();
@@ -203,9 +364,17 @@ export class SyncEngine {
    * `change_queue` only supports `created|modified|deleted` change types.
    * Full download-queue unification is deferred to a follow-on story.
    */
-  async reconcileAndEnqueue(): Promise<boolean> {
+  async reconcileAndEnqueue(force = false): Promise<boolean> {
     const client = this.driveClient;
     if (!client) return false;
+
+    if (!force) {
+      const scopeId = await client.getRootTreeEventScopeId?.().catch(() => null) ?? null;
+      if (scopeId && this.stateDb.getEventCheckpoint(scopeId) !== null) {
+        debugLog("Checkpoint present — skipping full walk");
+        return false;
+      }
+    }
 
     // Cold-start: restore pairs in config but missing from SQLite (AC5)
     const configPairs = this.getConfigPairs();
@@ -261,6 +430,12 @@ export class SyncEngine {
           );
           continue;
         }
+        if (err instanceof RateLimitError) {
+          const resumeIn = 30;
+          process.stderr.write(`[ENGINE] reconcile rate-limited pair=${pairObj.pair_id.slice(-8)}, retrying in ${resumeIn}s\n`);
+          this.emitEvent({ type: "rate_limited", payload: { resume_in_seconds: resumeIn } });
+          continue;
+        }
         process.stderr.write(`[ENGINE] sync_cycle_error pair=${pairObj.pair_id.slice(-8)}: ${msg}\n`);
         this.emitEvent({
           type: "error",
@@ -283,6 +458,7 @@ export class SyncEngine {
         pair = { ...pair, remote_id: resolvedId };
       } catch (err) {
         if (isAuthExpired(err)) throw err;
+        if (err instanceof RateLimitError) throw err; // let outer reconcile handler emit rate_limited
         const msg = err instanceof Error ? err.message : "unknown";
         process.stderr.write(`[ENGINE] remote_path_not_found pair=${pair.pair_id.slice(-8)}: ${msg}\n`);
         this.emitEvent({
@@ -292,6 +468,16 @@ export class SyncEngine {
         return;
       }
     }
+
+    this.emitEvent({
+      type: "reconcile_progress",
+      payload: {
+        pair_id: pair.pair_id,
+        phase: "scanning",
+        files_processed: 0,
+        files_total: 0,
+      } satisfies ReconcileProgressPayload,
+    });
 
     const { files: localFiles, dirs: localDirs } = await this.walkLocalTree(pair.local_path);
     const { files: remoteFiles, folders: remoteFolders } = await this.walkRemoteTree(
@@ -360,6 +546,7 @@ export class SyncEngine {
         local_mtime: item.localMtime,
         remote_mtime: item.remoteMtime,
         content_hash: hash ?? "",
+        remote_node_id: item.remoteNodeId,
       });
     }
 
@@ -435,6 +622,7 @@ export class SyncEngine {
         local_mtime: localMtime,
         remote_mtime: item.remoteMtime,
         content_hash: localHash,
+        remote_node_id: item.remoteNodeId,
       });
 
       // Enqueue local file for upload so the local version wins on remote.
@@ -573,6 +761,17 @@ export class SyncEngine {
     // ── Execute downloads directly ───────────────────────────────────────────
     let filesDone = 0;
     let bytesDone = 0;
+    if (downloadItems.length > 0) {
+      this.emitEvent({
+        type: "reconcile_progress",
+        payload: {
+          pair_id: pair.pair_id,
+          phase: "downloading",
+          files_processed: 0,
+          files_total: downloadItems.length,
+        } satisfies ReconcileProgressPayload,
+      });
+    }
     for (const item of downloadItems) {
       try {
         await this.downloadOne(pair, item as WorkItem & { kind: "download" }, client);
@@ -585,9 +784,28 @@ export class SyncEngine {
           local_mtime: s.mtime.toISOString(),
           remote_mtime: (item as WorkItem & { kind: "download" }).remoteMtime,
           content_hash: hash,
+          remote_node_id: (item as WorkItem & { kind: "download" }).nodeUid,
         });
         filesDone++;
         bytesDone += item.size;
+        this.emitEvent({
+          type: "file_synced",
+          payload: {
+            pair_id: pair.pair_id,
+            file_name: basename(item.relativePath),
+            direction: "download",
+            timestamp: new Date().toISOString(),
+          } satisfies FileSyncedPayload,
+        });
+        this.emitEvent({
+          type: "reconcile_progress",
+          payload: {
+            pair_id: pair.pair_id,
+            phase: "downloading",
+            files_processed: filesDone,
+            files_total: downloadItems.length,
+          } satisfies ReconcileProgressPayload,
+        });
         this.emitEvent({
           type: "sync_progress",
           payload: {
@@ -648,6 +866,7 @@ export class SyncEngine {
             local_mtime: item.localMtime,
             remote_mtime: remoteFile?.remote_mtime ?? item.localMtime,
             content_hash: null,
+            remote_node_id: item.existingNodeUid ?? null,
           });
         }
         this.stateDb.enqueue({
@@ -675,6 +894,15 @@ export class SyncEngine {
           file_count: stats?.fileCount ?? 0,
           total_bytes: stats?.totalBytes ?? 0,
         },
+      });
+      this.emitEvent({
+        type: "reconcile_progress",
+        payload: {
+          pair_id: pair.pair_id,
+          phase: "idle",
+          files_processed: filesDone,
+          files_total: downloadItems.length,
+        } satisfies ReconcileProgressPayload,
       });
     }
   }
@@ -728,6 +956,16 @@ export class SyncEngine {
       for (const pair of pairs) {
         const pairQueue = this.stateDb.listQueue(pair.pair_id);
         if (pairQueue.length === 0) continue;
+
+        this.emitEvent({
+          type: "reconcile_progress",
+          payload: {
+            pair_id: pair.pair_id,
+            phase: "uploading",
+            files_processed: 0,
+            files_total: pairQueue.length,
+          } satisfies ReconcileProgressPayload,
+        });
 
         // One remote-tree walk per pair (not per entry) — avoids O(N²) API
         // calls and keeps us well under rate-limit thresholds (Story 3-4).
@@ -847,6 +1085,15 @@ export class SyncEngine {
             file_count: stats?.fileCount ?? 0,
             total_bytes: stats?.totalBytes ?? 0,
           },
+        });
+        this.emitEvent({
+          type: "reconcile_progress",
+          payload: {
+            pair_id,
+            phase: "idle",
+            files_processed: 0,
+            files_total: 0,
+          } satisfies ReconcileProgressPayload,
         });
       }
       if (dirtied) this.stateDb.setDirtySession(false);
@@ -1039,9 +1286,19 @@ export class SyncEngine {
               local_mtime: workItem.localMtime,
               remote_mtime: workItem.localMtime,
               content_hash: hash,
+              remote_node_id: uploadResult.node_uid,
             },
             entry.id,
           );
+          this.emitEvent({
+            type: "file_synced",
+            payload: {
+              pair_id: pair.pair_id,
+              file_name: basename(entry.relative_path),
+              direction: "upload",
+              timestamp: new Date().toISOString(),
+            } satisfies FileSyncedPayload,
+          });
           // Refresh the in-loop remote snapshot so a later queue entry for
           // the SAME relative_path (e.g. create+modify pairs while offline)
           // sees the just-uploaded node instead of the stale "undefined" from
@@ -1100,9 +1357,19 @@ export class SyncEngine {
               local_mtime: dlStat.mtime.toISOString(),
               remote_mtime: remote!.remote_mtime,
               content_hash: dlHash,
+              remote_node_id: remote!.id,
             },
             entry.id,
           );
+          this.emitEvent({
+            type: "file_synced",
+            payload: {
+              pair_id: pair.pair_id,
+              file_name: basename(entry.relative_path),
+              direction: "download",
+              timestamp: new Date().toISOString(),
+            } satisfies FileSyncedPayload,
+          });
           return "synced";
         }
         case "conflict": {

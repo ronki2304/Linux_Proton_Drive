@@ -21,6 +21,7 @@ export interface SyncState {
   local_mtime: string; // ISO 8601
   remote_mtime: string; // ISO 8601
   content_hash: string | null;
+  remote_node_id?: string | null;
 }
 
 export type ChangeType = "created" | "modified" | "deleted";
@@ -32,6 +33,13 @@ export interface ChangeQueueEntry {
   change_type: ChangeType;
   queued_at: string; // ISO 8601
   attempt_count?: number; // migration v4, default 0 from DB
+}
+
+export interface EventQueueEntry {
+  id: number;
+  tree_event_scope_id: string;
+  event_type: string;
+  event_payload: string;
 }
 
 // ── Migration definitions ────────────────────────────────────────────────────
@@ -99,9 +107,28 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    version: 6,
+    up: `
+      CREATE TABLE IF NOT EXISTS event_checkpoint (
+        tree_event_scope_id TEXT PRIMARY KEY,
+        last_event_id       TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS event_queue (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        tree_event_scope_id TEXT NOT NULL,
+        event_type          TEXT NOT NULL,
+        event_payload       TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    version: 7,
+    up: `ALTER TABLE sync_state ADD COLUMN remote_node_id TEXT;`,
+  },
 ];
 
-const CURRENT_VERSION = 5;
+const CURRENT_VERSION = 7;
 
 // ── StateDb ──────────────────────────────────────────────────────────────────
 
@@ -220,14 +247,21 @@ export class StateDb {
   upsertSyncState(state: SyncState): void {
     this.db
       .prepare(
-        `INSERT INTO sync_state (pair_id, relative_path, local_mtime, remote_mtime, content_hash)
-         VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO sync_state (pair_id, relative_path, local_mtime, remote_mtime, content_hash, remote_node_id)
+         VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(pair_id, relative_path) DO UPDATE SET
-           local_mtime   = excluded.local_mtime,
-           remote_mtime  = excluded.remote_mtime,
-           content_hash  = excluded.content_hash`
+           local_mtime    = excluded.local_mtime,
+           remote_mtime   = excluded.remote_mtime,
+           content_hash   = excluded.content_hash,
+           remote_node_id = excluded.remote_node_id`
       )
-      .run(state.pair_id, state.relative_path, state.local_mtime, state.remote_mtime, state.content_hash);
+      .run(state.pair_id, state.relative_path, state.local_mtime, state.remote_mtime, state.content_hash, state.remote_node_id ?? null);
+  }
+
+  findSyncStateByRemoteNodeId(remoteNodeId: string): { pair_id: string; relative_path: string } | null {
+    return (this.db
+      .prepare(`SELECT pair_id, relative_path FROM sync_state WHERE remote_node_id = ? LIMIT 1`)
+      .get(remoteNodeId) as { pair_id: string; relative_path: string } | null) ?? null;
   }
 
   listSyncStates(pairId: string): SyncState[] {
@@ -357,6 +391,68 @@ export class StateDb {
       .query(`SELECT dirty FROM session_state WHERE id = 1`)
       .get() as { dirty: number } | null;
     return (row?.dirty ?? 0) === 1;
+  }
+
+  // ── event_checkpoint CRUD ────────────────────────────────────────────────
+
+  getEventCheckpoint(scopeId: string): string | null {
+    const row = this.db
+      .prepare(`SELECT last_event_id FROM event_checkpoint WHERE tree_event_scope_id = ?`)
+      .get(scopeId) as { last_event_id: string } | null;
+    return row?.last_event_id ?? null;
+  }
+
+  setEventCheckpoint(scopeId: string, eventId: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO event_checkpoint (tree_event_scope_id, last_event_id)
+         VALUES (?, ?)
+         ON CONFLICT(tree_event_scope_id) DO UPDATE SET last_event_id = excluded.last_event_id`
+      )
+      .run(scopeId, eventId);
+  }
+
+  clearEventCheckpoint(scopeId: string): void {
+    this.db
+      .prepare(`DELETE FROM event_checkpoint WHERE tree_event_scope_id = ?`)
+      .run(scopeId);
+  }
+
+  // ── event_queue CRUD ──────────────────────────────────────────────────────
+
+  /** Atomically persist event and update checkpoint in one transaction. */
+  persistEvent(scopeId: string, eventType: string, payload: string, newCheckpoint: string | null): void {
+    this.db.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO event_queue (tree_event_scope_id, event_type, event_payload)
+           VALUES (?, ?, ?)`
+        )
+        .run(scopeId, eventType, payload);
+      if (newCheckpoint !== null) {
+        this.setEventCheckpoint(scopeId, newCheckpoint);
+      } else {
+        this.clearEventCheckpoint(scopeId);
+      }
+    })();
+  }
+
+  getQueuedEvents(): EventQueueEntry[] {
+    return this.db
+      .prepare(`SELECT * FROM event_queue ORDER BY id ASC`)
+      .all() as EventQueueEntry[];
+  }
+
+  deleteQueuedEvent(id: number): void {
+    this.db
+      .prepare(`DELETE FROM event_queue WHERE id = ?`)
+      .run(id);
+  }
+
+  clearQueuedEvents(scopeId: string): void {
+    this.db
+      .prepare(`DELETE FROM event_queue WHERE tree_event_scope_id = ?`)
+      .run(scopeId);
   }
 
   // ── diagnostics (used in tests and health checks) ─────────────────────────

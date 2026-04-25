@@ -8,10 +8,13 @@ import {
   ROOT_PARENT_ID,
   createDriveClient,
   sdkErrorFactoriesForTests,
+  _forTesting,
   type ProtonDriveClientLike,
   type UploadBody,
   type AccountInfo,
+  type EventSubscription,
 } from "./sdk.js";
+import pkg from "../package.json" with { type: "json" };
 import { AuthExpiredError, EngineError, NetworkError, RateLimitError, SyncError } from "./errors.js";
 
 describe("SDK boundary enforcement", () => {
@@ -1234,6 +1237,72 @@ describe("ProtonHTTPClient via createDriveClient", () => {
 });
 
 // ---------------------------------------------------------------------------
+// ProtonHTTPClient appversion header (Story 8-6: SDK client identification)
+// ---------------------------------------------------------------------------
+describe("ProtonHTTPClient appversion header", () => {
+  let originalFetch: typeof globalThis.fetch;
+  let mockedFetch: ReturnType<typeof mock>;
+  let capturedHeaders: Headers;
+
+  beforeAll(() => {
+    originalFetch = globalThis.fetch;
+    mockedFetch = mock(async (_url: string | URL | Request, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers as HeadersInit);
+      return new Response(JSON.stringify({ Code: 1000 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    // @ts-expect-error — replacing global fetch for test isolation
+    globalThis.fetch = mockedFetch;
+  });
+
+  afterAll(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("fetchJson sets correct x-pm-appversion (AC1)", async () => {
+    mockedFetch.mockClear();
+    const httpClient = _forTesting.createHTTPClient("test-token");
+    await httpClient.fetchJson({
+      url: "https://api.protonmail.ch/core/v4/users",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 5000,
+    });
+    expect(capturedHeaders.get("x-pm-appversion")).toBe(
+      `ronki230-ProtonDriveLinuxClient@${pkg.version}`,
+    );
+  });
+
+  it("fetchBlob Proton-host sets correct x-pm-appversion (AC2)", async () => {
+    mockedFetch.mockClear();
+    const httpClient = _forTesting.createHTTPClient("test-token");
+    await httpClient.fetchBlob({
+      url: "https://api.proton.me/drive/v2/shares",
+      method: "GET",
+      headers: new Headers(),
+      timeoutMs: 5000,
+    });
+    expect(capturedHeaders.get("x-pm-appversion")).toBe(
+      `ronki230-ProtonDriveLinuxClient@${pkg.version}`,
+    );
+  });
+
+  it("fetchBlob storage-host has no x-pm-appversion (AC3)", async () => {
+    mockedFetch.mockClear();
+    const httpClient = _forTesting.createHTTPClient("test-token");
+    await httpClient.fetchBlob({
+      url: "https://fra-storage.proton.me/upload/block",
+      method: "PUT",
+      headers: new Headers(),
+      timeoutMs: 5000,
+    });
+    expect(capturedHeaders.get("x-pm-appversion")).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // DriveClient.validateSession (AC11 + Story 2.11: uses GET /core/v4/users)
 // ---------------------------------------------------------------------------
 describe("DriveClient.validateSession", () => {
@@ -1441,5 +1510,89 @@ describe("DriveClient.applyKeyPassword", () => {
     const client = new DriveClient(sdk, undefined, adapter as any);
 
     await expect(client.applyKeyPassword("$2y$10$stale")).rejects.toBeInstanceOf(Error);
+  });
+});
+
+describe("DriveClient — event subscription methods (Story 8-1)", () => {
+  it("getRootTreeEventScopeId returns treeEventScopeId from root node", async () => {
+    const scopeId = "volume-abc-123";
+    const sdk = {
+      ...makeFakeSdk(),
+      getMyFilesRootFolder: mock(async () => ({
+        ok: true as const,
+        value: { uid: "root-uid", name: "My Files", type: "Folder", treeEventScopeId: scopeId },
+      })),
+    } as unknown as ProtonDriveClientLike;
+    const client = new DriveClient(sdk);
+    expect(await client.getRootTreeEventScopeId()).toBe(scopeId);
+  });
+
+  it("getRootTreeEventScopeId throws SyncError when root is degraded", async () => {
+    const sdk = {
+      ...makeFakeSdk(),
+      getMyFilesRootFolder: mock(async () => ({ ok: false as const, error: { message: "decryption failure" } })),
+    } as unknown as ProtonDriveClientLike;
+    const client = new DriveClient(sdk);
+    await expect(client.getRootTreeEventScopeId()).rejects.toBeInstanceOf(SyncError);
+  });
+
+  it("subscribeToRemoteEvents delegates to sdk.subscribeToTreeEvents with correct args", async () => {
+    const fakeSubscription: EventSubscription = { dispose: mock(() => {}) };
+    const subscribeToTreeEvents = mock(async (_scopeId: string, _cb: unknown) => fakeSubscription);
+    const sdk = {
+      ...makeFakeSdk(),
+      subscribeToTreeEvents,
+    } as unknown as ProtonDriveClientLike;
+    const client = new DriveClient(sdk);
+    const callback = mock(async () => {});
+    const sub = await client.subscribeToRemoteEvents("scope-1", callback);
+
+    expect(subscribeToTreeEvents.mock.calls.length).toBe(1);
+    expect(subscribeToTreeEvents.mock.calls[0]![0]).toBe("scope-1");
+    expect(subscribeToTreeEvents.mock.calls[0]![1]).toBe(callback);
+    expect(sub).toBe(fakeSubscription);
+  });
+
+  it("subscribeToRemoteEvents maps SDK errors to engine errors", async () => {
+    const sdk = {
+      ...makeFakeSdk(),
+      subscribeToTreeEvents: mock(async () => { throw sdkErrorFactoriesForTests.connection(); }),
+    } as unknown as ProtonDriveClientLike;
+    const client = new DriveClient(sdk);
+    await expect(client.subscribeToRemoteEvents("scope-1", mock(async () => {}))).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it("getRemoteNode delegates to sdk.getNode and returns MaybeNode", async () => {
+    const fakeNode = { ok: true as const, value: { uid: "node-abc", name: "file.txt", type: "File" } };
+    const getNode = mock(async (_uid: string) => fakeNode);
+    const sdk = {
+      ...makeFakeSdk(),
+      getNode,
+    } as unknown as ProtonDriveClientLike;
+    const client = new DriveClient(sdk);
+    const result = await client.getRemoteNode("node-abc");
+
+    expect(getNode.mock.calls.length).toBe(1);
+    expect(getNode.mock.calls[0]![0]).toBe("node-abc");
+    expect(result).toBe(fakeNode);
+  });
+
+  it("getRemoteNode maps SDK errors to engine errors", async () => {
+    const sdk = {
+      ...makeFakeSdk(),
+      getNode: mock(async () => { throw sdkErrorFactoriesForTests.server(); }),
+    } as unknown as ProtonDriveClientLike;
+    const client = new DriveClient(sdk);
+    await expect(client.getRemoteNode("node-abc")).rejects.toBeInstanceOf(NetworkError);
+  });
+
+  it("createDriveClient accepts latestEventIdProvider as third argument (type check + no throw)", () => {
+    // Verifies the signature accepts the parameter without throwing at construction time.
+    // The provider is wired into ProtonDriveClient params; TypeScript enforces this statically.
+    const provider = {
+      getLatestEventId: mock(async (_scopeId: string) => null as string | null),
+    };
+    // Use dummy token — no network calls made at construction time.
+    expect(() => createDriveClient("dummy-token", undefined, provider)).not.toThrow();
   });
 });

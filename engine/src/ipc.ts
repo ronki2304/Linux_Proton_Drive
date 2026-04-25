@@ -24,6 +24,20 @@ export interface IpcPushEvent {
   payload: Record<string, unknown>;
 }
 
+export interface FileSyncedPayload {
+  pair_id: string;
+  file_name: string;   // bare file name, never a path
+  direction: "upload" | "download";
+  timestamp: string;   // ISO 8601 UTC
+}
+
+export interface ReconcileProgressPayload {
+  pair_id: string;
+  phase: "scanning" | "uploading" | "downloading" | "idle";
+  files_processed: number;
+  files_total: number;
+}
+
 export type IpcMessage = IpcCommand | IpcResponse | IpcPushEvent;
 
 // --- MessageReader ---

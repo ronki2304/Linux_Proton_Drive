@@ -229,3 +229,58 @@ _[4-0b W2], [4-2/4-3], [5-0 CR W1] — solved; Story 2-12 — done; [6-4 D1] —
 - **[7-4 CR D2]** No timeout guidance for sync wait steps — Journey 2 Step 4 ("wait for sync to run") and Journey 3 Step 2 ("confirm edits have not yet synced") give no "wait up to N seconds then fail" threshold. Acceptable for MVP manual testing; formalise when converting journeys to automated tests.
 - **[7-4 CR D3]** Session revocation propagation delay (Journey 3) — Proton session revocation may take seconds to propagate; if the app completes its current sync cycle before the 401 arrives, the re-auth modal (Step 4) may not appear. Fix requires app-level retry policy or explicit propagation delay documentation. Pre-existing infra constraint.
 - **[7-4 CR D4]** Journey 4 credential error message not formally specified — "app displays a clear error message" has no formal text or UI component requirement. Minimum MVP acceptance. Formalise in a dedicated accessibility/error-message audit pass pre-Flathub submission.
+
+## Deferred from: code review of 8-1-event-based-incremental-reconciliation (2026-04-25)
+
+- **[8-1 CR W1]** Concurrent drainEventQueue calls have no re-entrancy guard — two 500ms timers firing concurrently could process duplicate events. Pre-existing design; 500ms debounce coalesces most cases. `sync-engine.ts:218`
+- **[8-1 CR W2]** getRemoteNode failure silently drops NodeCreated/Updated event — transient 404 or rate-limit treated as permanent drop, no retry. Acceptable MVP behaviour; retry is a follow-up story. `sync-engine.ts:241-244`
+- **[8-1 CR W3]** startSyncAll not awaited in _activateSession — token refresh arriving while startSyncAll runs could race with the new session. Pre-existing void pattern. `main.ts:242`
+- **[8-1 CR W4]** listPairs called once per NodeDeleted event — O(n_pairs × n_events) enqueue calls with no deduplication. Performance concern for large pair counts. `sync-engine.ts:265`
+- **[8-1 CR W5]** getRootTreeEventScopeId().catch(() => null) swallows auth errors — intentional backward-compat guard for test mocks; auth failure silently forces full walk. `sync-engine.ts:342`
+- **[8-1 CR W6]** Mid-drain client null on session expiry — captured client reference continues API calls with stale credentials until an error ends the drain. `sync-engine.ts:218`
+- **[8-1 CR W7]** Events arriving between subscription start and first explicit drain wait for 500ms debounce — no data loss (persistent queue), minor latency only. `main.ts:239-240`
+- **[8-1 CR W8]** drainEventQueue does not verify client still matches this.driveClient — stale reference risk on concurrent token refresh. `sync-engine.ts:218`
+- **[8-1 CR W9]** persistEvent SQLite failure swallowed by callback try-catch — disk-full / constraint errors logged but not re-raised; event and checkpoint update silently lost. `sync-engine.ts:204`
+- **[8-1 CR W10]** Unhandled promise rejections from void _activateSession — pre-existing pattern throughout main.ts. `main.ts:314,334,433`
+
+---
+
+## Deferred from: code review of 8-2-ipc-activity-events (2026-04-25)
+
+- **[8-2 CR W1]** `drainQueue` idle hardcodes `files_processed: 0, files_total: 0` — documented design per dev notes ("best-effort estimates"); Story 8-3 UI adds defensive timeout. `sync-engine.ts:~1082`
+- **[8-2 CR W2]** All uploads fail → `pairsWithSuccess` empty → no `idle` from `drainQueue` — explicitly documented as acceptable in dev notes under "reconcile_progress Idle From drainQueue — Only pairsWithSuccess". `sync-engine.ts:~1079`
+- **[8-2 CR W3]** `walkRemoteTree` throws in `drainQueue` → `uploading` emitted with no matching `idle` — same best-effort policy; Story 8-3 defensive timeout is the intended mitigation. `sync-engine.ts:~968`
+- **[8-2 CR W4]** `reconcilePair` exception after `scanning` → no `idle` emitted — design decision: `error` event is the terminal signal for blocked pairs; `idle` intentionally only emitted on clean exits. Story 8-3 UI treats `error` event as phase terminator. A `"stalled"` phase would require coordinated engine + Python IPC parser + UI changes — deferred to Story 8-3 scope. `sync-engine.ts:465`
+- **[8-2 CR W5]** `diskFull` early return → pair stuck in `downloading`, no `idle` — same policy as W4. Engine emits `DISK_FULL` error event before early return; emitting `idle` here would be semantically wrong ("waiting for user to free space" ≠ "done"). UI correlates `error` + no subsequent `idle` = blocked. `sync-engine.ts:~838`
+
+---
+
+## Deferred from: code review of 8-3-activity-feed-ui (2026-04-25)
+
+- **[8-3 CR D1]** Default `↓` arrow for missing/unknown `direction` field — `ActivityFeedRow` uses `"↑" if direction == "upload" else "↓"`, silently rendering download arrow for any unrecognised or absent direction value; pre-existing wire-format assumption (`"upload"` | `"download"` enforced by engine). `ui/src/protondrive/widgets/activity_feed.py:52`
+- **[8-3 CR D2]** `row.pair_name` attribute access not guarded — `on_file_synced` accesses `row.pair_name` without try/except; falls back only on falsiness, not on AttributeError; pre-existing interface contract assumption. `ui/src/protondrive/window.py:on_file_synced`
+
+## Deferred from: code review of 8-4-release-engineering-version-management (2026-04-25)
+
+- **[8-4 CR D1]** No atomicity/rollback on partial bump — sequential file writes with no rollback on SIGINT/disk full; `set -e` provides fast-fail; acceptable for a dev tool. `scripts/bump-version.sh`
+- **[8-4 CR D2]** ROOT path not validated — standard `BASH_SOURCE[0]` derivation; acceptable for dev tooling. `scripts/bump-version.sh`
+- **[8-4 CR D3]** Metainfo sed breaks if `<release>` tag spans multiple lines — file currently uses single-line format so not triggered; revisit if metainfo formatting changes. `scripts/bump-version.sh`
+- **[8-4 CR D4]** Prerelease detection overly broad (any `-` in tag name) — documented convention; date-based tags are explicitly prohibited in project anti-patterns. `.github/workflows/release.yml`
+- **[8-4 CR D5]** Hardcoded `0.1.0` in CONTRIBUTING.md examples will go stale — expected for v1 documentation; update when version advances. `CONTRIBUTING.md`
+- **[8-4 CR D6]** Python `window.py` and test files contain hardcoded `"0.1.0"` version strings not updated by `bump-version.sh` — outside AC2 scope (4 specified files); revisit if engine version skew causes test failures. `ui/src/protondrive/window.py`, `ui/tests/`
+- **[8-4 CR D7]** jq reformats `package.json` with 2-space indent — minor diff noise; 2-space is conventional and matches current file format. `scripts/bump-version.sh`
+- **[8-4 CR D8]** Flatpak manifest Bun version not in bump script scope — cross-file coordination gap; document in release runbook if Bun is ever upgraded. `flatpak/io.github.ronki2304.ProtonDriveLinuxClient.yml`
+
+## Deferred from: code review of 8-6-sdk-client-identification (2026-04-25)
+
+- **[8-6 CR D1]** `subscribeToRemoteEvents` `as EventSubscription` cast — SDK provides no public subscription type; interface defined locally from `dist/internal/events/interface.d.ts`; if a future SDK bump renames `dispose()`, callers get `TypeError: sub.dispose is not a function` with no engine error wrapping. `engine/src/sdk.ts:~802`
+- **[8-6 CR D2]** `capturedHeaders` shared mutable state across appversion test suite — starts `undefined`; any future test inserted before a mock-firing call throws `TypeError` on `capturedHeaders.get(...)`; `mockedFetch.mock.calls.length` also not asserted per test, so multi-call paths would silently pass. `engine/src/sdk.test.ts:~1245`
+- **[8-6 CR D3]** `isProtonApi` misses `proton.me/[other-service]` paths — URLs like `proton.me/auth/v4/...` or `proton.me/calendar/...` fall through to the storage-host branch and receive no `x-pm-appversion` or `Authorization` header injection; pre-existing condition, not changed by 8-6. `engine/src/sdk.ts:~949`
+
+---
+
+## Deferred from: code review of 8-5-license-alignment (2026-04-25)
+
+- **[8-5 CR D1]** `appstream-util validate` not run (AC3) — used `appstreamcli validate` instead; `appstream-util` unavailable in sandbox; no schema/license errors found. Verify with `appstream-util` before Flathub submission.
+- **[8-5 CR D2]** README Flatpak debug log path shows native path `~/.cache/protondrive/engine.log` instead of Flatpak path `~/.var/app/.../cache/protondrive/engine.log`. Pre-existing; `README.md:71-74`.
+- **[8-5 CR D3]** GNU-only `chmod --reference` and `sed -i` (no empty-string argument) in `bump-version.sh` — fails on BSD/macOS. Pre-existing from story 8-4. Low priority: Linux-only project.

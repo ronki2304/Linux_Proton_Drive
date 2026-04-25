@@ -103,6 +103,15 @@ class SyncPairRow(Gtk.ListBoxRow):
                 [f"{self._pair_name} — folder missing"],
             )
             return  # early return: skip generic _set_accessible_label
+        elif state == "paused":
+            self.status_label.set_text("Sync paused")
+            self.status_dot.add_css_class("sync-dot-paused")
+            self.status_dot.remove_css_class("sync-dot-syncing")
+            self.status_dot.remove_css_class("sync-dot-offline")
+            self.status_dot.remove_css_class("sync-dot-conflict")
+            self.status_dot.queue_draw()
+            self._set_accessible_label("paused")
+            return  # early return: skip generic _set_accessible_label below
         else:
             self.status_label.set_text("")
             self.status_dot.remove_css_class("sync-dot-syncing")
@@ -125,6 +134,8 @@ class SyncPairRow(Gtk.ListBoxRow):
             cr.set_source_rgb(0.87, 0.19, 0.19)  # red — same as error
         elif self._state == "pending":
             cr.set_source_rgb(0.60, 0.60, 0.60)  # grey — waiting for first sync event
+        elif self._state == "paused":
+            cr.set_source_rgb(0.87, 0.52, 0.04)  # dark amber — distinct from conflict (0.95, 0.62, 0.14)
         else:
             cr.set_source_rgb(0.20, 0.72, 0.29)  # green
         cx, cy, r = width / 2, height / 2, min(width, height) / 2
