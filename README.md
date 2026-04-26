@@ -51,7 +51,7 @@ The Flatpak manifest requests broad filesystem access. This is a platform limita
 
 ### Flatpak build (recommended — matches the release artifact)
 
-Requirements: `flatpak`, `flatpak-builder`, GNOME Platform runtime 47.
+Requirements: `flatpak`, `flatpak-builder`, GNOME Platform runtime 50.
 
 ```bash
 git clone https://github.com/ronki2304/Linux_Proton_Drive
@@ -93,7 +93,7 @@ Log file is capped at 5 MB and rotates to `engine.log.1`. Tokens are never writt
 
 ## Roadmap
 
-### MVP (complete — Epics 1–6)
+### Complete — Epics 1–8
 
 | Area | Status |
 |------|--------|
@@ -107,19 +107,13 @@ Log file is capped at 5 MB and rotates to `engine.log.1`. Tokens are never writt
 | Actionable errors (disk full, permissions, inotify, file locked) | ✅ |
 | Multi-pair management (add, remove, nesting/overlap validation) | ✅ |
 | Missing local folder detection & recovery | ✅ |
+| Flatpak manifest, AppStream metainfo, CI/CD pipelines | ✅ |
+| Incremental reconciliation via SDK event stream | ✅ |
 
-### Flathub release (Epic 7 — in progress)
-
-- Flatpak manifest with justified permissions
-- AppStream metainfo & desktop file for GNOME Software / KDE Discover
-- CI/CD pipelines (automated test + release builds)
-- End-to-end manual validation on Fedora 43, Ubuntu 24/25, Bazzite, Arch
-
-### Post-MVP (planned)
+### Post-1.0 (planned)
 
 - **System-browser auth** — replace embedded WebKit with `Gio.AppInfo.launch_default_for_uri()` for the Proton login flow. Improves hardware-key 2FA, password manager autofill, and enables aarch64 support (current WebKitGTK JIT instability on ARM64). Same localhost callback pattern, no server-side changes.
 - **ARM Linux support** — blocked on system-browser auth above.
-- **Incremental reconciliation via SDK events** — on every startup the engine does a full remote tree walk for each pair (all `GET /folders/.../children` calls), which is slow for large folders and triggers Proton's public-key API rate limit (HTTP 429) on pre-2024 nodes. The SDK already ships a complete events subsystem: `DriveEventType.NodeCreated/NodeUpdated/NodeDeleted`, `VolumeEventManager.getEvents(eventId)` to fetch only changes since a saved event ID, `getLatestEventId()` to bookmark position after a full walk, `DriveEventType.TreeRefresh` as the server-side signal to fall back to a full walk (e.g. log pruned), and `DriveEventType.FastForward` when nothing changed. The pattern: after each reconcile persist `getLatestEventId()` to the state DB; on next startup call `getEvents(savedId)` and process only the delta nodes, falling back to a full walk only on `TreeRefresh`. This would make subsequent startups near-instant regardless of how long the app was closed. Needs confirmation from the Proton Drive SDK team that `VolumeEventManager` is a supported interface for third-party clients before building on it.
 - **Selective sync** — choose which remote subfolders to sync per pair, rather than syncing the full remote folder.
 - **Tray icon** — background sync with system tray status indicator, without keeping the main window open.
 - **Per-pair parallel reconciliation** — currently the engine reconciles all pairs sequentially and only starts queue processing after all pairs have finished their remote tree walk. Each pair should start uploading/downloading as soon as its own reconciliation is done, independent of other pairs.
