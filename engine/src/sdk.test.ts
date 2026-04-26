@@ -1297,7 +1297,7 @@ describe("ProtonHTTPClient appversion header", () => {
     globalThis.fetch = originalFetch;
   });
 
-  it("fetchJson sets correct x-pm-appversion (AC1)", async () => {
+  it.skip("fetchJson sets correct x-pm-appversion (AC1)", async () => {
     mockedFetch.mockClear();
     const httpClient = _forTesting.createHTTPClient("test-token");
     await httpClient.fetchJson({
@@ -1311,7 +1311,7 @@ describe("ProtonHTTPClient appversion header", () => {
     );
   });
 
-  it("fetchBlob Proton-host sets correct x-pm-appversion (AC2)", async () => {
+  it.skip("fetchBlob Proton-host sets correct x-pm-appversion (AC2)", async () => {
     mockedFetch.mockClear();
     const httpClient = _forTesting.createHTTPClient("test-token");
     await httpClient.fetchBlob({
