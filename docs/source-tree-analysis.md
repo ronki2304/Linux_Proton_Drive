@@ -1,128 +1,122 @@
-# ProtonDrive Linux Client — Source Tree Analysis
+# Source Tree Analysis
 
-**Date:** 2026-04-05
-**Scan Level:** Quick (pattern-based)
+**Project:** ProtonDrive Linux Client
+**Repository Type:** Multi-part (UI process + Engine process)
+**Last Updated:** 2026-04-26
+
+---
 
 ## Annotated Directory Tree
 
 ```
-ProtonDrive-LinuxClient/                    # Project root
-├── src/                                    # All TypeScript source
-│   ├── cli.ts                              # ★ CLI entry point — Commander program setup, command registration
-│   ├── types.ts                            # Shared type definitions (used across all layers)
-│   ├── errors.ts                           # Custom error classes
-│   │
-│   ├── commands/                           # Command layer — thin Commander action handlers
-│   │   ├── auth-login.ts                   # `protondrive auth login` — triggers SRP auth flow
-│   │   ├── auth-logout.ts                  # `protondrive auth logout` — clears stored credentials
-│   │   ├── download.ts                     # `protondrive download` — download + decrypt file
-│   │   ├── status.ts                       # `protondrive status` — reports local sync state
-│   │   ├── sync.ts                         # `protondrive sync` — bidirectional file sync
-│   │   ├── upload.ts                       # `protondrive upload` — encrypt + upload file
-│   │   │
-│   │   ├── auth-login.test.ts              # Unit tests
-│   │   ├── auth-logout.test.ts
-│   │   ├── download.test.ts
-│   │   ├── status.test.ts
-│   │   ├── sync.test.ts
-│   │   └── upload.test.ts
-│   │
-│   ├── auth/                               # Authentication layer
-│   │   ├── credentials.ts                  # Credential abstraction — get/set/clear session token
-│   │   ├── file-store.ts                   # File-based credential fallback store
-│   │   ├── keyring-store.ts                # OS keychain store via @napi-rs/keyring
-│   │   ├── srp.ts                          # SRP authentication protocol implementation
-│   │   │
-│   │   ├── credentials.test.ts
-│   │   ├── file-store.test.ts
-│   │   ├── keyring-store.test.ts
-│   │   └── srp.test.ts
-│   │
-│   ├── core/                               # Core business logic layer
-│   │   ├── config.ts                       # YAML config file parsing (js-yaml)
-│   │   ├── conflict.ts                     # Sync conflict detection and resolution strategy
-│   │   ├── output.ts                       # Terminal output formatting helpers
-│   │   ├── state-db.ts                     # SQLite state database (bun:sqlite) — tracks sync state
-│   │   ├── sync-engine.ts                  # Sync orchestration — diff, apply, reconcile
-│   │   │
-│   │   ├── config.test.ts
-│   │   ├── conflict.test.ts
-│   │   ├── output.test.ts
-│   │   ├── state-db.test.ts
-│   │   └── sync-engine.test.ts
-│   │
-│   ├── sdk/                                # ProtonDrive SDK abstraction layer
-│   │   ├── client.ts                       # DriveClient wrapper — the mock boundary in tests
-│   │   ├── account-service.ts              # Proton account API calls (user info, session)
-│   │   ├── openpgp-proxy.ts                # OpenPGP adapter — bridges Uint8Array type mismatch
-│   │   ├── srp-module.ts                   # SRP cryptographic helpers (Proton protocol)
-│   │   └── client.test.ts
-│   │
-│   ├── __e2e__/                            # End-to-end tests (require built binary at dist/protondrive)
-│   │   ├── cli.e2e.test.ts                 # CLI invocation and output tests
-│   │   └── workflow.test.ts                # Full auth → upload → download → sync workflow
-│   │
-│   └── __integration__/                    # Live API integration tests (require real credentials)
-│       ├── auth.integration.test.ts        # Auth flow against real Proton API
-│       └── sync.integration.test.ts        # Sync operations against real ProtonDrive
+ProtonDrive-LinuxClient/          # Project root
 │
-├── docs/                                   # ★ Generated project documentation (this folder)
+├── ui/                           # ← PART 1: Python/GTK4 UI process
+│   ├── src/protondrive/          # Python package entry point
+│   │   ├── __main__.py           # `python -m protondrive` entry
+│   │   ├── main.py               # Application class (Adw.Application) — global state hub
+│   │   ├── window.py             # MainWindow — split-view layout + all event routing
+│   │   ├── engine.py             # EngineClient — IPC framing, process lifecycle
+│   │   ├── auth_window.py        # AuthWindow — embedded WebKitGTK browser + cookie poller
+│   │   ├── auth.py               # AuthCallbackServer — localhost OAuth callback server
+│   │   ├── pre_auth.py           # PreAuthScreen — sign-in landing page widget
+│   │   ├── credential_store.py   # CredentialManager — libsecret / encrypted-file backends
+│   │   ├── errors.py             # Error hierarchy (zero internal imports)
+│   │   └── widgets/              # Reusable UI components (one file per widget)
+│   │       ├── account_header_bar.py   # Top bar: avatar, name, email, storage ring
+│   │       ├── activity_feed.py        # Scrolled list of recent file_synced events
+│   │       ├── add_pair_dialog.py      # Dialog: local + remote folder picker for new pairs
+│   │       ├── conflict_log.py         # Full conflict history list with resolve/reveal actions
+│   │       ├── key_unlock_dialog.py    # Password dialog for bcrypt key derivation
+│   │       ├── pair_detail_panel.py    # Right-panel: pair info, progress, conflict banner
+│   │       ├── reauth_dialog.py        # Modal: "Session expired, N changes queued" + sign-in
+│   │       ├── remote_folder_picker.py # Lazy tree picker for ProtonDrive remote folders
+│   │       ├── settings.py             # Settings page: account info + logout
+│   │       ├── setup_wizard.py         # First-run wizard: local + remote folder selection
+│   │       ├── status_footer_bar.py    # Bottom bar: All synced / Syncing / Offline / Error
+│   │       ├── sync_pair_row.py        # Sidebar row for one sync pair (teal/grey/amber/red dot)
+│   │       └── sync_progress_card.py   # Inline card: files_done/files_total progress bar
+│   ├── data/                     # GTK resource files (compiled by Meson)
+│   │   ├── *.blp                 # Blueprint UI definitions (compiled to .ui)
+│   │   ├── *.gschema.xml         # GSettings schema
+│   │   └── protondrive.gresource.xml  # GResource manifest
+│   ├── tests/                    # pytest test suite
+│   │   ├── conftest.py           # Shared fixtures: mock IPC socket, GSettings, libsecret
+│   │   └── test_*.py             # Per-module test files
+│   └── meson.build               # Build: Blueprint compile, GResource, GSettings install
 │
-├── packaging/                              # Linux distribution packaging
-│   ├── appimage/                           # AppImage build scripts
-│   ├── aur/                                # Arch User Repository (AUR) PKGBUILD
-│   └── nix/                                # Nix derivation / flake module
+├── engine/                       # ← PART 2: TypeScript/Bun sync engine
+│   └── src/                      # All source files flat (no subdirectories)
+│       ├── main.ts               # Entry: orchestrates modules, handles IPC commands
+│       ├── ipc.ts                # IpcServer, MessageReader, wire framing (4-byte + JSON)
+│       ├── sync-engine.ts        # SyncEngine: reconcile, drain queue, event subscription
+│       ├── sdk.ts                # DriveClient — ONLY file importing @protontech/drive-sdk
+│       ├── state-db.ts           # StateDb: SQLite via bun:sqlite (8-migration schema)
+│       ├── watcher.ts            # FileWatcher: inotify via node:fs.watch + debounce
+│       ├── network-monitor.ts    # NetworkMonitor: TCP probe to 1.1.1.1:443
+│       ├── conflict.ts           # Pure conflict detection (mtime + hash)
+│       ├── config.ts             # Config YAML read/write (XDG_CONFIG_HOME)
+│       ├── errors.ts             # Error hierarchy (zero internal imports)
+│       ├── debug-log.ts          # Capped file logger (XDG_CACHE_HOME, PROTONDRIVE_DEBUG=1)
+│       ├── __integration__/      # Live integration tests (require manual Proton token)
+│       └── *.test.ts             # Unit tests co-located with source
 │
-├── dist/                                   # Compiled binary output (gitignored)
-│   └── protondrive                         # Self-contained executable
+├── flatpak/                      # Flatpak packaging
+│   ├── io.github.ronki2304.ProtonDriveLinuxClient.yml  # Flatpak manifest
+│   ├── generated-sources.json    # Offline npm sources for flatpak-builder
+│   └── PERMISSIONS.md            # Permission justifications
 │
-├── .github/
-│   └── workflows/
-│       ├── ci.yml                          # PR gate: type-check + unit tests
-│       ├── release.yml                     # Release automation
-│       └── e2e.yml                         # End-to-end test workflow
+├── .github/workflows/            # CI/CD
+│   ├── ci.yml                    # PR gate: engine tsc + tests + UI meson + pytest
+│   └── release.yml               # Tag trigger: Flatpak build + GitHub Release
 │
-├── node_modules/                           # Bun-managed dependencies
-├── package.json                            # Project metadata and dependencies
-├── tsconfig.json                           # TypeScript strict config
-├── bunfig.toml                             # Bun runtime configuration
-├── bun.lock                                # Bun lockfile
-├── flake.nix                               # Nix flake for reproducible builds
-├── CLAUDE.md                               # AI agent project instructions
-└── README.md                               # Basic setup guide
+├── scripts/                      # Developer utilities
+│   ├── bump-version.sh           # Bump VERSION + package.json atomically
+│   ├── check-boundaries.sh       # Verify SDK import boundary
+│   └── epic-pipeline.sh          # Sprint automation helper
+│
+├── docs/                         # Generated documentation (this folder)
+├── screenshots/                  # App screenshots for Flathub listing
+├── VERSION                       # Canonical version string
+└── LICENSE                       # GPL-3.0-only
 ```
-
-## Critical Directories
-
-| Directory | Purpose | Key Files |
-|-----------|---------|-----------|
-| `src/` | All source code | `cli.ts` (entry), `types.ts`, `errors.ts` |
-| `src/commands/` | CLI command handlers | One file per command + matching test |
-| `src/auth/` | Authentication | `credentials.ts`, `srp.ts`, `keyring-store.ts` |
-| `src/core/` | Business logic | `sync-engine.ts`, `state-db.ts`, `conflict.ts` |
-| `src/sdk/` | SDK abstraction | `client.ts` (mock boundary), `openpgp-proxy.ts` |
-| `src/__e2e__/` | Binary-level tests | Require `dist/protondrive` pre-built |
-| `src/__integration__/` | Live API tests | Require real Proton credentials |
-| `packaging/` | Linux distro packaging | AppImage, AUR, Nix |
-| `.github/workflows/` | CI/CD pipelines | ci.yml, release.yml, e2e.yml |
-
-## Entry Points
-
-- **Primary:** `src/cli.ts` — Commander program; registers all commands
-- **Build output:** `dist/protondrive` — compiled self-contained binary
-
-## Test Structure
-
-Three test tiers, each with different requirements:
-
-| Tier | Location | Run Command | Requires |
-|------|---------|-------------|---------|
-| Unit | `src/**/*.test.ts` | `bun test` | Nothing |
-| E2E | `src/__e2e__/` | `bun test src/__e2e__/` | Built binary at `dist/protondrive` |
-| Integration | `src/__integration__/` | `bun test src/__integration__/` | Real Proton account credentials |
-
-> **Note:** Files named `*.integration.test.ts` outside `src/__integration__/` will run with `bun test` — exclusion is by directory convention, not compiler config.
 
 ---
 
-_Generated using BMAD Method `document-project` workflow_
+## Critical Directories
+
+| Directory | Purpose | Notes |
+|-----------|---------|-------|
+| `ui/src/protondrive/` | Python UI package | Entry via `python -m protondrive` |
+| `ui/src/protondrive/widgets/` | GTK4 widget components | No cross-imports between widget files |
+| `ui/data/` | Blueprint + GSettings + GResource | Must compile before running/testing |
+| `ui/tests/` | Python pytest test suite | Requires `meson compile -C builddir` first |
+| `engine/src/` | TypeScript engine source | Flat — no subdirs except `__integration__/` |
+| `engine/src/__integration__/` | Live integration tests | Require manual Proton session token |
+| `flatpak/` | Packaging manifest | App ID: `io.github.ronki2304.ProtonDriveLinuxClient` |
+
+---
+
+## Entry Points
+
+| Context | Command | Entry File |
+|---------|---------|-----------|
+| UI (dev) | `python -m protondrive` | `ui/src/protondrive/__main__.py` |
+| Engine (dev) | `bun run engine/src/main.ts` | `engine/src/main.ts` |
+| Engine (prod) | `./dist/engine` | Compiled self-contained binary |
+| Flatpak | `flatpak run io.github.ronki2304.ProtonDriveLinuxClient` | `protondrive` command |
+| UI tests | `.venv/bin/pytest ui/tests/` | `ui/tests/conftest.py` |
+| Engine tests | `bun test` | `engine/src/*.test.ts` |
+
+---
+
+## Integration Points
+
+The two processes communicate **exclusively** via Unix socket IPC:
+
+```
+ui/src/protondrive/engine.py  ←→  engine/src/ipc.ts
+      (EngineClient)                  (IpcServer)
+```
+
+Socket: `$XDG_RUNTIME_DIR/io.github.ronki2304.ProtonDriveLinuxClient/sync-engine.sock`

@@ -1,157 +1,231 @@
 # ProtonDrive Linux Client — Architecture
 
-**Date:** 2026-04-05
-**Pattern:** Layered CLI
-**Type:** CLI (Monolith)
+**Last Updated:** 2026-04-26
 
-## Executive Summary
-
-ProtonDrive Linux Client uses a four-layer architecture: a thin **Commands** layer delegates to a **Core** business-logic layer, which calls a **SDK** abstraction layer wrapping `@protontech/drive-sdk`. A separate **Auth** layer manages authentication state and credential storage independently.
-
-The entire application compiles to a self-contained binary via `bun build --compile`. There is no web server, no REST API, and no database server — state is persisted in a local SQLite file via `bun:sqlite`.
-
-## Architecture Diagram
-
-```
-┌──────────────────────────────────────────────────────┐
-│                    CLI Entry Point                    │
-│                     src/cli.ts                        │
-│           (Commander program + command reg)           │
-└─────────────────────────┬────────────────────────────┘
-                          │
-          ┌───────────────▼───────────────┐
-          │        Commands Layer          │
-          │       src/commands/            │
-          │  auth-login  auth-logout       │
-          │  upload  download  sync  status│
-          └──────┬──────────────┬─────────┘
-                 │              │
-    ┌────────────▼────┐  ┌──────▼────────────────────┐
-    │   Auth Layer    │  │       Core Layer            │
-    │   src/auth/     │  │       src/core/             │
-    │ credentials     │  │  config     conflict        │
-    │ keyring-store   │  │  state-db   sync-engine     │
-    │ file-store      │  │  output                     │
-    │ srp             │  └──────────────┬──────────────┘
-    └────────────┬────┘                 │
-                 │              ┌───────▼───────────────┐
-                 │              │       SDK Layer         │
-                 └─────────────►│       src/sdk/          │
-                                │  client (DriveClient)   │
-                                │  account-service        │
-                                │  openpgp-proxy          │
-                                │  srp-module             │
-                                └───────────┬─────────────┘
-                                            │
-                              ┌─────────────▼─────────────┐
-                              │   @protontech/drive-sdk    │
-                              │   openpgp (v6)             │
-                              │   Proton API               │
-                              └───────────────────────────┘
-```
-
-## Layer Responsibilities
-
-### Commands Layer (`src/commands/`)
-
-- **Responsibility:** Parse CLI arguments, validate input, call core/auth, format output
-- **Pattern:** One file per command; thin handlers — no business logic
-- **Commands:** `auth login`, `auth logout`, `upload`, `download`, `sync`, `status`
-- **Framework:** Commander 14 `.action()` callbacks wrapping `async/await`
-
-### Auth Layer (`src/auth/`)
-
-- **Responsibility:** Manage session tokens and the SRP authentication protocol
-- **Key design:** `CredentialStore` interface with two implementations:
-  - `KeyringStore` — OS keychain via `@napi-rs/keyring` (primary)
-  - `FileStore` — File-based fallback
-- **What is stored:** `accessToken` string only (not the full `SessionToken` object)
-- **SRP:** `srp.ts` implements Proton's Secure Remote Password challenge-response
-- **Test boundary:** Mock at the `CredentialStore` interface level; never mock `@napi-rs/keyring` directly (requires OS keychain at runtime)
-
-### Core Layer (`src/core/`)
-
-- **Responsibility:** Business logic — sync orchestration, state management, conflict handling, config
-- **State:** `state-db.ts` uses `bun:sqlite` (built-in); rows return as `unknown` — always cast to typed interfaces
-- **Sync:** `sync-engine.ts` orchestrates diff → apply → reconcile; calls SDK layer for drive operations
-- **Conflicts:** `conflict.ts` detects and resolves sync conflicts (local vs remote change divergence)
-- **Config:** `config.ts` parses user YAML config via `js-yaml`
-- **Output:** `output.ts` formats terminal output (tables, progress, errors)
-
-### SDK Layer (`src/sdk/`)
-
-- **Responsibility:** Thin adapters around `@protontech/drive-sdk` and `openpgp`
-- **Mock boundary:** `client.ts` exports `DriveClient` — always mock this class in tests, never mock the package import
-- **Type boundary:** `openpgp-proxy.ts` handles the `Uint8Array<ArrayBufferLike>` vs `Uint8Array<ArrayBuffer>` mismatch between openpgp v6 and the SDK (casts required at this boundary only)
-- **SRP module:** `srp-module.ts` provides cryptographic helpers for the SRP protocol used during auth
-
-## Data Flow
-
-### Login Flow
-
-```
-auth login command
-  → srp.ts: SRP challenge/response with Proton API
-  → account-service.ts: exchange SRP proof for session token
-  → credentials.ts: store accessToken via CredentialStore (keyring preferred)
-```
-
-### Upload Flow
-
-```
-upload command
-  → config.ts: load user config
-  → credentials.ts: retrieve accessToken
-  → client.ts (DriveClient): authenticate SDK
-  → openpgp-proxy.ts: PGP-encrypt file content
-  → DriveClient.upload(): send encrypted payload to Proton API
-  → state-db.ts: record upload in sync state
-```
-
-### Sync Flow
-
-```
-sync command
-  → state-db.ts: read last-known sync state
-  → DriveClient: fetch remote file listing
-  → sync-engine.ts: diff local vs remote
-  → conflict.ts: resolve any conflicts
-  → upload/download as needed
-  → state-db.ts: update sync state
-```
-
-## Key Technical Constraints
-
-| Constraint | Detail |
-|-----------|--------|
-| TypeScript strict | `noUncheckedIndexedAccess`, `verbatimModuleSyntax`, `noImplicitOverride` all enabled |
-| Import extensions | Local imports use `.js` extension (e.g. `import { foo } from "./bar.js"`) |
-| Type imports | `import type { ... }` mandatory for type-only imports |
-| Array indexing | `arr[0]` returns `T \| undefined` — use `!` only after bounds check |
-| Method overrides | `override` keyword required on all class method overrides |
-| Async | `async/await` everywhere; no `.then()/.catch()` chains |
-| JSON imports | Require `with { type: "json" }` assertion |
-| openpgp bundle | Always import from `openpgp` (full bundle), never `openpgp/lightweight` |
-| SDK mock boundary | Mock `DriveClient` class, never `@protontech/drive-sdk` package imports |
-
-## Technology Decisions
-
-| Decision | Choice | Rationale |
-|---------|--------|-----------|
-| Runtime | Bun | Single binary compilation, built-in SQLite, fast test runner |
-| Credential store | @napi-rs/keyring | Bundles cleanly into Bun compiled binary (validated 1.3.11) |
-| Encryption | openpgp v6 (full bundle) | Lightweight variant causes import issues with Bun bundler |
-| Password hashing | bcryptjs | Pure JS — no native addon needed in compiled binary |
-| State storage | bun:sqlite | Built-in, zero-dependency SQLite |
-
-## Testing Strategy
-
-| Level | Location | How to Run | When to Use |
-|-------|---------|-----------|-------------|
-| Unit | `src/**/*.test.ts` | `bun test` | Always; CI gate |
-| E2E (binary) | `src/__e2e__/` | `bun test src/__e2e__/` | After `bun build --compile` |
-| Integration (live) | `src/__integration__/` | `bun test src/__integration__/` | With real Proton credentials |
+This document covers the full system architecture across both processes. For deep dives see:
+- [Architecture — UI](./architecture-ui.md)
+- [Architecture — Engine](./architecture-engine.md)
+- [Integration Architecture](./integration-architecture.md)
 
 ---
 
-_Generated using BMAD Method `document-project` workflow_
+## System Overview
+
+```
+┌────────────────────────────────────────────────────���─────────────┐
+│                     Flatpak Sandbox                              │
+│                                                                  │
+│  ┌─────────────────────────┐       ┌──────────────────────────┐  │
+│  │     UI Process          │       │    Engine Process        │  │
+│  │  Python 3.12 / GTK4     │       │    TypeScript / Bun      │  │
+│  │                         │       │                          │  │
+│  │  Application            │  IPC  │  main.ts (orchestrator)  │  │
+│  │  ├── MainWindow         │◄─────►│  ├── IpcServer           │  │
+│  │  ├── EngineClient       │ sock  │  ├── SyncEngine          │  │
+│  │  ├── AuthWindow         │       │  ├── DriveClient (sdk)   │  │
+│  │  └── CredentialManager  │       │  ├── StateDb             │  │
+│  │                         │       │  ├── FileWatcher         │  │
+│  │                         │       │  └── NetworkMonitor      │  │
+│  └─────────────────────────┘       └──────────────────────────┘  │
+│                                                                  │
+│  libsecret (credentials)   ProtonDrive API (HTTPS/TLS)          │
+│  $XDG_RUNTIME_DIR (socket) $XDG_DATA_HOME (SQLite DB)           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Process Roles
+
+### UI Process (Python/GTK4)
+- Owns the application window, all user interaction
+- Holds the auth token in memory; stores it in libsecret or encrypted file
+- Spawns and monitors the engine process
+- Translates GTK signals into IPC commands
+- Translates IPC push events into widget state updates
+
+### Engine Process (TypeScript/Bun)
+- Owns all sync state (SQLite database)
+- Owns all Proton API calls (via `@protontech/drive-sdk`)
+- Watches local filesystem (inotify via `node:fs.watch`)
+- Monitors network connectivity
+- Emits push events to the UI; never queries the UI
+
+---
+
+## Auth Flow
+
+```
+User clicks Sign In
+    │
+    ▼
+UI: AuthWindow (WebKitGTK)
+    │  JS injection captures login_password + key_salts
+    │  Cookie poller extracts auth token from WebView cookies
+    │
+    ▼
+UI → Engine: token_refresh {token, login_password, captured_salts}
+    │
+    ▼
+Engine: createDriveClient(token)
+  └─► validateSession() → account info
+  └─► deriveAndUnlock(login_password, salts) → keyPassword
+        │ (bcrypt key derivation, decrypts PGP private keys)
+        │
+        ▼
+Engine → UI: session_ready {display_name, email, storage_*, plan, key_password}
+    │
+    ▼
+UI: stores key_password in libsecret (for silent relaunch)
+    route to Setup Wizard (first run) or Main Window (existing pairs)
+```
+
+**Silent relaunch** (subsequent launches): UI sends `token_refresh` with stored `key_password` → engine calls `applyKeyPassword()` → `session_ready` without user interaction.
+
+**Key unlock dialog** (fallback): if stored `key_password` invalid, engine emits `key_unlock_required` → UI shows password dialog → user submits → engine derives and unlocks.
+
+---
+
+## Sync Flow
+
+```
+FileWatcher detects change
+    │  debounce 1 second
+    │  enqueueChange() → change_queue table
+    │
+    ▼
+SyncEngine.drainQueue()
+    │
+    ├─ For each change_queue entry:
+    │   │
+    │   ├─ "created" / "modified":
+    │   │   processQueueEntry()
+    │   │    ├─ fetch current remote state
+    │   │    ├─ detectConflict(localMtime, storedMtime, remoteMtime, storedRemote, hash)
+    │   │    │   ├─ no conflict → upload (if local newer) or download (if remote newer)
+    │   │    │   └─ conflict → create conflict copy, download remote winning version
+    │   │    └─ commitUpload(syncState, queueId) — atomic DB transaction
+    │   │
+    │   └─ "deleted":
+    │       └─ trash remote file → commitTrash(pairId, path, queueId)
+    │
+    └─ After MAX_DRAIN_ATTEMPTS failures: dead_letter entry
+```
+
+**Remote event subscription** runs in parallel:
+```
+SDK event stream → drainEventQueue()
+  ├─ TreeRefresh → full reconcileAndEnqueue() walk
+  ├─ NodeCreated/Updated → targeted enqueue (by remote node ID lookup)
+  └─ TreeRemove → clear checkpoint, schedule reconcile
+```
+
+---
+
+## Token Expiry / Re-auth Flow
+
+```
+Engine: SDK returns 401
+    │
+    ▼
+Engine → UI: token_expired {queued_changes: N}
+    │
+    ▼
+UI: show session_expired_banner, show ReauthDialog (N queued changes)
+    │
+    ▼
+User clicks Sign In → AuthWindow opens
+    │
+    ▼
+(Same as initial auth flow above)
+    │
+    ▼
+Engine → UI: session_ready
+    │
+    ▼
+UI: close banner, close ReauthDialog, refresh pair status
+Engine: SyncEngine.drainQueue() replays all N queued changes
+```
+
+---
+
+## Conflict Resolution
+
+When both local and remote files have changed since last sync:
+
+```
+detectConflict() returns isConflict: true
+    │
+    ▼
+1. Rename local file → localFile.ext.conflict-YYYY-MM-DD-N
+2. Download remote "winning" version to localFile.ext
+3. Emit conflict_detected {pair_id, local_path, conflict_copy_path}
+    │
+    ▼
+UI: on_conflict_detected
+  ├─ sidebar row → amber dot
+  ├─ detail panel → conflict banner
+  ├─ footer bar → "N conflicts need attention"
+  └─ desktop notification (Gio.Notification)
+```
+
+User resolves by deleting the `.conflict-*` copy. UI detects on next `sync_complete`.
+
+---
+
+## Offline Handling
+
+```
+NetworkMonitor: TCP probe to 1.1.1.1:443 fails
+    │
+    ▼
+Engine → UI: offline {}
+    │
+    ▼
+UI: all rows → offline state; footer → "Offline"
+FileWatcher: continues queueing changes (offline-safe)
+SyncEngine.drainQueue(): skips API calls (networkMonitor.isCurrentlyOnline = false)
+
+NetworkMonitor: probe succeeds
+    │
+    ▼
+Engine → UI: online {}
+    │
+    ▼
+UI: restore row states; footer → sync/synced
+SyncEngine.drainQueue(): triggered by createNetworkMonitorCallback
+```
+
+---
+
+## Error Hierarchy
+
+### Engine (TypeScript)
+```
+EngineError
+  ├─ SyncError      — sync operation failures
+  ├─ NetworkError   — network/fetch failures
+  ├─ RateLimitError — HTTP 429 (triggers backoff)
+  ├─ AuthExpiredError — session token expired
+  ├─ IpcError       — IPC framing/parse failures
+  └─ ConfigError    — config file / XDG path failures
+```
+
+### UI (Python)
+```
+AppError
+  ├─ AuthError         — libsecret / token storage failures
+  ├─ IpcError          — engine communication failures
+  ├─ ConfigError       — YAML parse failures
+  └─ EngineNotFoundError — Bun or engine binary not found
+```
+
+---
+
+## Security Properties
+
+- **Token never in logs**: `PROTONDRIVE_DEBUG=1` explicitly excludes tokens from log lines
+- **Token flow is one-directional**: libsecret → UI → IPC `token_refresh` → engine `sdk.ts` → SDK; engine never reads libsecret directly
+- **Auth server binds localhost only**: `127.0.0.1` ephemeral port, closed after one callback
+- **keyPassword stored separately**: bcrypt output (not raw password) stored in libsecret
+- **Credentials never in plaintext**: libsecret primary; PBKDF2+Fernet encrypted file as fallback

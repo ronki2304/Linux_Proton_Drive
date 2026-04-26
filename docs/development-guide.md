@@ -1,6 +1,6 @@
 # ProtonDrive Linux Client — Development Guide
 
-**Last Updated:** 2026-04-16
+**Last Updated:** 2026-04-26
 
 ## Architecture at a glance
 
@@ -9,8 +9,6 @@ Two-process desktop application:
 - **UI Process** — Python 3.12 + GTK4 + Libadwaita 1.8, Blueprint `.blp` files, Meson build
 - **Sync Engine** — TypeScript + Bun 1.3.11, compiled to a self-contained binary via `bun build --compile`
 - **IPC** — Unix domain socket, 4-byte big-endian length-prefixed JSON framing
-
-See `_bmad-output/project-context.md` for the authoritative rule set (89 rules, agent-critical).
 
 ## Prerequisites
 
