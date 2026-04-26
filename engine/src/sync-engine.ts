@@ -1159,7 +1159,28 @@ export class SyncEngine {
         // Both defined — compare stored vs current remote_mtime.
         const remoteUnchanged = state!.remote_mtime === remote!.remote_mtime;
         if (remoteUnchanged) {
-          outcome = isDelete ? "trashNode" : "upload";
+          if (isDelete) {
+            outcome = "trashNode";
+          } else {
+            // Only skip-if-unchanged when the last known sync was clean
+            // (local_mtime == remote_mtime). Bootstrap pre-seeds have
+            // local_mtime != remote_mtime, so they always go to upload.
+            const wasCleanSync = state!.local_mtime === state!.remote_mtime;
+            if (wasCleanSync) {
+              try {
+                const localStat = await stat(join(pair.local_path, entry.relative_path));
+                const localUnchanged = new Date(localStat.mtime).toISOString() === state!.local_mtime;
+                if (localUnchanged) {
+                  // Queue entry is stale — both sides identical, nothing to do.
+                  this.stateDb.dequeue(entry.id);
+                  return "synced";
+                }
+              } catch {
+                // local file gone — fall through to upload, which will surface the error
+              }
+            }
+            outcome = "upload";
+          }
         } else {
           // Remote changed since last sync. For uploads: genuine conflict (both sides changed).
           // For deletes: remote has a newer version the user hasn't seen — download it.
