@@ -48,10 +48,16 @@ class ActivityFeedRow(Adw.ActionRow):
 
         # Direction arrow prefix.
         arrow = Gtk.Label()
-        arrow.set_text("↑" if direction == "upload" else "↓")
+        if direction == "upload":
+            arrow.set_text("↑")
+            arrow.add_css_class("success")
+        elif direction == "download":
+            arrow.set_text("↓")
+            arrow.add_css_class("accent")
+        else:  # verified
+            arrow.set_text("✓")
+            arrow.add_css_class("dim-label")
         arrow.set_valign(Gtk.Align.CENTER)
-        css_class = "success" if direction == "upload" else "accent"
-        arrow.add_css_class(css_class)
         self.add_prefix(arrow)
 
         self.set_title(file_name)
@@ -67,6 +73,7 @@ class ActivityFeed(Adw.Bin):
 
     __gtype_name__ = "ProtonDriveActivityFeed"
 
+    preferences_group: Adw.PreferencesGroup = Gtk.Template.Child()
     activity_spinner: Gtk.Spinner = Gtk.Template.Child()
     activity_stack: Gtk.Stack = Gtk.Template.Child()
     activity_list: Gtk.ListBox = Gtk.Template.Child()
@@ -96,6 +103,10 @@ class ActivityFeed(Adw.Bin):
         self.activity_spinner.set_spinning(active)
         self.activity_spinner.set_visible(active)
 
+    def set_sync_step(self, step: str | None) -> None:
+        """Show the current engine phase below the group title, or clear it."""
+        self.preferences_group.set_description(step or "")
+
     def clear(self) -> None:
         """Remove all rows — called on clear_session()."""
         self._events.clear()
@@ -106,3 +117,4 @@ class ActivityFeed(Adw.Bin):
             child = nxt
         self.activity_stack.set_visible_child_name("empty")
         self.set_syncing(False)
+        self.set_sync_step(None)

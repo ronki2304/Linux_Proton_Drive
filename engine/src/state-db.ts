@@ -42,6 +42,12 @@ export interface EventQueueEntry {
   event_payload: string;
 }
 
+export interface SyncFolder {
+  pair_id: string;
+  relative_path: string;
+  remote_node_id: string;
+}
+
 // ── Migration definitions ────────────────────────────────────────────────────
 
 type Migration = { version: number; up: string };
@@ -126,9 +132,20 @@ const MIGRATIONS: Migration[] = [
     version: 7,
     up: `ALTER TABLE sync_state ADD COLUMN remote_node_id TEXT;`,
   },
+  {
+    version: 8,
+    up: `
+      CREATE TABLE IF NOT EXISTS sync_folder (
+        pair_id        TEXT NOT NULL REFERENCES sync_pair(pair_id) ON DELETE CASCADE,
+        relative_path  TEXT NOT NULL,
+        remote_node_id TEXT NOT NULL,
+        PRIMARY KEY (pair_id, relative_path)
+      );
+    `,
+  },
 ];
 
-const CURRENT_VERSION = 7;
+const CURRENT_VERSION = 8;
 
 // ── StateDb ──────────────────────────────────────────────────────────────────
 
@@ -453,6 +470,51 @@ export class StateDb {
     this.db
       .prepare(`DELETE FROM event_queue WHERE tree_event_scope_id = ?`)
       .run(scopeId);
+  }
+
+  // ── sync_folder CRUD ──────────────────────────────────────────────────────
+
+  upsertSyncFolder(folder: SyncFolder): void {
+    this.db
+      .prepare(
+        `INSERT INTO sync_folder (pair_id, relative_path, remote_node_id)
+         VALUES (?, ?, ?)
+         ON CONFLICT(pair_id, relative_path) DO UPDATE SET remote_node_id = excluded.remote_node_id`
+      )
+      .run(folder.pair_id, folder.relative_path, folder.remote_node_id);
+  }
+
+  deleteSyncFolderByRemoteNodeId(remoteNodeId: string): void {
+    this.db
+      .prepare(`DELETE FROM sync_folder WHERE remote_node_id = ?`)
+      .run(remoteNodeId);
+  }
+
+  findSyncFolderByRemoteNodeId(remoteNodeId: string): { pair_id: string; relative_path: string } | null {
+    const row = this.db
+      .prepare(`SELECT pair_id, relative_path FROM sync_folder WHERE remote_node_id = ?`)
+      .get(remoteNodeId) as { pair_id: string; relative_path: string } | null;
+    return row ?? null;
+  }
+
+  getSyncFolder(pairId: string, relativePath: string): string | null {
+    const row = this.db
+      .prepare(`SELECT remote_node_id FROM sync_folder WHERE pair_id = ? AND relative_path = ?`)
+      .get(pairId, relativePath) as { remote_node_id: string } | null;
+    return row?.remote_node_id ?? null;
+  }
+
+  clearSyncFolders(pairId: string): void {
+    this.db
+      .prepare(`DELETE FROM sync_folder WHERE pair_id = ?`)
+      .run(pairId);
+  }
+
+  hasSyncFolderEntries(pairId: string): boolean {
+    const row = this.db
+      .prepare(`SELECT 1 FROM sync_folder WHERE pair_id = ? LIMIT 1`)
+      .get(pairId);
+    return row !== null;
   }
 
   // ── diagnostics (used in tests and health checks) ─────────────────────────

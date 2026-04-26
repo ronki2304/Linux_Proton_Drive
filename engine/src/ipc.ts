@@ -27,7 +27,7 @@ export interface IpcPushEvent {
 export interface FileSyncedPayload {
   pair_id: string;
   file_name: string;   // bare file name, never a path
-  direction: "upload" | "download";
+  direction: "upload" | "download" | "verified";
   timestamp: string;   // ISO 8601 UTC
 }
 

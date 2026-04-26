@@ -327,6 +327,7 @@ export class DriveClient {
         if (node.type !== NodeType.Folder) {
           continue;
         }
+        if (node.trashTime) continue;
         folders.push({
           id: node.uid,
           name: node.name,
@@ -402,6 +403,7 @@ export class DriveClient {
         }
         const node = result.value;
         if (node.type !== NodeType.File) continue;
+        if (node.trashTime) continue;
         files.push({
           id: node.uid,
           name: node.name,
@@ -598,13 +600,10 @@ export class DriveClient {
           throw new SyncError(`trashNode failed for ${nodeUid}: ${result.error}`);
         }
       }
-      // Defensive: if the SDK iterator completes without yielding anything
-      // for our uid (e.g. node already gone on the server, or a future SDK
-      // change drops "already-trashed" uids silently), we cannot confirm the
-      // trash actually happened. Treat as a failure so the caller keeps the
-      // queue entry and doesn't drop the sync_state row prematurely.
+      // If the SDK iterator completes without yielding anything the node is
+      // already gone (trashed or permanently deleted) — the goal is achieved.
       if (!saw) {
-        throw new SyncError(`trashNode produced no result for ${nodeUid}`);
+        debugLog(`trashNode: no result for ${nodeUid} — node already absent, treating as success`);
       }
     } catch (err) {
       mapSdkError(err);

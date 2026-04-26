@@ -1,5 +1,5 @@
 # generated: 2026-04-08
-# last_updated: 2026-04-25  # 8-2 done
+# last_updated: 2026-04-26  # 8-7 done
 # project: ProtonDrive-LinuxClient
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-25  # 8-6 done
+last_updated: 2026-04-26  # 8-7 ready-for-dev
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -151,4 +151,5 @@ development_status:
   8-4b-actionable-decryption-error-ux: backlog  # Draft story pre-existing; renamed from 8-4 to make room for release engineering; well-finished spec
   8-5-license-alignment: done  # Added 2026-04-25 CC: GPL-3.0 required by @protontech/drive-sdk; replaces MIT declarations in LICENSE, metainfo, package.json, README
   8-6-sdk-client-identification: done  # Added 2026-04-25 CC: x-pm-appversion was spoofing web-drive@5.0.0.0; must use ronki230-ProtonDriveLinuxClient@{version}
+  8-7-targeted-drain-queue-lookups: done  # Added 2026-04-26 CC: add sync_folder table to persist remote folder IDs; drainQueue resolves parent from DB + getRemoteNode per file; eliminates walkRemoteTree in steady state
   epic-8-retrospective: optional

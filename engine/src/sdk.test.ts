@@ -300,6 +300,25 @@ describe("DriveClient.listRemoteFolders", () => {
     expect(captured).toBeInstanceOf(SyncError);
     expect((captured as Error).message).toMatch(/My Files root unavailable/);
   });
+
+  it("skips trashed folder nodes (trashTime set)", async () => {
+    const trashedFolder: FakeMaybeNode = {
+      ok: true,
+      value: { uid: "uid-trashed-folder", name: "OldProject", type: NODE_TYPE_FOLDER, trashTime: new Date() },
+    };
+    const liveFolder: FakeMaybeNode = {
+      ok: true,
+      value: { uid: "uid-live-folder", name: "ActiveProject", type: NODE_TYPE_FOLDER },
+    };
+    const iterFn = asyncGenOf([trashedFolder, liveFolder]);
+    const sdk = makeFakeSdk({ iterateFolderChildren: iterFn });
+    const client = new DriveClient(sdk);
+
+    const result = await client.listRemoteFolders("p");
+
+    expect(result.length).toBe(1);
+    expect(result[0]!.id).toBe("uid-live-folder");
+  });
 });
 
 describe("DriveClient.uploadFile", () => {
@@ -1109,6 +1128,23 @@ describe("DriveClient.listRemoteFiles", () => {
     const filterArg = iterFn.mock.calls[0]![1] as { type?: string } | undefined;
     expect(filterArg).toBeTruthy();
     expect(filterArg!.type).toBe(NODE_TYPE_FILE);
+  });
+
+  it("skips trashed file nodes (trashTime set)", async () => {
+    const mtime = new Date("2026-04-10T10:00:00.000Z");
+    const trashedNode: FakeMaybeNode = {
+      ok: true,
+      value: { uid: "uid-trashed", name: "deleted.txt", type: NODE_TYPE_FILE, modificationTime: mtime, totalStorageSize: 500, trashTime: new Date() },
+    };
+    const liveNode = makeFakeFileNode("uid-live", "live.txt", mtime, 100);
+    const iterFn = asyncGenOf([trashedNode, liveNode]);
+    const sdk = makeFakeSdk({ iterateFolderChildren: iterFn });
+    const client = new DriveClient(sdk);
+
+    const result = await client.listRemoteFiles("parent-uid");
+
+    expect(result.length).toBe(1);
+    expect(result[0]!.id).toBe("uid-live");
   });
 });
 

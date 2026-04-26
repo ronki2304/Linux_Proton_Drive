@@ -117,6 +117,15 @@ class PairDetailPanel(Adw.Bin):
         """Show or hide the reconcile-progress spinner in the activity feed."""
         self._activity_feed.set_syncing(active)
 
+    def on_sync_step(self, pair_id: str, step: str | None) -> None:
+        """Update the sync phase label in the activity feed.
+
+        pair_id="" bypasses the pair guard (used when clearing on pair switch).
+        """
+        if pair_id and pair_id != self._current_pair_id:
+            return
+        self._activity_feed.set_sync_step(step)
+
     def show_conflict_log_page(self, entries: list[dict]) -> None:
         """Populate and show the conflict log page.
 

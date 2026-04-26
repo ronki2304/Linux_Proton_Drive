@@ -1,7 +1,12 @@
 import { pathToFileURL } from "node:url";
 import https from "node:https";
 import tls from "node:tls";
-import { readdir, unlink } from "node:fs/promises";
+import { promisify } from "node:util";
+import { readdir as _readdirCb, unlink as _unlinkCb } from "node:fs";
+// Use node:fs (callback) + promisify rather than node:fs/promises so that
+// mock.module("node:fs/promises", ...) in test files cannot replace these.
+const _readdir = promisify(_readdirCb) as (path: string, opts: { withFileTypes: true }) => Promise<import("node:fs").Dirent[]>;
+const _unlink = promisify(_unlinkCb);
 import { join } from "node:path";
 import { fetch as undiciFetch, setGlobalDispatcher, Agent } from "undici";
 
@@ -235,10 +240,10 @@ async function _activateSession(
 ): Promise<void> {
   driveClient = client;
   syncEngine?.setDriveClient(client);
-  // Start subscription before deciding whether to full-walk (Story 8-1).
+  // Start subscription — SDK sends TreeRefresh if checkpoint is stale/absent.
   await syncEngine?.startRemoteEventSubscription(client);
   await syncEngine?.drainEventQueue(client);
-  // startSyncAll() = reconcile (skipped if checkpoint present) + drainQueue
+  // startSyncAll() = drain only; full reconcile is triggered by TreeRefresh or startSyncPair
   void syncEngine?.startSyncAll();
   fileWatcher?.stop();
   fileWatcher = new FileWatcher(
@@ -631,7 +636,7 @@ export async function handleCommand(
         (e) => stateDb!.enqueue(e),
       );
       void fileWatcher.initialize();
-      void syncEngine?.startSyncAll();
+      void syncEngine?.startSyncPair(pairId);
     }
 
     return {
@@ -775,7 +780,7 @@ export async function handleCommand(
         (e) => stateDb!.enqueue(e),
       );
       void fileWatcher.initialize();
-      void syncEngine?.startSyncAll();
+      void syncEngine?.startSyncPair(pairId);
     }
 
     return {
@@ -824,7 +829,7 @@ export async function cleanTmpFilesInDir(dirPath: string, depth = 0): Promise<nu
   let count = 0;
   let entries;
   try {
-    entries = await readdir(dirPath, { withFileTypes: true });
+    entries = await _readdir(dirPath, { withFileTypes: true });
   } catch {
     return 0; // directory doesn't exist or not readable — skip
   }
@@ -834,7 +839,7 @@ export async function cleanTmpFilesInDir(dirPath: string, depth = 0): Promise<nu
       count += await cleanTmpFilesInDir(fullPath, depth + 1);
     } else if (entry.name.includes(".protondrive-tmp-")) {
       try {
-        await unlink(fullPath);
+        await _unlink(fullPath);
         count++;
       } catch { /* already gone or locked */ }
     }

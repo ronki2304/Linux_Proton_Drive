@@ -616,6 +616,7 @@ class MainWindow(Adw.ApplicationWindow):
     def _reload_activity_feed(self, pair_id: str) -> None:
         """Clear the activity feed and replay cached events for pair_id (most-recent-first)."""
         self.pair_detail_panel.clear_activity()
+        self.pair_detail_panel.on_sync_step("", None)
         for event in reversed(self._file_synced_cache.get(pair_id, [])):
             self.pair_detail_panel.on_file_synced(event)
 
@@ -854,6 +855,7 @@ class MainWindow(Adw.ApplicationWindow):
             row = self._sync_pair_rows.get(pair_id)
             if row is not None and pair_id not in self._folder_missing_pair_ids:
                 row.set_state("syncing")
+            self.pair_detail_panel.on_sync_step(pair_id, "Scanning for changes…")
 
         elif phase == "idle":
             if pair_id not in self._pair_phase:
@@ -866,6 +868,7 @@ class MainWindow(Adw.ApplicationWindow):
             row = self._sync_pair_rows.get(pair_id)
             if row is not None and row.state in ("syncing", "paused"):
                 self._apply_resting_state(pair_id)
+            self.pair_detail_panel.on_sync_step(pair_id, None)
 
         # Update activity feed spinner — show if any pair is actively reconciling.
         has_active = any(v == "active" for v in self._pair_phase.values())
@@ -904,6 +907,7 @@ class MainWindow(Adw.ApplicationWindow):
             self._pairs_data[pair_id]["file_count_text"] = f"{files_total} files"
             self._pairs_data[pair_id]["total_size_text"] = _fmt_bytes(payload.get("bytes_total", 0))
         self.pair_detail_panel.on_sync_progress(payload)
+        self.pair_detail_panel.on_sync_step(pair_id, "Syncing files…")
 
     def on_sync_complete(self, payload: dict[str, Any]) -> None:
         """Update pair row and footer bar when sync completes."""
@@ -964,6 +968,7 @@ class MainWindow(Adw.ApplicationWindow):
         )
 
         self.pair_detail_panel.on_sync_complete(payload)
+        self.pair_detail_panel.on_sync_step(pair_id, None)
         if pair_id in self._pairs_data:
             ts = payload.get("timestamp", "")
             self._pairs_data[pair_id]["last_synced_at"] = ts

@@ -757,7 +757,7 @@ describe("update_pair_path command", () => {
     expect(response!.payload).toEqual({ error: "pair_not_found" });
   });
 
-  it("FileWatcher restarted and startSyncAll called after success", async () => {
+  it("FileWatcher restarted and startSyncPair called after success", async () => {
     const db = new StateDb(":memory:");
     _setStateDbForTests(db);
     db.insertPair({
@@ -779,9 +779,9 @@ describe("update_pair_path command", () => {
     } as unknown as FileWatcher;
     _setFileWatcherForTests(mockFw);
 
-    const syncAllCalls: string[] = [];
+    const syncPairCalls: string[] = [];
     const mockEngine = {
-      startSyncAll: async () => { syncAllCalls.push("called"); },
+      startSyncPair: async (pairId: string) => { syncPairCalls.push(pairId); },
       drainQueue: async () => {},
       setDriveClient: () => {},
     } as unknown as SyncEngine;
@@ -794,7 +794,8 @@ describe("update_pair_path command", () => {
     });
 
     expect(fwStops.length).toBe(1);
-    expect(syncAllCalls.length).toBe(1);
+    expect(syncPairCalls.length).toBe(1);
+    expect(syncPairCalls[0]).toBe("pair-xyz");
   });
 });
 

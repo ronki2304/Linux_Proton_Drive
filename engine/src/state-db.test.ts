@@ -3,7 +3,7 @@ import { rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateDb } from "./state-db.js";
-import type { SyncPair, SyncState, ChangeQueueEntry, ChangeType, EventQueueEntry } from "./state-db.js";
+import type { SyncPair, SyncState, ChangeQueueEntry, ChangeType, EventQueueEntry, SyncFolder } from "./state-db.js";
 
 // Each test gets a fresh :memory: DB for full isolation.
 let db: StateDb;
@@ -68,8 +68,8 @@ describe("StateDb — init", () => {
     expect(queue[0]!.queued_at).toBe("2026-04-09T10:00:00.000Z");
   });
 
-  it("sets user_version to 7 after migration (AC4)", () => {
-    expect(db.pragma("user_version")).toBe(7);
+  it("sets user_version to 8 after migration (AC4)", () => {
+    expect(db.pragma("user_version")).toBe(8);
   });
 });
 
@@ -669,8 +669,8 @@ describe("StateDb — event_checkpoint and event_queue (Story 8-1)", () => {
     expect(events[2]!.event_type).toBe("fast_forward");
   });
 
-  it("user_version = 7 after migration v7", () => {
-    expect(db.pragma("user_version")).toBe(7);
+  it("user_version = 8 after migration v8", () => {
+    expect(db.pragma("user_version")).toBe(8);
   });
 
   it("upgrade from v5-schema: event tables exist; old data intact", () => {
@@ -700,5 +700,94 @@ describe("StateDb — event_checkpoint and event_queue (Story 8-1)", () => {
       if (fileDb) fileDb.close();
       for (const ext of ["", "-wal", "-shm"]) rmSync(tmpPath + ext, { force: true });
     }
+  });
+});
+
+describe("StateDb — sync_folder CRUD", () => {
+  const PAIR_ID = "p1";
+
+  beforeEach(() => {
+    db = new StateDb(":memory:");
+    db.insertPair({
+      pair_id: PAIR_ID,
+      local_path: "/home/user/docs",
+      remote_path: "/My Drive/docs",
+      remote_id: "root-uid",
+      created_at: "2026-04-26T00:00:00.000Z",
+      last_synced_at: null,
+    });
+  });
+
+  afterEach(() => {
+    db.close();
+  });
+
+  it("upsertSyncFolder and getSyncFolder roundtrip", () => {
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "subdir", remote_node_id: "folder-uid" });
+    expect(db.getSyncFolder(PAIR_ID, "subdir")).toBe("folder-uid");
+  });
+
+  it("upsertSyncFolder updates remote_node_id on conflict", () => {
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "subdir", remote_node_id: "old-uid" });
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "subdir", remote_node_id: "new-uid" });
+    expect(db.getSyncFolder(PAIR_ID, "subdir")).toBe("new-uid");
+  });
+
+  it("getSyncFolder returns null when not found", () => {
+    expect(db.getSyncFolder(PAIR_ID, "missing")).toBeNull();
+  });
+
+  it("clearSyncFolders removes only the specified pair's entries", () => {
+    const OTHER_PAIR = "p2";
+    db.insertPair({
+      pair_id: OTHER_PAIR,
+      local_path: "/home/user/other",
+      remote_path: "/My Drive/other",
+      remote_id: "root-other",
+      created_at: "2026-04-26T00:00:00.000Z",
+      last_synced_at: null,
+    });
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "a", remote_node_id: "uid-a" });
+    db.upsertSyncFolder({ pair_id: OTHER_PAIR, relative_path: "b", remote_node_id: "uid-b" });
+    db.clearSyncFolders(PAIR_ID);
+    expect(db.getSyncFolder(PAIR_ID, "a")).toBeNull();
+    expect(db.getSyncFolder(OTHER_PAIR, "b")).toBe("uid-b");
+  });
+
+  it("deleteSyncFolderByRemoteNodeId removes the correct row", () => {
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "subdir", remote_node_id: "folder-uid" });
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "other", remote_node_id: "other-uid" });
+    db.deleteSyncFolderByRemoteNodeId("folder-uid");
+    expect(db.getSyncFolder(PAIR_ID, "subdir")).toBeNull();
+    expect(db.getSyncFolder(PAIR_ID, "other")).toBe("other-uid");
+  });
+
+  it("deleteSyncFolderByRemoteNodeId is a no-op when no matching row", () => {
+    expect(() => db.deleteSyncFolderByRemoteNodeId("nonexistent-uid")).not.toThrow();
+  });
+
+  it("findSyncFolderByRemoteNodeId returns pair_id and relative_path for known uid", () => {
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "docs/reports", remote_node_id: "uid-reports" });
+    const result = db.findSyncFolderByRemoteNodeId("uid-reports");
+    expect(result).not.toBeNull();
+    expect(result!.pair_id).toBe(PAIR_ID);
+    expect(result!.relative_path).toBe("docs/reports");
+  });
+
+  it("findSyncFolderByRemoteNodeId returns null for unknown uid", () => {
+    expect(db.findSyncFolderByRemoteNodeId("nonexistent-uid")).toBeNull();
+  });
+
+  it("findSyncFolderByRemoteNodeId returns null after the row is deleted", () => {
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "subdir", remote_node_id: "uid-del" });
+    db.deleteSyncFolderByRemoteNodeId("uid-del");
+    expect(db.findSyncFolderByRemoteNodeId("uid-del")).toBeNull();
+  });
+
+  it("CASCADE delete: deleting sync_pair removes sync_folder rows for that pair", () => {
+    db.upsertSyncFolder({ pair_id: PAIR_ID, relative_path: "subdir", remote_node_id: "folder-uid" });
+    db.deletePair(PAIR_ID);
+    // After cascade delete, row should be gone
+    expect(db.getSyncFolder(PAIR_ID, "subdir")).toBeNull();
   });
 });

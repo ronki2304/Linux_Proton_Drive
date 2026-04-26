@@ -273,3 +273,80 @@ So that the app accurately identifies itself and does not spoof another Proton c
   - `fetchJson` path: `x-pm-appversion` header set to correct value
   - `fetchBlob` Proton-host path: `x-pm-appversion` header set to correct value
   - `fetchBlob` storage-host path: `x-pm-appversion` header absent
+
+---
+
+## Story 8-7: Eliminate walkRemoteTree from drainQueue via sync_folder Cache
+
+As a user,
+I want the sync engine to never perform a full remote tree traversal just to drain a few pending queue entries,
+So that restarting the app with pending changes is fast and proportional to the number of changed files — not the size of the folder tree.
+
+**Background:** `drainQueue` calls `walkRemoteTree` once per pair that has queue items, to obtain (a) the current remote state of each file and (b) the remote folder IDs needed for upload. This is O(tree) API calls even when the queue has a single entry. The root cause is that remote folder IDs are computed during `reconcilePair` but never persisted — they live only in an in-memory `remoteFolders` map that is discarded after each reconcile. Adding a `sync_folder` table to the state DB eliminates this: all folder IDs are already known, and all file remote states can be fetched with single `getRemoteNode` calls. `walkRemoteTree` in `drainQueue` becomes unnecessary in steady state.
+
+**Acceptance Criteria:**
+
+**AC1 — sync_folder table**
+**Given** the state DB schema
+**When** this story is complete
+**Then** a new table `sync_folder` exists: `(pair_id TEXT, relative_path TEXT, remote_node_id TEXT, PRIMARY KEY (pair_id, relative_path))`
+**And** it is created by the existing schema migration (no separate migration story needed — schema is append-only)
+
+**AC2 — sync_folder populated by reconcilePair**
+**Given** `reconcilePair` walks the remote tree and discovers folders
+**When** the walk completes
+**Then** every remote folder for the pair is upserted into `sync_folder` with its `remote_node_id`
+**And** folders that no longer exist remotely are removed from `sync_folder` for that pair
+
+**AC3 — sync_folder updated by reconcilePair folder creation**
+**Given** `reconcilePair` creates a new remote folder (local dir not yet on remote)
+**When** the folder is created successfully
+**Then** the new folder's `remote_node_id` is immediately upserted into `sync_folder`
+**And** subsequent queue entries for files inside that folder find the parent ID in the DB
+
+**AC4 — sync_folder updated by remote events**
+**Given** `drainEventQueue` processes a `NodeCreated` event for a folder node
+**When** the folder's parent is a known sync pair root or a known `sync_folder` entry
+**Then** the new folder is upserted into `sync_folder` with its `remote_node_id`
+
+**Given** `drainEventQueue` processes a `NodeDeleted` event for a node
+**When** `sync_folder` has an entry for that `remote_node_id`
+**Then** the entry is removed from `sync_folder`
+
+**AC5 — drainQueue uses sync_folder instead of walkRemoteTree**
+**Given** all `change_queue` entries for a pair have their parent folder present in `sync_folder`
+**And** all tracked files have `remote_node_id` in `sync_state`
+**When** `drainQueue` processes the pair
+**Then** it does NOT call `walkRemoteTree`
+**And** resolves the parent folder ID for each entry from `sync_folder`
+**And** resolves the current remote file state via `client.getRemoteNode(remote_node_id)` per entry
+**And** the decision table (upload / trash / conflict / dequeue) operates identically
+
+**AC6 — Fallback when sync_folder is incomplete**
+**Given** a `change_queue` entry whose parent folder is NOT in `sync_folder`
+**Or** a new file with no `sync_state` row (never synced, parent unknown)
+**When** `drainQueue` processes it
+**Then** it falls back to `walkRemoteTree` for that pair (existing behaviour)
+**And** after the walk, upserts all discovered folders into `sync_folder`
+**And** subsequent drains for the same pair no longer need the fallback
+
+**AC7 — Empty queue: zero API calls**
+**Given** all pairs have empty change queues
+**When** `drainQueue` runs
+**Then** no `walkRemoteTree` and no `getRemoteNode` calls are made
+
+**AC8 — getRemoteNode failure handling**
+**Given** `client.getRemoteNode` returns an error for a tracked entry
+**When** `drainQueue` processes it
+**Then** the entry is counted as `failed` and retried on the next drain cycle (same as today)
+
+**AC9 — Existing tests unchanged**
+**Given** the full engine test suite (`bun test`)
+**When** this story is complete
+**Then** all existing tests continue to pass
+**And** new unit tests cover:
+  - `sync_folder` upserted after `reconcilePair` walk (AC2)
+  - `sync_folder` upserted after folder creation (AC3)
+  - `drainQueue` resolves parent from `sync_folder`, no `walkRemoteTree` called (AC5)
+  - Fallback path triggers `walkRemoteTree` and populates `sync_folder` (AC6)
+  - `NodeDeleted` event removes folder from `sync_folder` (AC4)
