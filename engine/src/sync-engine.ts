@@ -287,16 +287,17 @@ export class SyncEngine {
             this.stateDb.deleteQueuedEvent(entry.id);
 
           } else if (parsedEvent.type === DriveEventType.NodeDeleted) {
-            // Deferred: mark pairs for reconcile on next cycle
-            const pairs = this.stateDb.listPairs();
-            for (const pair of pairs) {
+            const deletedEvent = parsedEvent as Extract<DriveEvent, { type: DriveEventType.NodeDeleted }>;
+            const tracked = this.stateDb.findSyncStateByRemoteNodeId(deletedEvent.nodeUid);
+            if (tracked) {
               this.stateDb.enqueue({
-                pair_id: pair.pair_id,
-                relative_path: ".reconcile-trigger",
-                change_type: "modified",
+                pair_id: tracked.pair_id,
+                relative_path: tracked.relative_path,
+                change_type: "deleted",
                 queued_at: new Date().toISOString(),
               });
             }
+            // If not tracked, nothing to do — the node wasn't in any sync pair.
             this.stateDb.deleteQueuedEvent(entry.id);
 
           } else if (parsedEvent.type === DriveEventType.TreeRemove) {
@@ -1116,11 +1117,12 @@ export class SyncEngine {
     client: DriveClient,
   ): Promise<"synced" | "conflict" | "failed" | "disk_full"> {
     try {
-      // Conflict copies and their temp staging files are local-only artifacts —
-      // drop stale queue entries for them silently.
+      // Conflict copies, temp staging files, and legacy reconcile-trigger sentinels
+      // are local-only artifacts — drop stale queue entries for them silently.
       if (
         /\.conflict-\d{4}-\d{2}-\d{2}-\d+(-[a-z0-9]+)?$/.test(entry.relative_path) ||
-        /\.protondrive-tmp-\d+$/.test(entry.relative_path)
+        /\.protondrive-tmp-\d+$/.test(entry.relative_path) ||
+        entry.relative_path === ".reconcile-trigger"
       ) {
         this.stateDb.dequeue(entry.id);
         return "synced";
