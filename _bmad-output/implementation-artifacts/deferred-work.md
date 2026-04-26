@@ -284,3 +284,9 @@ _[4-0b W2], [4-2/4-3], [5-0 CR W1] — solved; Story 2-12 — done; [6-4 D1] —
 - **[8-5 CR D1]** `appstream-util validate` not run (AC3) — used `appstreamcli validate` instead; `appstream-util` unavailable in sandbox; no schema/license errors found. Verify with `appstream-util` before Flathub submission.
 - **[8-5 CR D2]** README Flatpak debug log path shows native path `~/.cache/protondrive/engine.log` instead of Flatpak path `~/.var/app/.../cache/protondrive/engine.log`. Pre-existing; `README.md:71-74`.
 - **[8-5 CR D3]** GNU-only `chmod --reference` and `sed -i` (no empty-string argument) in `bump-version.sh` — fails on BSD/macOS. Pre-existing from story 8-4. Low priority: Linux-only project.
+
+## Deferred from: code review of 8-7-targeted-drain-queue-lookups (2026-04-26)
+
+- **[8-7 CR D1]** `deleteSyncFolderByRemoteNodeId` has no pair_id constraint (`state-db.ts` ~line 166) — remote node IDs are globally unique UUIDs in ProtonDrive, making cross-pair collision negligible. Consistent with other remote-node-id lookups. Low priority; reconsider if multi-volume aliasing is ever added.
+- **[8-7 CR D2]** `postReconcilePairs` crash-restart gap — in-memory Set lost on restart; first post-crash targeted drain may use stale sync_folder. Spec explicitly accepts this ("crash-safe by design — fallback will repopulate"). Per-entry canTargeted check catches incomplete state. No action needed unless crash-recovery SLA is tightened.
+- **[8-7 CR D3]** `node.modificationTime.toISOString()` unchecked in targeted getRemoteNode path (`sync-engine.ts` ~line 1037) — SDK contract guarantees non-null for valid nodes; catch block handles any throw as failed/retry. Low risk; add null-guard defensively if SDK contract is ever relaxed.
