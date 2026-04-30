@@ -31,20 +31,20 @@
 
   <launchable type="desktop-id">io.github.ronki2304.ProtonDriveLinuxClient.desktop</launchable>
 
-  <url type="homepage">https://github.com/ronki2304/Linux_Proton_Drive</url>
-  <url type="bugtracker">https://github.com/ronki2304/Linux_Proton_Drive/issues</url>
+  <url type="homepage">https://github.com/ronki2304/ProtonDriveLinuxClient</url>
+  <url type="bugtracker">https://github.com/ronki2304/ProtonDriveLinuxClient/issues</url>
 
   <screenshots>
     <screenshot type="default">
-      <image>https://raw.githubusercontent.com/ronki2304/Linux_Proton_Drive/main/screenshots/main-window.png</image>
+      <image>https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/main-window.png</image>
       <caption>Main window showing sync pair management</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/ronki2304/Linux_Proton_Drive/main/screenshots/pair-detail.png</image>
+      <image>https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/pair-detail.png</image>
       <caption>Sync pair detail panel with local and remote folder paths</caption>
     </screenshot>
     <screenshot>
-      <image>https://raw.githubusercontent.com/ronki2304/Linux_Proton_Drive/main/screenshots/sign-in.png</image>
+      <image>https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/sign-in.png</image>
       <caption>Proton account sign-in via embedded browser</caption>
     </screenshot>
   </screenshots>
