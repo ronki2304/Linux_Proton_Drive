@@ -37,13 +37,13 @@ modules:
   # UI module — Python/GTK4/Libadwaita
   - name: protondrive-ui
     buildsystem: meson
+    subdir: ui
     post-install:
       - glib-compile-schemas /app/share/glib-2.0/schemas
     sources:
       - type: git
         url: https://github.com/ronki2304/ProtonDriveLinuxClient
         commit: 299671b99cbabbd51fc14d29091d8ab61928605b
-        subdir: ui
 
   # Engine module — TypeScript/Bun sync engine compiled to self-contained binary.
   # `bun build --compile` embeds the Bun runtime + bun:sqlite; no Bun needed at runtime.
