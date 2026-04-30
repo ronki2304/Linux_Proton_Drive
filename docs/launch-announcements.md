@@ -29,7 +29,9 @@ flatpak install --user io.github.ronki2304.ProtonDriveLinuxClient.flatpak
 
 Flathub submission is in progress.
 
-<!-- INSERT SCREENSHOTS HERE -->
+![Main window](https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/main-window.png)
+![Sync pair detail](https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/pair-detail.png)
+![Sign-in](https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/sign-in.png)
 
 **What I'm looking for:**
 
@@ -45,7 +47,7 @@ Flathub submission is in progress.
 - No selective sync yet (full remote folder syncs)
 - No tray icon yet (foreground only)
 
-GPL-3.0, source on GitHub: https://github.com/ronki2304/Linux_Proton_Drive
+GPL-3.0, source on GitHub: https://github.com/ronki2304/ProtonDriveLinuxClient
 
 Happy to answer any questions about the architecture or take feature requests.
 
@@ -69,9 +71,11 @@ There's no official Proton Drive sync client for Linux. The third-party options 
 
 **What works today:** two-way sync, multiple sync pairs, conflict detection, offline queueing, token expiry recovery, actionable error messages (disk full, permissions, inotify, file locked).
 
-<!-- INSERT SCREENSHOTS HERE -->
+![Main window](https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/main-window.png)
+![Sync pair detail](https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/pair-detail.png)
+![Sign-in](https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/sign-in.png)
 
-Just tagged v1.0.0 and I'm looking for real-world feedback before polishing further. Install the Flatpak bundle from GitHub Releases: https://github.com/ronki2304/Linux_Proton_Drive
+Just tagged v1.0.0 and I'm looking for real-world feedback before polishing further. Install the Flatpak bundle from GitHub Releases: https://github.com/ronki2304/ProtonDriveLinuxClient
 
 Tested on Fedora 43, Ubuntu 24/25, Bazzite, Arch. x86_64 only for now. Would love reports from other distros.
 
@@ -87,11 +91,12 @@ I built a native Linux desktop client for Proton Drive — GTK4/Libadwaita UI, t
 
 Just hit v1.0.0 and I'm looking for feedback from real users. Packaged as Flatpak — grab the bundle from GitHub Releases.
 
-<!-- INSERT SCREENSHOTS HERE -->
+![Main window](https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/main-window.png)
+![Sync pair detail](https://raw.githubusercontent.com/ronki2304/ProtonDriveLinuxClient/main/screenshots/pair-detail.png)
 
 If you're on Linux and use Proton Drive, I'd love to hear what breaks, what's confusing, and what's missing.
 
-https://github.com/ronki2304/Linux_Proton_Drive
+https://github.com/ronki2304/ProtonDriveLinuxClient
 
 ---
 
@@ -107,7 +112,7 @@ Two-way sync, conflict detection, offline queueing, multi-pair support. Packaged
 
 Just hit v1.0.0 — looking for feedback from Proton users on Linux.
 
-https://github.com/ronki2304/Linux_Proton_Drive
+https://github.com/ronki2304/ProtonDriveLinuxClient
 
 ---
 
@@ -134,7 +139,7 @@ I've built an unofficial sync client for Proton Drive on Linux and just released
 
 **Looking for:** feedback on auth flow, sync reliability, UI, and distro compatibility. Tested on Fedora 43, Ubuntu 24/25, Bazzite, Arch (x86_64).
 
-GPL-3.0: https://github.com/ronki2304/Linux_Proton_Drive
+GPL-3.0: https://github.com/ronki2304/ProtonDriveLinuxClient
 
 ---
 
@@ -148,7 +153,7 @@ GPL-3.0: https://github.com/ronki2304/Linux_Proton_Drive
 
 ## Before posting
 
-- [ ] Add screenshots to `screenshots/` directory (main-window.png, pair-detail.png, sign-in.png)
-- [ ] Replace `<!-- INSERT SCREENSHOTS HERE -->` with actual image links
+- [x] Add screenshots to `screenshots/` directory (main-window.png, pair-detail.png, sign-in.png)
+- [x] Replace `<!-- INSERT SCREENSHOTS HERE -->` with actual image links
 - [ ] Verify the Flatpak bundle download works from a clean machine
 - [ ] Confirm GitHub Releases page has clear install instructions
