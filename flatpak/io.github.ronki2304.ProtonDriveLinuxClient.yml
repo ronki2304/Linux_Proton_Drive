@@ -57,12 +57,14 @@ modules:
     # Bun-compiled binaries embed the source/runtime in a non-standard layout
     # that `strip` and the debuginfo-extract pipeline corrupt. Disable them.
     build-options:
+      build-args:
+        - --share=network
       strip: false
       no-debuginfo: true
       no-debuginfo-compression: true
     build-commands:
       - chmod +x ./bun
-      - cd engine && npm --cache ../flatpak-node/npm-cache install --prefer-offline
+      - cd engine && ../bun install --frozen-lockfile
       - cd engine && ../bun build --compile src/main.ts --outfile=dist/engine
       - install -Dm755 engine/dist/engine /app/lib/protondrive-engine/dist/engine
     sources:
@@ -77,4 +79,3 @@ modules:
       - type: git
         url: https://github.com/ronki2304/ProtonDriveLinuxClient
         commit: c048759d5e979d097a8446d4c913446f4e381ad3
-      - generated-sources.json
