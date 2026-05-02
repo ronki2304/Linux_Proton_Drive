@@ -101,6 +101,7 @@ class Application(Adw.Application):
         self._engine.on_event("pair_reconciling", self._on_pair_reconciling)
         self._engine.on_event("reconcile_progress", self._on_reconcile_progress)
         self._engine.on_event("file_synced", self._on_file_synced)
+        self._engine.on_event("session_error", self._on_session_error)
         self._engine.on_session_ready(self._on_session_ready)
         self._engine.on_token_expired(self._on_token_expired)
         self._engine.on_error(self._on_engine_error)
@@ -407,6 +408,38 @@ class Application(Adw.Application):
             self._pending_crash_recovery = False
             print("[APP] calling show_setup_wizard", file=sys.stderr)
             self._window.show_setup_wizard(self._engine)
+
+    def _on_session_error(self, message: dict[str, Any]) -> None:
+        """Engine could not activate session — e.g. legacy share key cannot be decrypted.
+
+        Receives full message dict {"type": "session_error", "payload": {...}} because
+        it is registered via on_event() — not the payload-only shape of on_session_ready().
+        """
+        self._cancel_validation_timeout()
+        if self._window is not None:
+            self._window.close_auth_browser()
+            dialog = Adw.AlertDialog(
+                heading="Could not access your files",
+                body=(
+                    "Some of your files were encrypted with a key that could not be unlocked.\n\n"
+                    "Open Proton Drive in your browser and browse your files folder — this "
+                    "restores access automatically. Then sign in again."
+                ),
+            )
+            dialog.add_response("open_browser", "Open Proton Drive")
+            dialog.set_response_appearance("open_browser", Adw.ResponseAppearance.SUGGESTED)
+            dialog.add_response("sign_out", "Sign Out")
+            dialog.set_response_appearance("sign_out", Adw.ResponseAppearance.DESTRUCTIVE)
+            dialog.connect("response", self._on_session_error_response)
+            dialog.present(self._window)
+
+    def _on_session_error_response(self, _dialog: Adw.AlertDialog, response: str) -> None:
+        if response == "open_browser":
+            Gio.AppInfo.launch_default_for_uri("https://drive.proton.me", None)
+            if self._window is not None:
+                self._window.show_pre_auth()
+        elif response == "sign_out":
+            self.logout()
 
     def _has_configured_pairs(self) -> bool:
         """Return True if config.yaml contains at least one sync pair."""

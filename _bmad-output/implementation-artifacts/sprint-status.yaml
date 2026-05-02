@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-04-08
-last_updated: 2026-04-26  # Epic 8 retrospective done; V1.0.0 ready
+last_updated: 2026-05-02  # Story 9-1 review complete → done
 project: ProtonDrive-LinuxClient
 project_key: NOKEY
 tracking_system: file-system
@@ -141,7 +141,7 @@ development_status:
   epic-7-retrospective: done
 
   # Epic 8: SDK Compliance & Incremental Sync + Activity Log
-  epic-8: in-progress
+  epic-8: done
   8-0-pre-epic-debt-cleanup: done
   8-1-event-based-incremental-reconciliation: done
   8-2-ipc-activity-events: done
@@ -153,3 +153,7 @@ development_status:
   8-6-sdk-client-identification: done  # Added 2026-04-25 CC: x-pm-appversion was spoofing web-drive@5.0.0.0; must use ronki230-ProtonDriveLinuxClient@{version}
   8-7-targeted-drain-queue-lookups: done  # Added 2026-04-26 CC: add sync_folder table to persist remote folder IDs; drainQueue resolves parent from DB + getRemoteNode per file; eliminates walkRemoteTree in steady state
   epic-8-retrospective: done
+
+  # Epic 9: User Feedback & Post-Launch Fixes
+  epic-9: in-progress
+  9-1-legacy-share-key-decryption-error: done  # Added 2026-05-01: first user feedback (issue #2) — engine crashes on pre-2024 legacy share key; removes debug token dump security issue [7-1 CR D9]

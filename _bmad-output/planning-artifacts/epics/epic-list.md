@@ -80,4 +80,22 @@ User can install from Flathub with one click. AppStream metainfo, desktop file, 
 
 **Note:** Flatpak build validation starts in Epic 2 (the app builds and runs in sandbox from that point). This epic covers the submission-quality artifacts and CI/CD automation.
 
+## Epic 8: SDK Compliance & Incremental Sync + Activity Log
+
+User sees a live activity feed showing what the engine synced, and the sync engine uses event-driven incremental reconciliation instead of full-tree polling. The Details panel displays a scrollable list of the last 100 sync events with file name, direction, and timestamp — no blank screen.
+
+**FRs covered:** None (internal quality / compliance)
+**UX-DRs:** UX-DR6 (adds reconciling state to SyncPairRow), UX-DR7 (adds reconciling state to StatusFooterBar)
+
+**Includes:** Event-based incremental reconciliation (SDK `subscribeToRemoteEvents`), IPC activity events (`file_synced`, `reconcile_progress`), activity feed UI (Details panel, 100-item ring buffer, relative timestamps), actionable decryption error UX (Story 8-4b — backlog, pre-existing spec), license alignment to GPL-3.0 (required by `@protontech/drive-sdk`), correct `x-pm-appversion` header (`ronki230-ProtonDriveLinuxClient@{version}`), `sync_folder` table to eliminate `walkRemoteTree` from `drainQueue` in steady state.
+
+## Epic 9: User Feedback & Post-Launch Fixes
+
+First post-launch user feedback is triaged and shipped as targeted fixes. No silent crashes, no security artifacts left in production builds. Each story maps directly to a confirmed user report or security finding surfaced during distribution review.
+
+**FRs covered:** None (reactive post-launch fixes)
+**UX-DRs:** None
+
+**Includes:** Engine crash on legacy share key decryption for pre-2024 Proton accounts (GitHub issue #2), removal of debug token dump security artifact `[7-1 CR D9]`, actionable `Adw.AlertDialog` guiding users to re-wrap old keys in Proton Drive web.
+
 ---

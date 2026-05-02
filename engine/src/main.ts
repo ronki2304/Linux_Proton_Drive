@@ -129,8 +129,13 @@ if (process.env["FLATPAK_ID"]) {
 import pkg from "../package.json" with { type: "json" };
 import type { IpcCommand, IpcPushEvent, IpcResponse } from "./ipc.js";
 import { IpcServer, resolveSocketPath } from "./ipc.js";
-import { createDriveClient } from "./sdk.js";
+import { createDriveClient as _createDriveClientImpl } from "./sdk.js";
 import type { DriveClient } from "./sdk.js";
+
+let _createDriveClientFn: typeof _createDriveClientImpl = _createDriveClientImpl;
+function createDriveClient(...args: Parameters<typeof _createDriveClientImpl>): DriveClient {
+  return _createDriveClientFn(...args);
+}
 import { StateDb } from "./state-db.js";
 import type { SyncPair } from "./state-db.js";
 import { writeConfigYaml, removeFromConfigYaml, updatePairPathInConfigYaml } from "./config.js";
@@ -192,6 +197,14 @@ export function _setSyncEngineForTests(engine: SyncEngine | undefined): void {
   syncEngine = engine;
 }
 
+// Test-only: replace the DriveClient factory so handleTokenRefresh can be tested
+// without making real network calls.
+export function _setCreateDriveClientForTests(
+  fn: typeof _createDriveClientImpl | null,
+): void {
+  _createDriveClientFn = fn ?? _createDriveClientImpl;
+}
+
 // Test-only: inject a FileWatcher instance for tests.
 // Underscore prefix signals test-only usage — never call from production code.
 export function _setFileWatcherForTests(fw: FileWatcher | undefined): void {
@@ -241,8 +254,31 @@ async function _activateSession(
   driveClient = client;
   syncEngine?.setDriveClient(client);
   // Start subscription — SDK sends TreeRefresh if checkpoint is stale/absent.
-  await syncEngine?.startRemoteEventSubscription(client);
-  await syncEngine?.drainEventQueue(client);
+  try {
+    await syncEngine?.startRemoteEventSubscription(client);
+    await syncEngine?.drainEventQueue(client);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    const isDecryptionError =
+      msg.toLowerCase().includes("decryption") ||
+      msg.toLowerCase().includes("session keys") ||
+      msg.toLowerCase().includes("key packets");
+    if (isDecryptionError) {
+      process.stderr.write(`[ENGINE] session_activation_failed: ${msg}\n`);
+      syncEngine?.disposeEventSubscription();
+      driveClient = null;
+      syncEngine?.setDriveClient(null);
+      server.emitEvent({
+        type: "session_error",
+        payload: {
+          code: "SHARE_KEY_DECRYPT_FAILED",
+          message: "Could not access your Proton Drive files — some keys could not be decrypted",
+        },
+      });
+      return;
+    }
+    throw err;
+  }
   // startSyncAll() = drain only; full reconcile is triggered by TreeRefresh or startSyncPair
   void syncEngine?.startSyncAll();
   fileWatcher?.stop();
@@ -361,14 +397,6 @@ async function handleTokenRefresh(command: IpcCommand): Promise<void> {
         cachedSaltArray = []; // mark attempted so we don't retry endlessly
       }
     }
-
-    // DEBUG: dump live token to /tmp so probe-key-decrypt.ts can use it.
-    // Remove after key-decryption is confirmed working.
-    try {
-      const { writeFileSync } = await import("node:fs");
-      writeFileSync("/tmp/proton-debug-token.txt", raw, { mode: 0o600 });
-      process.stderr.write("[ENGINE] DEBUG token dumped → /tmp/proton-debug-token.txt\n");
-    } catch { /* ignore */ }
 
     // No keyPassword available — request it from the UI.
     server.emitEvent({ type: "key_unlock_required", payload: {} });

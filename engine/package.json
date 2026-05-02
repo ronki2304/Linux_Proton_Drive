@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "bun run src/main.ts",
     "build": "bun build --compile src/main.ts --outfile=dist/engine",
-    "test": "bun test --path-ignore-patterns '__integration__'"
+    "test": "bun test ./src"
   },
   "license": "GPL-3.0-only",
   "dependencies": {

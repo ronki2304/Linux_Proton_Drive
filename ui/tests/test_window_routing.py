@@ -10,6 +10,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, call, patch
 
 from protondrive.window import MainWindow
+from protondrive.main import Application
 
 
 def _make_window() -> MainWindow:
@@ -1347,3 +1348,69 @@ class TestRemovePairFlow:
         assert "pair-y" in win._sync_pair_rows  # other pair row unaffected
         assert "pair-x" not in win._pairs_data
         assert "pair-y" in win._pairs_data  # other pair data unaffected
+
+
+# ---------------------------------------------------------------------------
+# _on_session_error (Story 9-1, AC4, AC8)
+# ---------------------------------------------------------------------------
+
+def _make_app_for_session_error() -> Application:
+    """Return a minimal Application instance bypassing GTK/GLib initialisation."""
+    app = object.__new__(Application)
+    app._engine = MagicMock()
+    app._window = MagicMock()
+    app._token_validation_timer_id = None
+    return app
+
+
+class TestOnSessionError:
+    def test_close_auth_browser_called_on_session_error(self) -> None:
+        app = _make_app_for_session_error()
+        with patch("protondrive.main.Adw"):
+            app._on_session_error(
+                {"type": "session_error", "payload": {"code": "SHARE_KEY_DECRYPT_FAILED"}}
+            )
+        app._window.close_auth_browser.assert_called_once_with()
+
+    def test_no_crash_when_window_is_none(self) -> None:
+        app = _make_app_for_session_error()
+        app._window = None
+        # Should not raise — dialog is guarded by window check
+        app._on_session_error(
+            {"type": "session_error", "payload": {"code": "SHARE_KEY_DECRYPT_FAILED"}}
+        )
+
+    def test_alert_dialog_presented_on_session_error(self) -> None:
+        app = _make_app_for_session_error()
+        with patch("protondrive.main.Adw") as mock_adw:
+            mock_dialog = MagicMock()
+            mock_adw.AlertDialog.return_value = mock_dialog
+            app._on_session_error(
+                {"type": "session_error", "payload": {"code": "SHARE_KEY_DECRYPT_FAILED"}}
+            )
+        mock_dialog.present.assert_called_once_with(app._window)
+
+    def test_cancel_validation_timeout_called(self) -> None:
+        app = _make_app_for_session_error()
+        with patch.object(app, "_cancel_validation_timeout") as mock_cancel, \
+             patch("protondrive.main.Adw"):
+            app._on_session_error(
+                {"type": "session_error", "payload": {"code": "SHARE_KEY_DECRYPT_FAILED"}}
+            )
+        mock_cancel.assert_called_once()
+
+    def test_response_open_browser_launches_uri_and_shows_pre_auth(self) -> None:
+        app = _make_app_for_session_error()
+        with patch("protondrive.main.Gio") as mock_gio:
+            app._on_session_error_response(MagicMock(), "open_browser")
+        mock_gio.AppInfo.launch_default_for_uri.assert_called_once_with(
+            "https://drive.proton.me", None
+        )
+        app._window.show_pre_auth.assert_called_once()
+
+    def test_response_sign_out_calls_logout_not_show_pre_auth(self) -> None:
+        app = _make_app_for_session_error()
+        with patch.object(app, "logout") as mock_logout:
+            app._on_session_error_response(MagicMock(), "sign_out")
+        mock_logout.assert_called_once()
+        app._window.show_pre_auth.assert_not_called()

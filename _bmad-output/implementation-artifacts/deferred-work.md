@@ -19,11 +19,12 @@
 
 ---
 
-## WebKit aarch64 JIT Instability — Dev Environment Only
+## WebKit JIT Instability — Dev Environment Only
 
-**Discovered:** 2026-04-16 during embedded auth flow testing on Fedora 43 aarch64 VM (party-mode session with Winston/Amelia/Quinn).
-**Status:** Known dev-environment limitation. **Zero production impact** — confirmed target is x86_64.
-**Action:** No fix planned. Document, work around in dev, revisit only if ARM Linux is ever promoted to a supported target.
+**Discovered:** 2026-04-16 during embedded auth flow testing on Fedora 43 aarch64 VM.
+**Update (2026-05-01):** GitHub issue #2 (first user feedback, x86_64 Debian) also shows a WebKit crash (`SIGTRAP`, `libjavascriptcoregtk-6.0.so.1`) during auth, confirming this is not aarch64-exclusive. Auth completed despite the crash in the issue log — crash is non-fatal in many cases.
+**Status:** Known instability. **Path B (system-browser auth) is more relevant now** given x86_64 confirmation.
+**Action:** No fix planned for current story. Revisit Path B as auth UX improvement.
 
 ### Symptom
 
@@ -189,7 +190,7 @@ These were surfaced during the party-mode validation of Story 7.2 (2026-04-23). 
 - **[7-1 CR D6]** DoH HTTPS startup smoke test writes errors to `stderr` but does not abort — engine continues with broken connectivity and later fails with confusing "Network unavailable" errors rather than failing fast at init. Pre-existing. `engine/src/main.ts`
 - **[7-1 CR D7]** Portal FUSE + inotify interaction when user symlinks a portal-mounted directory into the sync root — inotify watches the real path while the app may track the portal FUSE path, creating stale sync state. Pre-existing architectural constraint.
 - **[7-1 CR D8]** ALPN hard-coded to `http/1.1` in DoH TLS connector — blocks http/2 negotiation; any server requiring http/2-only connections will fail. Pre-existing. `engine/src/main.ts`
-- **[7-1 CR D9]** Debug auth token written to `/tmp/proton-debug-token.txt` with mode `0o600` in production build — appears to be an unremoveddev debugging artifact; token persists across sessions on non-tmpwatch systems. Pre-existing. `engine/src/main.ts:362`
+- **[7-1 CR D9]** ~~Debug auth token written to `/tmp/proton-debug-token.txt`~~ **Resolved by Story 9-1** — debug token dump removed from `engine/src/main.ts`.
 - **[7-1 CR D10]** Proxy env vars not re-read post-launch — DoH undici dispatcher is constructed once at startup; proxy settings injected by Flatpak 1.3.1+ or changed in the environment after process start are never picked up. Pre-existing. `engine/src/main.ts`
 
 ---
@@ -284,6 +285,13 @@ _[4-0b W2], [4-2/4-3], [5-0 CR W1] — solved; Story 2-12 — done; [6-4 D1] —
 - **[8-5 CR D1]** `appstream-util validate` not run (AC3) — used `appstreamcli validate` instead; `appstream-util` unavailable in sandbox; no schema/license errors found. Verify with `appstream-util` before Flathub submission.
 - **[8-5 CR D2]** README Flatpak debug log path shows native path `~/.cache/protondrive/engine.log` instead of Flatpak path `~/.var/app/.../cache/protondrive/engine.log`. Pre-existing; `README.md:71-74`.
 - **[8-5 CR D3]** GNU-only `chmod --reference` and `sed -i` (no empty-string argument) in `bump-version.sh` — fails on BSD/macOS. Pre-existing from story 8-4. Low priority: Linux-only project.
+
+## Deferred from: code review of 9-1-legacy-share-key-decryption-error (2026-05-01)
+
+- **[9-1 CR W1]** AC2 (non-decryption rethrow) untested in engine test suite — unhandled rejection from `void _activateSession(...)` kills the Bun test runner; spec explicitly acknowledges this limitation. Revisit if a safe async error boundary can be introduced in a future refactor.
+- **[9-1 CR W2]** Non-decryption error from `drainEventQueue` leaves `driveClient`/`syncEngine` half-initialized on rethrow — pre-existing `void _activateSession(...)` caller design; fixing this is out of scope per story spec. Track alongside the broader cleanup of the `void` activation pattern.
+- **[9-1 CR W3]** String-matching decryption error detection is fragile against SDK version changes — `isDecryptionError` checks three hardcoded English substrings; will misfire if SDK error messages change or are localized. Revisit when `@protontech/drive-sdk` stabilizes past v0.14 or when typed error codes are available.
+- **[9-1 CR W4]** Concurrent `_activateSession` invocations could race `session_error` / `session_ready` — pre-existing `void` caller design makes this unreachable in current UX (single `token_refresh` at a time), but not structurally enforced.
 
 ## Deferred from: code review of 8-7-targeted-drain-queue-lookups (2026-04-26)
 
