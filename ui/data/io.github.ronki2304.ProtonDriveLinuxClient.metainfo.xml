@@ -50,6 +50,15 @@
   </screenshots>
 
   <releases>
+    <release version="1.0.1-1" date="2026-05-03">
+      <description>
+        <p>Hotfix for authentication crash affecting pre-2024 Proton accounts.</p>
+        <ul>
+          <li>Fixed engine crash when the SDK wraps a decryption error in SyncError — the session_error dialog now appears correctly instead of crashing</li>
+          <li>WebKit renderer crash during sign-in now shows a Retry banner instead of freezing the auth window</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-05-02">
       <description>
         <p>Initial release of ProtonDrive Linux Client.</p>

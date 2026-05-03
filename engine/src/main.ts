@@ -259,10 +259,17 @@ async function _activateSession(
     await syncEngine?.drainEventQueue(client);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    const isDecryptionError =
-      msg.toLowerCase().includes("decryption") ||
-      msg.toLowerCase().includes("session keys") ||
-      msg.toLowerCase().includes("key packets");
+    // Also check cause chain: SyncError wraps the inner decryption error with
+    // message "Unexpected SDK error", leaving the keyword only in cause.message.
+    const causeMsg =
+      err instanceof Error && err.cause instanceof Error
+        ? err.cause.message
+        : "";
+    const hasDecryptionKeyword = (s: string) =>
+      s.toLowerCase().includes("decryption") ||
+      s.toLowerCase().includes("session keys") ||
+      s.toLowerCase().includes("key packets");
+    const isDecryptionError = hasDecryptionKeyword(msg) || hasDecryptionKeyword(causeMsg);
     if (isDecryptionError) {
       process.stderr.write(`[ENGINE] session_activation_failed: ${msg}\n`);
       syncEngine?.disposeEventSubscription();

@@ -1331,6 +1331,51 @@ describe("_activateSession — session_error on decryption failure", () => {
     db.close();
   });
 
+  it("emits session_error when decryption keyword is only in cause chain (SyncError wrapping)", async () => {
+    // Real-world failure: SDK throws SyncError("Unexpected SDK error", { cause: innerErr })
+    // where innerErr.message contains the decryption keyword.  The outer message alone
+    // does not match — we must walk the cause chain.
+    const db = new StateDb(":memory:");
+    _setStateDbForTests(db);
+
+    const innerErr = new Error("No decryption key packets found");
+    const wrappedErr = new Error("Unexpected SDK error", { cause: innerErr });
+
+    const mockSyncEngine = {
+      setDriveClient: mock(() => {}),
+      startRemoteEventSubscription: mock(async () => { throw wrappedErr; }),
+      drainEventQueue: mock(async () => {}),
+      disposeEventSubscription: mock(() => {}),
+      makeLatestEventIdProvider: mock(() => undefined),
+    };
+    _setSyncEngineForTests(mockSyncEngine as unknown as SyncEngine);
+
+    const mockClient = {
+      validateSession: mock(async () => ({
+        email: "u@p.me",
+        display_name: "U",
+        storage_used: 0,
+        storage_total: 0,
+        plan: "",
+      })),
+      applyKeyPassword: mock(async () => {}),
+    };
+    _setCreateDriveClientForTests(() => mockClient as unknown as DriveClient);
+
+    await handleCommand({
+      type: "token_refresh",
+      id: "t-wrap-1",
+      payload: { token: "uid:token", key_password: "testpw" },
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const errEvent = capturedEvents.find((e) => e.type === "session_error");
+    expect(errEvent).toBeTruthy();
+    expect((errEvent!.payload as Record<string, unknown>)["code"]).toBe("SHARE_KEY_DECRYPT_FAILED");
+    expect(capturedEvents.some((e) => e.type === "session_ready")).toBeFalsy();
+    db.close();
+  });
+
   // AC2: non-decryption errors in _activateSession are rethrown (unhandled rejection —
   // testing this directly would kill the test runner; the positive-case tests above
   // implicitly confirm only decryption errors reach the session_error branch).

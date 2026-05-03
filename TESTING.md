@@ -6,6 +6,29 @@ integration test prerequisites.
 
 ---
 
+## Unit Tests (Engine)
+
+Run from **outside** the `engine/` directory using absolute paths. Running `bun test` with `engine/` as the CWD hangs indefinitely on Bazzite/Bun 1.3.11 (known environment issue).
+
+```bash
+# All suites (~425 tests, ~4s)
+bun test /var/home/jeremy/Projects/ProtonDrive-LinuxClient/engine/src/*.test.ts
+
+# Single file
+bun test /var/home/jeremy/Projects/ProtonDrive-LinuxClient/engine/src/main.test.ts
+
+# With name filter
+bun test /var/home/jeremy/Projects/ProtonDrive-LinuxClient/engine/src/main.test.ts --test-name-pattern "session_error"
+```
+
+Python UI tests:
+
+```bash
+/var/home/jeremy/Projects/ProtonDrive-LinuxClient/ui/.venv/bin/pytest ui/tests/
+```
+
+---
+
 ## Prerequisites
 
 ### Phase 1 — To write or update this document

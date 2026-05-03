@@ -214,6 +214,7 @@ class AuthWindow(Adw.Bin):
         self._webview.connect("load-changed", self._on_load_changed)
         self._webview.connect("load-failed", self._on_load_failed)
         self._webview.connect("decide-policy", self._on_decide_policy)
+        self._webview.connect("web-process-terminated", self._on_web_process_terminated)
         self.webview_container.append(self._webview)
         # grab_focus() is a no-op before the widget is realized; fire it on the
         # first map event instead so it runs after the widget tree is on-screen.
@@ -353,6 +354,18 @@ class AuthWindow(Adw.Bin):
             except Exception:
                 pass
         return False  # use default policy
+
+    def _on_web_process_terminated(
+        self,
+        webview: WebKit.WebView,
+        reason: WebKit.WebProcessTerminationReason,
+    ) -> None:
+        """Recover gracefully when the WebKit renderer crashes."""
+        print(f"[AUTH] WebKit renderer terminated (reason={reason})", file=sys.stderr)
+        if not self._completed:
+            self.error_banner.set_title("The sign-in page crashed. Press Retry to reload.")
+            self.error_banner.set_can_target(True)
+            self.error_banner.set_revealed(True)
 
     def _on_load_failed(
         self,
